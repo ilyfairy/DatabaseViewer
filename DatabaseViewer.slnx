@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="DatabaseViewer.Api/DatabaseViewer.Api.csproj" />
+  <Project Path="DatabaseViewer.App/DatabaseViewer.App.csproj" />
+  <Project Path="DatabaseViewer.Core/DatabaseViewer.Core.csproj" />
+</Solution>
