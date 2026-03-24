@@ -112,6 +112,17 @@ function toCompletionItems(items: Array<{ caption: string; value?: string; meta:
   }))
 }
 
+function completionInsertValue(caption: string, qualifiedPrefix?: string) {
+  if (!qualifiedPrefix) {
+    return caption
+  }
+
+  const prefixWithDot = `${qualifiedPrefix}.`
+  return caption.toLowerCase().startsWith(prefixWithDot.toLowerCase())
+    ? caption.slice(prefixWithDot.length)
+    : caption
+}
+
 function buildSqlCompleter(): AceCompleter {
   return {
     getCompletions: (_editor, session, pos, prefix, callback) => {
@@ -135,6 +146,7 @@ function buildSqlCompleter(): AceCompleter {
       else if (context === 'table') {
         items = toCompletionItems(props.tables.map((table) => ({
           caption: table.qualifiedName,
+          value: completionInsertValue(table.qualifiedName, qualifier),
           meta: 'table',
           score: 1050,
         })))
@@ -172,6 +184,7 @@ function buildSqlCompleter(): AceCompleter {
           }))),
           ...toCompletionItems(props.tables.slice(0, 24).map((table) => ({
             caption: table.qualifiedName,
+            value: completionInsertValue(table.qualifiedName, qualifier),
             meta: 'table',
             score: 850,
           }))),

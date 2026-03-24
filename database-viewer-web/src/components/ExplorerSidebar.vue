@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { NAlert, NButton, NCheckbox, NEmpty, NInput, NModal, NPopconfirm, NSelect, NSpin, NTag, NText } from 'naive-ui'
+import { NAlert, NButton, NCheckbox, NEmpty, NInput, NModal, NSelect, NSpin, NTag, NText } from 'naive-ui'
 import { useExplorerStore } from '../stores/explorer'
 import type { AuthenticationMode, ConnectionInfo, ProviderType } from '../types/explorer'
 
@@ -9,6 +9,7 @@ const expandedConnections = ref<string[]>([])
 const expandedDatabases = ref<string[]>([])
 const connectionContextMenu = ref<{ x: number; y: number; connectionId: string; connectionName: string } | null>(null)
 const databaseContextMenu = ref<{ x: number; y: number; connectionId: string; database: string } | null>(null)
+const deleteConnectionConfirm = ref<{ connectionId: string; connectionName: string } | null>(null)
 const createConnectionVisible = ref(false)
 const createConnectionLoading = ref(false)
 const createConnectionError = ref<string | null>(null)
@@ -69,6 +70,9 @@ async function confirmDeleteConnection(connectionId: string) {
   catch (error) {
     store.refreshBootstrap()
   }
+  finally {
+    deleteConnectionConfirm.value = null
+  }
 }
 
 function openConnectionContextMenu(event: MouseEvent, connectionId: string, connectionName: string) {
@@ -83,6 +87,22 @@ function openConnectionContextMenu(event: MouseEvent, connectionId: string, conn
 
 function closeConnectionContextMenu() {
   connectionContextMenu.value = null
+}
+
+function openDeleteConnectionConfirm() {
+  if (!connectionContextMenu.value) {
+    return
+  }
+
+  deleteConnectionConfirm.value = {
+    connectionId: connectionContextMenu.value.connectionId,
+    connectionName: connectionContextMenu.value.connectionName,
+  }
+  closeConnectionContextMenu()
+}
+
+function closeDeleteConnectionConfirm() {
+  deleteConnectionConfirm.value = null
 }
 
 function openDatabaseContextMenu(event: MouseEvent, connectionId: string, database: string) {
@@ -285,14 +305,9 @@ onBeforeUnmount(() => {
       class="database-context-menu"
       :style="{ left: `${connectionContextMenu.x}px`, top: `${connectionContextMenu.y}px` }"
     >
-      <n-popconfirm @positive-click="confirmDeleteConnection(connectionContextMenu.connectionId)">
-        <template #trigger>
-          <button type="button" class="database-context-menu-item" @click.stop="closeConnectionContextMenu()">
-            删除连接
-          </button>
-        </template>
-        删除连接 {{ connectionContextMenu.connectionName }}？
-      </n-popconfirm>
+      <button type="button" class="database-context-menu-item" @click.stop="openDeleteConnectionConfirm()">
+        删除连接
+      </button>
     </div>
 
     <div
@@ -322,6 +337,24 @@ onBeforeUnmount(() => {
         <div class="connection-dialog-actions">
           <n-button tertiary @click="createConnectionVisible = false">取消</n-button>
           <n-button type="primary" :loading="createConnectionLoading" @click="submitCreateConnection">保存连接</n-button>
+        </div>
+      </div>
+    </n-modal>
+
+    <n-modal
+      :show="!!deleteConnectionConfirm"
+      preset="card"
+      style="width: min(420px, 92vw)"
+      title="删除连接"
+      @update:show="(show) => { if (!show) closeDeleteConnectionConfirm() }"
+    >
+      <div class="connection-dialog-form">
+        <n-alert type="warning" :show-icon="false">
+          确认删除连接 {{ deleteConnectionConfirm?.connectionName }}？
+        </n-alert>
+        <div class="connection-dialog-actions">
+          <n-button tertiary @click="closeDeleteConnectionConfirm()">取消</n-button>
+          <n-button type="error" @click="deleteConnectionConfirm && confirmDeleteConnection(deleteConnectionConfirm.connectionId)">删除</n-button>
         </div>
       </div>
     </n-modal>
