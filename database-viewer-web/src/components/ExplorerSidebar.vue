@@ -2,13 +2,14 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { NAlert, NButton, NCheckbox, NEmpty, NInput, NModal, NSelect, NSpin, NTag, NText } from 'naive-ui'
 import { useExplorerStore } from '../stores/explorer'
-import type { AuthenticationMode, ConnectionInfo, ProviderType } from '../types/explorer'
+import type { AuthenticationMode, ConnectionInfo, ProviderType, TableSummary } from '../types/explorer'
 
 const store = useExplorerStore()
 const expandedConnections = ref<string[]>([])
 const expandedDatabases = ref<string[]>([])
 const connectionContextMenu = ref<{ x: number; y: number; connectionId: string; connectionName: string } | null>(null)
 const databaseContextMenu = ref<{ x: number; y: number; connectionId: string; database: string } | null>(null)
+const tableContextMenu = ref<{ x: number; y: number; connectionId: string; database: string; table: TableSummary; showScriptSubmenu: boolean } | null>(null)
 const deleteConnectionConfirm = ref<{ connectionId: string; connectionName: string } | null>(null)
 const createConnectionVisible = ref(false)
 const createConnectionLoading = ref(false)
@@ -26,6 +27,7 @@ const createConnectionForm = reactive({
 const closeAllContextMenus = () => {
   closeConnectionContextMenu()
   closeDatabaseContextMenu()
+  closeTableContextMenu()
 }
 
 const visibleConnections = computed(() => store.visibleConnections)
@@ -77,6 +79,7 @@ async function confirmDeleteConnection(connectionId: string) {
 
 function openConnectionContextMenu(event: MouseEvent, connectionId: string, connectionName: string) {
   closeDatabaseContextMenu()
+  closeTableContextMenu()
   connectionContextMenu.value = {
     x: event.clientX,
     y: event.clientY,
@@ -107,6 +110,7 @@ function closeDeleteConnectionConfirm() {
 
 function openDatabaseContextMenu(event: MouseEvent, connectionId: string, database: string) {
   closeConnectionContextMenu()
+  closeTableContextMenu()
   databaseContextMenu.value = {
     x: event.clientX,
     y: event.clientY,
@@ -117,6 +121,176 @@ function openDatabaseContextMenu(event: MouseEvent, connectionId: string, databa
 
 function closeDatabaseContextMenu() {
   databaseContextMenu.value = null
+}
+
+function openTableContextMenu(event: MouseEvent, connectionId: string, database: string, table: TableSummary) {
+  closeConnectionContextMenu()
+  closeDatabaseContextMenu()
+  tableContextMenu.value = {
+    x: event.clientX,
+    y: event.clientY,
+    connectionId,
+    database,
+    table,
+    showScriptSubmenu: false,
+  }
+}
+
+function closeTableContextMenu() {
+  tableContextMenu.value = null
+}
+
+function setTableScriptSubmenu(open: boolean) {
+  if (!tableContextMenu.value) {
+    return
+  }
+
+  tableContextMenu.value = {
+    ...tableContextMenu.value,
+    showScriptSubmenu: open,
+  }
+}
+
+function providerForConnection(connectionId: string): ProviderType {
+  return store.getConnectionInfo(connectionId)?.provider ?? 'sqlserver'
+}
+
+function quoteIdentifier(provider: ProviderType, value: string) {
+  if (provider === 'mysql') {
+    return `\`${value.replace(/`/g, '``')}\``
+  }
+
+  if (provider === 'postgresql') {
+    return `"${value.replace(/"/g, '""')}"`
+  }
+
+  return `[${value.replace(/\]/g, ']]')}]`
+}
+
+function formatSchemaTable(provider: ProviderType, table: TableSummary) {
+  const parts = []
+  if (table.schema) {
+    parts.push(quoteIdentifier(provider, table.schema))
+  }
+  parts.push(quoteIdentifier(provider, table.name))
+  return parts.join('.')
+}
+
+function buildBatchPrefix(provider: ProviderType, database: string) {
+  if (provider === 'sqlserver') {
+    return `USE ${quoteIdentifier(provider, database)}\nGO\n\n`
+  }
+
+  if (provider === 'mysql') {
+    return `USE ${quoteIdentifier(provider, database)};\n\n`
+  }
+
+  return `-- database: ${database}\n\n`
+}
+
+function buildBatchSuffix(provider: ProviderType) {
+  return provider === 'sqlserver' ? '\nGO' : ';'
+}
+
+async function getTableColumns(connectionId: string, database: string, table: TableSummary) {
+  await store.ensureSqlContextLoaded(connectionId, database)
+  const sqlContextTable = store.getSqlContext(connectionId, database)?.tables.find((entry) => {
+    const qualifiedName = table.schema ? `${table.schema}.${table.name}` : table.name
+    return entry.qualifiedName === qualifiedName || entry.name === table.name
+  })
+
+  try {
+    const loaded = await store.ensureTableLoaded(table.key)
+    if (loaded?.columns?.length) {
+      return loaded.columns.map((column) => ({
+        name: column.name,
+        type: column.type,
+        isNullable: column.isNullable,
+      }))
+    }
+  }
+  catch {
+    // Fall back to SQL context columns when table schema is not loaded.
+  }
+
+  return (sqlContextTable?.columns ?? []).map((column) => ({
+    name: column,
+    type: undefined,
+    isNullable: true,
+  }))
+}
+
+function buildSelectScript(provider: ProviderType, database: string, table: TableSummary, columns: Array<{ name: string }>) {
+  const selectLines = columns.length
+    ? columns.map((column, index) => `${index === 0 ? 'SELECT' : '      ,'} ${quoteIdentifier(provider, column.name)}`)
+    : ['SELECT *']
+  return `${buildBatchPrefix(provider, database)}${selectLines.join('\n')}\n  FROM ${formatSchemaTable(provider, table)}${buildBatchSuffix(provider)}`
+}
+
+function buildDeleteScript(provider: ProviderType, database: string, table: TableSummary) {
+  return `${buildBatchPrefix(provider, database)}DELETE FROM ${formatSchemaTable(provider, table)}\n      WHERE <搜索条件,,>${buildBatchSuffix(provider)}`
+}
+
+function buildDropScript(provider: ProviderType, database: string, table: TableSummary) {
+  return `${buildBatchPrefix(provider, database)}DROP TABLE ${formatSchemaTable(provider, table)}${buildBatchSuffix(provider)}`
+}
+
+function buildInsertScript(provider: ProviderType, database: string, table: TableSummary, columns: Array<{ name: string; type?: string }>) {
+  const names = columns.length ? columns : [{ name: 'Column1', type: 'type' }]
+  const columnLines = names.map((column, index) => `${index === 0 ? '           (' : '           ,'}${quoteIdentifier(provider, column.name)}`).join('\n')
+  const valueLines = names.map((column, index) => `${index === 0 ? '           (' : '           ,'}<${column.name}, ${column.type ?? 'type'},>`).join('\n')
+  return `${buildBatchPrefix(provider, database)}INSERT INTO ${formatSchemaTable(provider, table)}\n${columnLines})\n     VALUES\n${valueLines})${buildBatchSuffix(provider)}`
+}
+
+function buildUpdateScript(provider: ProviderType, database: string, table: TableSummary, columns: Array<{ name: string; type?: string }>) {
+  const names = columns.length ? columns : [{ name: 'Column1', type: 'type' }]
+  const setLines = names.map((column, index) => `${index === 0 ? '   SET' : '      ,'} ${quoteIdentifier(provider, column.name)} = <${column.name}, ${column.type ?? 'type'},>`).join('\n')
+  return `${buildBatchPrefix(provider, database)}UPDATE ${formatSchemaTable(provider, table)}\n${setLines}\n WHERE <搜索条件,,>${buildBatchSuffix(provider)}`
+}
+
+function buildCreateScript(provider: ProviderType, database: string, table: TableSummary, columns: Array<{ name: string; type?: string; isNullable?: boolean }>) {
+  const names = columns.length ? columns : [{ name: 'Column1', type: 'int', isNullable: false }]
+  const body = names.map((column, index) => `    ${index === 0 ? '' : ','}${quoteIdentifier(provider, column.name)} ${column.type ?? 'nvarchar(255)'} ${column.isNullable === false ? 'NOT NULL' : 'NULL'}`).join('\n')
+  return `${buildBatchPrefix(provider, database)}CREATE TABLE ${formatSchemaTable(provider, table)}\n(\n${body}\n)${buildBatchSuffix(provider)}`
+}
+
+async function openDatabaseSqlQuery() {
+  if (!databaseContextMenu.value) {
+    return
+  }
+
+  const { connectionId, database } = databaseContextMenu.value
+  closeDatabaseContextMenu()
+  await store.openSqlTabWithContext({ connectionId, database })
+}
+
+async function openTableScript(kind: 'create' | 'drop' | 'select' | 'insert' | 'update' | 'delete') {
+  if (!tableContextMenu.value) {
+    return
+  }
+
+  const { connectionId, database, table } = tableContextMenu.value
+  closeTableContextMenu()
+  const provider = providerForConnection(connectionId)
+  const columns = await getTableColumns(connectionId, database, table)
+
+  const sqlText = kind === 'create'
+    ? buildCreateScript(provider, database, table, columns)
+    : kind === 'drop'
+      ? buildDropScript(provider, database, table)
+      : kind === 'select'
+        ? buildSelectScript(provider, database, table, columns)
+        : kind === 'insert'
+          ? buildInsertScript(provider, database, table, columns)
+          : kind === 'update'
+            ? buildUpdateScript(provider, database, table, columns)
+            : buildDeleteScript(provider, database, table)
+
+  await store.openSqlTabWithContext({
+    connectionId,
+    database,
+    sqlText,
+  })
 }
 
 async function openDatabaseGraphOverview() {
@@ -279,7 +453,7 @@ onBeforeUnmount(() => {
                   :key="table.key"
                   type="button"
                   class="table-tile"
-                  @contextmenu.stop.prevent
+                  @contextmenu.stop.prevent="openTableContextMenu($event, connection.id, database.name, table)"
                   @click="store.openTable(table.key)"
                 >
                   <div class="table-title-row compact-table-title-row">
@@ -315,12 +489,43 @@ onBeforeUnmount(() => {
       class="database-context-menu"
       :style="{ left: `${databaseContextMenu.x}px`, top: `${databaseContextMenu.y}px` }"
     >
+      <button type="button" class="database-context-menu-item" @click="openDatabaseSqlQuery()">
+        新建查询
+      </button>
       <button type="button" class="database-context-menu-item" @click="refreshDatabaseFromMenu">
         刷新数据库
       </button>
       <button type="button" class="database-context-menu-item" @click="openDatabaseGraphOverview">
         查看关系总览
       </button>
+    </div>
+
+    <div
+      v-if="tableContextMenu"
+      class="database-context-menu"
+      :style="{ left: `${tableContextMenu.x}px`, top: `${tableContextMenu.y}px` }"
+    >
+      <button
+        type="button"
+        class="database-context-menu-item database-context-menu-item-arrow"
+        @mouseenter="setTableScriptSubmenu(true)"
+        @click="setTableScriptSubmenu(!tableContextMenu.showScriptSubmenu)"
+      >
+        编写脚本为
+      </button>
+    </div>
+
+    <div
+      v-if="tableContextMenu?.showScriptSubmenu"
+      class="database-context-menu database-context-submenu"
+      :style="{ left: `${tableContextMenu.x + 186}px`, top: `${tableContextMenu.y + 34}px` }"
+    >
+      <button type="button" class="database-context-menu-item" @click="openTableScript('create')">CREATE 到</button>
+      <button type="button" class="database-context-menu-item" @click="openTableScript('drop')">DROP 到</button>
+      <button type="button" class="database-context-menu-item" @click="openTableScript('select')">SELECT 到</button>
+      <button type="button" class="database-context-menu-item" @click="openTableScript('insert')">INSERT 到</button>
+      <button type="button" class="database-context-menu-item" @click="openTableScript('update')">UPDATE 到</button>
+      <button type="button" class="database-context-menu-item" @click="openTableScript('delete')">DELETE 到</button>
     </div>
 
     <n-modal v-model:show="createConnectionVisible" preset="card" style="width: min(460px, 92vw)" title="新建连接">

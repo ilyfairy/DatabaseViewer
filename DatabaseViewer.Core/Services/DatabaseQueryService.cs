@@ -1,6 +1,8 @@
 using System.Data;
 using System.Data.Common;
 using System.Diagnostics;
+using System.Text;
+using System.Text.RegularExpressions;
 using DatabaseViewer.Core.Models;
 
 namespace DatabaseViewer.Core.Services;
@@ -8,6 +10,7 @@ namespace DatabaseViewer.Core.Services;
 public sealed class DatabaseQueryService
 {
     private const int MaxSqlResultRows = 500;
+    private static readonly Regex SqlServerBatchSeparatorRegex = new("^GO(?:\\s+(\\d+))?$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     public async Task<bool> TestConnectionAsync(ConnectionDefinition definition)
     {
@@ -270,15 +273,78 @@ public sealed class DatabaseQueryService
         await using var connection = DbConnectionFactory.Create(definition, databaseName);
         await connection.OpenAsync();
 
+        var stopwatch = Stopwatch.StartNew();
+        var resultSets = new List<SqlExecutionResultSet>();
+        var affectedRows = 0;
+        var hasAffectedRows = false;
+
+        if (definition.ProviderType == DatabaseProviderType.SqlServer)
+        {
+            foreach (var batch in SplitSqlServerBatches(sql))
+            {
+                var batchResult = await ExecuteSqlBatchAsync(connection, batch);
+                resultSets.AddRange(batchResult.ResultSets);
+                if (batchResult.AffectedRows is int batchAffectedRows)
+                {
+                  affectedRows += batchAffectedRows;
+                  hasAffectedRows = true;
+                }
+            }
+        }
+        else
+        {
+            var batchResult = await ExecuteSqlBatchAsync(connection, sql);
+            resultSets.AddRange(batchResult.ResultSets);
+            if (batchResult.AffectedRows is int batchAffectedRows)
+            {
+                affectedRows = batchAffectedRows;
+                hasAffectedRows = true;
+            }
+        }
+
+        stopwatch.Stop();
+
+        for (var index = 0; index < resultSets.Count; index += 1)
+        {
+            resultSets[index] = new SqlExecutionResultSet
+            {
+                Name = $"结果 {index + 1}",
+                Columns = resultSets[index].Columns,
+                Rows = resultSets[index].Rows,
+                RowCount = resultSets[index].RowCount,
+                Truncated = resultSets[index].Truncated,
+            };
+        }
+
+        return new SqlExecutionResult
+        {
+            ExecutedSql = sql,
+            AffectedRows = hasAffectedRows ? affectedRows : null,
+            ElapsedMs = stopwatch.ElapsedMilliseconds,
+            ResultSets = resultSets,
+        };
+    }
+
+    private async Task<SqlExecutionResult> ExecuteSqlBatchAsync(DbConnection connection, string sql)
+    {
+        if (string.IsNullOrWhiteSpace(sql))
+        {
+            return new SqlExecutionResult
+            {
+                ExecutedSql = sql,
+                AffectedRows = null,
+                ElapsedMs = 0,
+                ResultSets = Array.Empty<SqlExecutionResultSet>(),
+            };
+        }
+
         await using var command = connection.CreateCommand();
         command.CommandText = sql;
         command.CommandTimeout = 90;
 
-        var stopwatch = Stopwatch.StartNew();
         await using var reader = await command.ExecuteReaderAsync();
 
         var resultSets = new List<SqlExecutionResultSet>();
-        var resultIndex = 0;
         do
         {
             if (reader.FieldCount <= 0)
@@ -313,10 +379,9 @@ public sealed class DatabaseQueryService
                 rows.Add(row);
             }
 
-            resultIndex += 1;
             resultSets.Add(new SqlExecutionResultSet
             {
-                Name = $"结果 {resultIndex}",
+                Name = string.Empty,
                 Columns = columns,
                 Rows = rows,
                 RowCount = totalRows,
@@ -325,15 +390,56 @@ public sealed class DatabaseQueryService
         }
         while (await reader.NextResultAsync());
 
-        stopwatch.Stop();
-
         return new SqlExecutionResult
         {
             ExecutedSql = sql,
             AffectedRows = reader.RecordsAffected >= 0 ? reader.RecordsAffected : null,
-            ElapsedMs = stopwatch.ElapsedMilliseconds,
+            ElapsedMs = 0,
             ResultSets = resultSets,
         };
+    }
+
+    private static IReadOnlyList<string> SplitSqlServerBatches(string sql)
+    {
+        var batches = new List<string>();
+        var builder = new StringBuilder();
+        var lines = sql.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n');
+
+        foreach (var line in lines)
+        {
+            var match = SqlServerBatchSeparatorRegex.Match(line.Trim());
+            if (match.Success)
+            {
+                var batch = builder.ToString().Trim();
+                if (!string.IsNullOrWhiteSpace(batch))
+                {
+                    var repeatCount = match.Groups[1].Success && int.TryParse(match.Groups[1].Value, out var parsedCount)
+                        ? Math.Max(parsedCount, 1)
+                        : 1;
+                    for (var index = 0; index < repeatCount; index += 1)
+                    {
+                        batches.Add(batch);
+                    }
+                }
+
+                builder.Clear();
+                continue;
+            }
+
+            if (builder.Length > 0)
+            {
+                builder.AppendLine();
+            }
+            builder.Append(line);
+        }
+
+        var trailingBatch = builder.ToString().Trim();
+        if (!string.IsNullOrWhiteSpace(trailingBatch))
+        {
+            batches.Add(trailingBatch);
+        }
+
+        return batches;
     }
 
     public static IReadOnlyDictionary<string, object?> ExtractPrimaryKeyValues(TableSchema schema, DataRowView rowView)

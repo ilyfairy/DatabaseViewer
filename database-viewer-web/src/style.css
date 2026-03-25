@@ -1361,8 +1361,24 @@ textarea {
   cursor: pointer;
 }
 
+.database-context-menu-item-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.database-context-menu-item-arrow::after {
+  content: '›';
+  color: #64748b;
+  font-size: 14px;
+}
+
 .database-context-menu-item:hover {
   background: rgba(241, 245, 249, 0.92);
+}
+
+.database-context-submenu {
+  min-width: 150px;
 }
 
 .connection-dialog-form {

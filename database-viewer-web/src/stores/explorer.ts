@@ -30,6 +30,12 @@ import type {
 
 type NoticeType = 'info' | 'warning' | 'success'
 type SortDirection = 'none' | 'asc' | 'desc'
+type OpenSqlTabOptions = {
+  connectionId?: string | null
+  database?: string | null
+  sqlText?: string
+  execute?: boolean
+}
 let noticeTimer: ReturnType<typeof setTimeout> | null = null
 
 function normalizeCellValue(value: CellValue | undefined): CellValue {
@@ -1084,17 +1090,18 @@ export const useExplorerStore = defineStore('explorer', () => {
     return `SQL · ${connectionLabel}`
   }
 
-  function openSqlTab() {
+  async function openSqlTabWithContext(options: OpenSqlTabOptions = {}) {
     persistActiveTablePanels()
-    const preferredConnectionId = activeConnectionId.value ?? connections.value[0]?.id?.toString() ?? null
-    const preferredDatabase = preferredConnectionId ? getConnectionDatabases(preferredConnectionId)[0]?.name ?? null : null
+    const preferredConnectionId = options.connectionId ?? activeConnectionId.value ?? connections.value[0]?.id?.toString() ?? null
+    const preferredDatabase = options.database ?? (preferredConnectionId ? getConnectionDatabases(preferredConnectionId)[0]?.name ?? null : null)
+    const sqlText = options.sqlText ?? ''
     const tabId = buildSqlTabId()
     upsertWorkspaceTab({
       id: tabId,
       type: 'sql',
       connectionId: preferredConnectionId,
       database: preferredDatabase,
-      sqlText: '',
+      sqlText,
       loading: false,
       error: null,
       result: null,
@@ -1102,9 +1109,16 @@ export const useExplorerStore = defineStore('explorer', () => {
     })
     setActiveTab(tabId)
     if (preferredConnectionId && preferredDatabase) {
-      void ensureSqlContextLoaded(preferredConnectionId, preferredDatabase)
+      await ensureSqlContextLoaded(preferredConnectionId, preferredDatabase)
+    }
+    if (options.execute && sqlText.trim()) {
+      await executeSqlTab(tabId, sqlText)
     }
     return tabId
+  }
+
+  function openSqlTab() {
+    void openSqlTabWithContext()
   }
 
   function updateSqlTabConnection(tabId: string, connectionId: string | null) {
@@ -1497,6 +1511,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     getWorkspaceTabLabel,
     getTable,
     getLoadedTable,
+    ensureTableLoaded,
     getTableSortState,
     getPanelRecord,
     getFilteredRows,
@@ -1523,6 +1538,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     moveWorkspaceTab,
     openTable,
     openSqlTab,
+    openSqlTabWithContext,
     updateSqlTabConnection,
     updateSqlTabDatabase,
     updateSqlTabText,
