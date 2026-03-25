@@ -185,6 +185,8 @@ export interface SqlWorkspaceTab {
   connectionId: string | null
   database: string | null
   sqlText: string
+  savedSqlText: string
+  filePath: string | null
   loading: boolean
   error: string | null
   result: SqlExecutionResponse | null

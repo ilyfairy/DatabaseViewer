@@ -478,6 +478,8 @@ onBeforeUnmount(() => {
       v-if="connectionContextMenu"
       class="database-context-menu"
       :style="{ left: `${connectionContextMenu.x}px`, top: `${connectionContextMenu.y}px` }"
+      @click.stop
+      @mousedown.stop
     >
       <button type="button" class="database-context-menu-item" @click.stop="openDeleteConnectionConfirm()">
         删除连接
@@ -488,6 +490,8 @@ onBeforeUnmount(() => {
       v-if="databaseContextMenu"
       class="database-context-menu"
       :style="{ left: `${databaseContextMenu.x}px`, top: `${databaseContextMenu.y}px` }"
+      @click.stop
+      @mousedown.stop
     >
       <button type="button" class="database-context-menu-item" @click="openDatabaseSqlQuery()">
         新建查询
@@ -504,6 +508,8 @@ onBeforeUnmount(() => {
       v-if="tableContextMenu"
       class="database-context-menu"
       :style="{ left: `${tableContextMenu.x}px`, top: `${tableContextMenu.y}px` }"
+      @click.stop
+      @mousedown.stop
     >
       <button
         type="button"
@@ -513,19 +519,15 @@ onBeforeUnmount(() => {
       >
         编写脚本为
       </button>
-    </div>
 
-    <div
-      v-if="tableContextMenu?.showScriptSubmenu"
-      class="database-context-menu database-context-submenu"
-      :style="{ left: `${tableContextMenu.x + 186}px`, top: `${tableContextMenu.y + 34}px` }"
-    >
-      <button type="button" class="database-context-menu-item" @click="openTableScript('create')">CREATE 到</button>
-      <button type="button" class="database-context-menu-item" @click="openTableScript('drop')">DROP 到</button>
-      <button type="button" class="database-context-menu-item" @click="openTableScript('select')">SELECT 到</button>
-      <button type="button" class="database-context-menu-item" @click="openTableScript('insert')">INSERT 到</button>
-      <button type="button" class="database-context-menu-item" @click="openTableScript('update')">UPDATE 到</button>
-      <button type="button" class="database-context-menu-item" @click="openTableScript('delete')">DELETE 到</button>
+      <div v-if="tableContextMenu.showScriptSubmenu" class="database-context-menu database-context-submenu">
+        <button type="button" class="database-context-menu-item" @click="openTableScript('create')">CREATE 到</button>
+        <button type="button" class="database-context-menu-item" @click="openTableScript('drop')">DROP 到</button>
+        <button type="button" class="database-context-menu-item" @click="openTableScript('select')">SELECT 到</button>
+        <button type="button" class="database-context-menu-item" @click="openTableScript('insert')">INSERT 到</button>
+        <button type="button" class="database-context-menu-item" @click="openTableScript('update')">UPDATE 到</button>
+        <button type="button" class="database-context-menu-item" @click="openTableScript('delete')">DELETE 到</button>
+      </div>
     </div>
 
     <n-modal v-model:show="createConnectionVisible" preset="card" style="width: min(460px, 92vw)" title="新建连接">

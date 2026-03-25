@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { NAlert, NConfigProvider, NLayout, NLayoutContent, NMessageProvider } from 'naive-ui'
+import { NAlert, NButton, NConfigProvider, NLayout, NLayoutContent, NMessageProvider, NModal } from 'naive-ui'
 import { Pane, Splitpanes } from 'splitpanes'
 import 'splitpanes/dist/splitpanes.css'
 import DatabaseOverviewGraph from './components/DatabaseOverviewGraph.vue'
@@ -17,6 +17,14 @@ const store = useExplorerStore()
 const activeTableTab = computed(() => store.activeTableTab)
 const activeSqlTab = computed(() => store.activeSqlTab)
 const activeGraphTab = computed(() => store.activeGraphTab)
+const pendingSqlCloseTab = computed(() => {
+  const pending = store.pendingSqlClose
+  if (!pending) {
+    return null
+  }
+
+  return store.workspaceTabs.find((tab) => tab.id === pending.tabId && tab.type === 'sql') ?? null
+})
 const gridPanel = computed(() => store.gridPanel)
 const detailPanels = computed(() => store.detailPanels)
 const activeDetailPanel = computed(() => {
@@ -24,6 +32,14 @@ const activeDetailPanel = computed(() => {
   return panels.length ? panels[panels.length - 1] : undefined
 })
 const detailRailRef = ref<HTMLElement | null>(null)
+const closeAppPromptVisible = ref(false)
+const closeAppPromptSaving = ref(false)
+const hostWindow = window as typeof window & {
+  __dbvHasDirtySqlTabs?: () => boolean
+  __dbvSaveAllDirtySqlTabs?: () => Promise<boolean>
+  __dbvRequestCloseWithDirtySqlTabs?: () => Promise<'save' | 'discard' | 'cancel'>
+}
+let resolveCloseAppPrompt: ((value: 'save' | 'discard' | 'cancel') => void) | null = null
 
 watch(
   () => detailPanels.value.map((panel) => panel.id).join('|'),
@@ -44,8 +60,17 @@ function handleGlobalKeydown(event: KeyboardEvent) {
   const isRefreshShortcut = event.key === 'F5'
   const isSqlExecuteShortcut = (normalizedKey === 'r' && event.ctrlKey)
     || (event.key === 'Enter' && event.ctrlKey)
+  const isSqlSaveShortcut = normalizedKey === 's' && event.ctrlKey
 
   const sqlTab = activeSqlTab.value
+  if (sqlTab && isSqlSaveShortcut) {
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    void store.saveSqlTab(sqlTab.id, event.shiftKey)
+    return
+  }
+
   if (sqlTab && (isRefreshShortcut || isSqlExecuteShortcut)) {
     event.preventDefault()
     event.stopPropagation()
@@ -60,6 +85,71 @@ function handleGlobalKeydown(event: KeyboardEvent) {
     event.stopImmediatePropagation()
     void store.refreshActiveTableData()
   }
+}
+
+function handleHostMessage(event: MessageEvent) {
+  const payload = event.data as { channel?: string; event?: string; payload?: { files?: Array<{ path: string; content: string }> } }
+  if (!payload || payload.channel !== 'dbv-event') {
+    return
+  }
+
+  if (payload.event === 'request-close-with-dirty-sql-tabs') {
+    void requestCloseWithDirtySqlTabs()
+    return
+  }
+
+  if (payload.event !== 'open-sql-files') {
+    return
+  }
+
+  for (const file of payload.payload?.files ?? []) {
+    void store.openSqlFileTab(file.path, file.content)
+  }
+}
+
+function isSqlFile(file: File) {
+  return file.name.toLowerCase().endsWith('.sql')
+}
+
+function hasDroppedFiles(event: DragEvent) {
+  const types = Array.from(event.dataTransfer?.types ?? [])
+  return types.includes('Files') || (event.dataTransfer?.files?.length ?? 0) > 0
+}
+
+function handleGlobalDragOver(event: DragEvent) {
+  if (!hasDroppedFiles(event)) {
+    return
+  }
+
+  event.preventDefault()
+  event.stopPropagation()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy'
+  }
+}
+
+async function handleGlobalDrop(event: DragEvent) {
+  if (!hasDroppedFiles(event)) {
+    return
+  }
+
+  event.preventDefault()
+  event.stopPropagation()
+
+  const files = Array.from(event.dataTransfer?.files ?? []).filter(isSqlFile)
+  if (!files.length) {
+    return
+  }
+
+  for (const file of files) {
+    const path = (file as File & { path?: string }).path ?? file.name
+    const content = await file.text()
+    await store.openSqlFileTab(path, content)
+  }
+}
+
+function handleGlobalDropEvent(event: DragEvent) {
+  void handleGlobalDrop(event)
 }
 
 function handleHostExecuteSql() {
@@ -78,14 +168,98 @@ function handleHostRefresh() {
   }
 }
 
+function hasDirtySqlTabs() {
+  return store.workspaceTabs.some((tab) => tab.type === 'sql' && store.isSqlTabDirty(tab.id))
+}
+
+async function saveAllDirtySqlTabs() {
+  const dirtySqlTabs = store.workspaceTabs.filter((tab) => tab.type === 'sql' && store.isSqlTabDirty(tab.id))
+  for (const tab of dirtySqlTabs) {
+    const saved = await store.saveSqlTab(tab.id)
+    if (!saved) {
+      return false
+    }
+  }
+
+  return true
+}
+
+function requestCloseWithDirtySqlTabs() {
+  closeAppPromptVisible.value = true
+  closeAppPromptSaving.value = false
+  return new Promise<'save' | 'discard' | 'cancel'>((resolve) => {
+    resolveCloseAppPrompt = resolve
+  })
+}
+
+function respondToHostCloseRequest(result: 'save' | 'discard' | 'cancel') {
+  const webview = (window as typeof window & {
+    chrome?: {
+      webview?: {
+        postMessage: (message: unknown) => void
+      }
+    }
+  }).chrome?.webview
+
+  webview?.postMessage({
+    channel: 'dbv-request',
+    id: `close:${Date.now()}`,
+    command: 'close-app-response',
+    payload: {
+      result,
+    },
+  })
+}
+
+async function confirmCloseAndSave() {
+  closeAppPromptSaving.value = true
+  const saved = await saveAllDirtySqlTabs()
+  if (!saved) {
+    closeAppPromptSaving.value = false
+    return
+  }
+
+  closeAppPromptVisible.value = false
+  closeAppPromptSaving.value = false
+  respondToHostCloseRequest('save')
+  resolveCloseAppPrompt?.('save')
+  resolveCloseAppPrompt = null
+}
+
+function confirmCloseWithoutSave() {
+  closeAppPromptVisible.value = false
+  respondToHostCloseRequest('discard')
+  resolveCloseAppPrompt?.('discard')
+  resolveCloseAppPrompt = null
+}
+
+function cancelCloseAppPrompt() {
+  closeAppPromptVisible.value = false
+  closeAppPromptSaving.value = false
+  respondToHostCloseRequest('cancel')
+  resolveCloseAppPrompt?.('cancel')
+  resolveCloseAppPrompt = null
+}
+
 onMounted(() => {
+  hostWindow.__dbvHasDirtySqlTabs = hasDirtySqlTabs
+  hostWindow.__dbvSaveAllDirtySqlTabs = saveAllDirtySqlTabs
+  hostWindow.__dbvRequestCloseWithDirtySqlTabs = requestCloseWithDirtySqlTabs
   window.addEventListener('keydown', handleGlobalKeydown, { capture: true })
+  window.addEventListener('dragover', handleGlobalDragOver, { capture: true })
+  window.addEventListener('drop', handleGlobalDropEvent, { capture: true })
   window.addEventListener('dbv-host-execute-sql', handleHostExecuteSql)
   window.addEventListener('dbv-host-refresh', handleHostRefresh)
+  ;(window as typeof window & { chrome?: { webview?: { addEventListener: (type: 'message', listener: (event: MessageEvent) => void) => void } } }).chrome?.webview?.addEventListener('message', handleHostMessage)
 })
 
 onBeforeUnmount(() => {
+  delete hostWindow.__dbvHasDirtySqlTabs
+  delete hostWindow.__dbvSaveAllDirtySqlTabs
+  delete hostWindow.__dbvRequestCloseWithDirtySqlTabs
   window.removeEventListener('keydown', handleGlobalKeydown, { capture: true })
+  window.removeEventListener('dragover', handleGlobalDragOver, { capture: true })
+  window.removeEventListener('drop', handleGlobalDropEvent, { capture: true })
   window.removeEventListener('dbv-host-execute-sql', handleHostExecuteSql)
   window.removeEventListener('dbv-host-refresh', handleHostRefresh)
 })
@@ -157,6 +331,46 @@ onBeforeUnmount(() => {
               </n-alert>
             </Transition>
           </Teleport>
+
+          <n-modal
+            :show="!!pendingSqlCloseTab"
+            preset="card"
+            style="width: min(460px, 92vw)"
+            title="关闭 SQL 标签页"
+            @update:show="(show) => { if (!show) store.cancelPendingSqlClose() }"
+          >
+            <div class="connection-dialog-form">
+              <n-alert type="warning" :show-icon="false">
+                {{ pendingSqlCloseTab ? `“${store.getWorkspaceTabLabel(pendingSqlCloseTab)}” 尚未保存，是否先保存？` : '' }}
+              </n-alert>
+              <div class="connection-dialog-actions">
+                <n-button tertiary @click="store.cancelPendingSqlClose()">取消</n-button>
+                <n-button tertiary @click="store.discardPendingSqlClose()">不保存</n-button>
+                <n-button type="primary" @click="store.savePendingSqlClose()">保存</n-button>
+              </div>
+            </div>
+          </n-modal>
+
+          <n-modal
+            :show="closeAppPromptVisible"
+            preset="card"
+            style="width: min(480px, 92vw)"
+            title="关闭程序"
+            :mask-closable="false"
+            :close-on-esc="false"
+            :closable="false"
+          >
+            <div class="connection-dialog-form">
+              <n-alert type="warning" :show-icon="false">
+                存在尚未保存的 SQL 标签页。是否先保存再关闭？
+              </n-alert>
+              <div class="connection-dialog-actions">
+                <n-button tertiary :disabled="closeAppPromptSaving" @click="cancelCloseAppPrompt()">取消</n-button>
+                <n-button tertiary :disabled="closeAppPromptSaving" @click="confirmCloseWithoutSave()">不保存</n-button>
+                <n-button type="primary" :loading="closeAppPromptSaving" @click="confirmCloseAndSave()">保存</n-button>
+              </div>
+            </div>
+          </n-modal>
         </n-layout-content>
       </n-layout>
     </n-message-provider>

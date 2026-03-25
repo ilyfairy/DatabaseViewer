@@ -56,6 +56,8 @@ const sqlContext = computed(() => props.tab.connectionId && props.tab.database ?
 const sqlDatabases = computed(() => props.tab.connectionId ? store.getConnectionDatabases(props.tab.connectionId).map((database) => database.name) : [])
 const editorText = ref(props.tab.sqlText)
 const lastLocalSqlText = ref(props.tab.sqlText)
+const sqlFileName = computed(() => props.tab.filePath ? props.tab.filePath.replace(/\\/g, '/').split('/').pop() ?? props.tab.filePath : null)
+const isDirty = computed(() => store.isSqlTabDirty(props.tab.id))
 
 const selectedResultSet = computed(() => {
   if (!props.tab.result) {
@@ -107,6 +109,12 @@ function executeCurrentSql() {
   lastLocalSqlText.value = sqlText
   store.updateSqlTabText(props.tab.id, sqlText)
   void store.executeSqlTab(props.tab.id, sqlText)
+}
+
+function saveCurrentSql(saveAs = false) {
+  lastLocalSqlText.value = editorText.value
+  store.updateSqlTabText(props.tab.id, editorText.value)
+  void store.saveSqlTab(props.tab.id, saveAs)
 }
 
 function handleWindowExecuteSql() {
@@ -352,6 +360,8 @@ watch(() => hasVisibleResults.value, () => {
         <div class="sql-panel-title-row">
           <span class="grid-panel-kicker">SQL 执行器</span>
           <h3>{{ store.getWorkspaceTabLabel(tab) }}</h3>
+          <n-tag v-if="sqlFileName" size="small" :bordered="false">{{ sqlFileName }}</n-tag>
+          <n-tag v-if="isDirty" size="small" :bordered="false" type="warning">未保存</n-tag>
         </div>
         <div class="sql-panel-header-meta">
           <n-tag v-if="tab.result" size="small" :bordered="false" type="info">{{ tab.result.elapsedMs }} ms</n-tag>
@@ -382,6 +392,8 @@ watch(() => hasVisibleResults.value, () => {
           <n-button size="small" type="primary" :disabled="!tab.connectionId || !tab.database || !editorText.trim() || tab.loading" @click="executeCurrentSql">
             执行 SQL
           </n-button>
+          <n-button size="small" tertiary @click="saveCurrentSql()">保存</n-button>
+          <n-button size="small" tertiary @click="saveCurrentSql(true)">另存为</n-button>
           <n-button size="small" tertiary :disabled="tab.loading" @click="clearEditorText">清空文本</n-button>
         </div>
 

@@ -8,6 +8,12 @@ const tabs = computed(() => store.workspaceTabs)
 const activeTabId = computed(() => store.activeTabId)
 const draggingTabId = ref<string | null>(null)
 
+function tabTitle(tab: typeof tabs.value[number]) {
+  return tab.type === 'sql' && tab.filePath
+    ? tab.filePath
+    : store.getWorkspaceTabLabel(tab)
+}
+
 function handleTabAuxClick(event: MouseEvent, tabId: string) {
   if (event.button !== 1) {
     return
@@ -48,6 +54,7 @@ function handleTabDragEnd() {
         :key="tab.id"
         type="button"
         class="workspace-tab-chip"
+        :title="tabTitle(tab)"
         :class="{ 'workspace-tab-chip-active': activeTabId === tab.id, 'workspace-tab-chip-dragging': draggingTabId === tab.id }"
         draggable="true"
         @click="store.activateWorkspaceTab(tab.id)"
@@ -58,6 +65,7 @@ function handleTabDragEnd() {
         @dragend="handleTabDragEnd"
       >
         <span class="workspace-tab-chip-kind">{{ tab.type === 'table' ? '表' : tab.type === 'graph' ? '图' : 'SQL' }}</span>
+        <span v-if="tab.type === 'sql' && store.isSqlTabDirty(tab.id)" class="workspace-tab-chip-dirty" title="未保存">●</span>
         <span class="workspace-tab-chip-label">{{ store.getWorkspaceTabLabel(tab) }}</span>
         <span class="workspace-tab-chip-close" @click.stop="store.closeWorkspaceTab(tab.id)">
           <span class="workspace-tab-chip-close-glyph">✕</span>

@@ -34,9 +34,106 @@ type OpenSqlTabOptions = {
   connectionId?: string | null
   database?: string | null
   sqlText?: string
+  savedSqlText?: string
+  filePath?: string | null
   execute?: boolean
 }
+type PendingSqlCloseState = {
+  tabId: string
+}
 let noticeTimer: ReturnType<typeof setTimeout> | null = null
+
+type HostBridgeRequest = {
+  channel: 'dbv-request'
+  id: string
+  command: string
+  payload?: unknown
+}
+
+type HostBridgeResponse = {
+  channel: 'dbv-response'
+  id: string
+  success: boolean
+  payload?: unknown
+  error?: string
+}
+
+function getHostWebView() {
+  const host = (window as typeof window & {
+    chrome?: {
+      webview?: {
+        postMessage: (message: unknown) => void
+        addEventListener: (type: 'message', listener: (event: MessageEvent) => void) => void
+      }
+    }
+  }).chrome?.webview
+
+  return host ?? null
+}
+
+const hostResponseListeners = new Map<string, (response: HostBridgeResponse) => void>()
+let hostResponseListenerAttached = false
+
+function attachHostResponseListener() {
+  const webview = getHostWebView()
+  if (!webview || hostResponseListenerAttached) {
+    return
+  }
+
+  webview.addEventListener('message', (event) => {
+    const payload = event.data as HostBridgeResponse | { channel?: string }
+    if (!payload || payload.channel !== 'dbv-response' || typeof (payload as HostBridgeResponse).id !== 'string') {
+      return
+    }
+
+    const response = payload as HostBridgeResponse
+    const resolver = hostResponseListeners.get(response.id)
+    if (!resolver) {
+      return
+    }
+
+    hostResponseListeners.delete(response.id)
+    resolver(response)
+  })
+  hostResponseListenerAttached = true
+}
+
+async function requestHost<TPayload, TResult>(command: string, payload: TPayload): Promise<TResult> {
+  const webview = getHostWebView()
+  if (!webview) {
+    throw new Error('当前运行环境不支持桌面宿主文件操作。')
+  }
+
+  attachHostResponseListener()
+  const id = `dbv:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`
+  const request: HostBridgeRequest = {
+    channel: 'dbv-request',
+    id,
+    command,
+    payload,
+  }
+
+  return await new Promise<TResult>((resolve, reject) => {
+    hostResponseListeners.set(id, (response) => {
+      if (!response.success) {
+        reject(new Error(response.error ?? '宿主操作失败。'))
+        return
+      }
+
+      resolve((response.payload ?? null) as TResult)
+    })
+    webview.postMessage(request)
+  })
+}
+
+function getSqlTabFileName(filePath: string | null) {
+  if (!filePath) {
+    return null
+  }
+
+  const normalized = filePath.replace(/\\/g, '/')
+  return normalized.split('/').pop() ?? filePath
+}
 
 function normalizeCellValue(value: CellValue | undefined): CellValue {
   return value ?? null
@@ -136,6 +233,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     graph: null,
   })
   const sqlContextState = ref<Record<string, { loading: boolean; error: string | null; value: SqlContext | null }>>({})
+  const pendingSqlClose = ref<PendingSqlCloseState | null>(null)
 
   const allTables = computed(() => connections.value.flatMap((connection) => connection.databases.flatMap((database) => database.tables)))
   const tableMetaMap = computed(() => new Map(allTables.value.map((table) => [table.key, table] as const)))
@@ -251,6 +349,8 @@ export const useExplorerStore = defineStore('explorer', () => {
       return {
         ...tab,
         database,
+        savedSqlText: tab.savedSqlText ?? tab.sqlText,
+        filePath: tab.filePath ?? null,
       }
     }).filter((tab): tab is WorkspaceTab => !!tab)
 
@@ -1033,7 +1133,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     setActiveTab(tabId)
   }
 
-  function closeWorkspaceTab(tabId: string) {
+  function performCloseWorkspaceTab(tabId: string) {
     persistActiveTablePanels()
 
     const targetIndex = workspaceTabs.value.findIndex((tab) => tab.id === tabId)
@@ -1048,6 +1148,25 @@ export const useExplorerStore = defineStore('explorer', () => {
     }
 
     ensureActiveTabSelection()
+  }
+
+  function isSqlTabDirty(tabId: string) {
+    const tab = workspaceTabs.value.find((entry) => entry.id === tabId && entry.type === 'sql') as SqlWorkspaceTab | undefined
+    if (!tab) {
+      return false
+    }
+
+    return tab.sqlText !== tab.savedSqlText
+  }
+
+  function closeWorkspaceTab(tabId: string) {
+    const sqlTab = workspaceTabs.value.find((entry) => entry.id === tabId && entry.type === 'sql') as SqlWorkspaceTab | undefined
+    if (sqlTab && isSqlTabDirty(tabId)) {
+      pendingSqlClose.value = { tabId }
+      return
+    }
+
+    performCloseWorkspaceTab(tabId)
   }
 
   function moveWorkspaceTab(tabId: string, targetTabId: string) {
@@ -1081,6 +1200,10 @@ export const useExplorerStore = defineStore('explorer', () => {
       return `${tab.database} 关系总览`
     }
 
+    if (tab.filePath) {
+      return getSqlTabFileName(tab.filePath) ?? 'SQL'
+    }
+
     const connection = tab.connectionId ? connections.value.find((entry) => entry.id === tab.connectionId) : null
     const connectionLabel = connection?.name ?? '未选连接'
     if (tab.database) {
@@ -1095,6 +1218,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     const preferredConnectionId = options.connectionId ?? activeConnectionId.value ?? connections.value[0]?.id?.toString() ?? null
     const preferredDatabase = options.database ?? (preferredConnectionId ? getConnectionDatabases(preferredConnectionId)[0]?.name ?? null : null)
     const sqlText = options.sqlText ?? ''
+    const savedSqlText = options.savedSqlText ?? ''
     const tabId = buildSqlTabId()
     upsertWorkspaceTab({
       id: tabId,
@@ -1102,6 +1226,8 @@ export const useExplorerStore = defineStore('explorer', () => {
       connectionId: preferredConnectionId,
       database: preferredDatabase,
       sqlText,
+      savedSqlText,
+      filePath: options.filePath ?? null,
       loading: false,
       error: null,
       result: null,
@@ -1154,6 +1280,95 @@ export const useExplorerStore = defineStore('explorer', () => {
       ...tab,
       sqlText,
     }))
+  }
+
+  function markSqlTabSaved(tabId: string, filePath: string | null, sqlText: string) {
+    updateSqlTab(tabId, (tab) => ({
+      ...tab,
+      filePath,
+      sqlText,
+      savedSqlText: sqlText,
+    }))
+  }
+
+  async function saveSqlTab(tabId: string, saveAs = false) {
+    const tab = workspaceTabs.value.find((entry) => entry.id === tabId && entry.type === 'sql') as SqlWorkspaceTab | undefined
+    if (!tab) {
+      return false
+    }
+
+    try {
+      const suggestedFileName = getSqlTabFileName(tab.filePath) ?? `${tab.database ?? 'query'}.sql`
+      const host = getHostWebView()
+      if (!host) {
+        const blob = new Blob([tab.sqlText], { type: 'application/sql;charset=utf-8' })
+        const url = URL.createObjectURL(blob)
+        const anchor = document.createElement('a')
+        anchor.href = url
+        anchor.download = suggestedFileName
+        anchor.click()
+        URL.revokeObjectURL(url)
+        markSqlTabSaved(tabId, tab.filePath, tab.sqlText)
+        showNotice('success', 'SQL 已导出')
+        return true
+      }
+
+      const result = await requestHost<{ filePath: string | null; suggestedFileName: string; content: string; saveAs: boolean }, { canceled: boolean; filePath: string | null }>('save-sql-file', {
+        filePath: tab.filePath,
+        suggestedFileName,
+        content: tab.sqlText,
+        saveAs,
+      })
+
+      if (result.canceled) {
+        return false
+      }
+
+      markSqlTabSaved(tabId, result.filePath, tab.sqlText)
+      showNotice('success', 'SQL 已保存')
+      return true
+    }
+    catch (error) {
+      showNotice('warning', error instanceof Error ? error.message : 'SQL 保存失败')
+      return false
+    }
+  }
+
+  async function savePendingSqlClose(saveAs = false) {
+    if (!pendingSqlClose.value) {
+      return
+    }
+
+    const tabId = pendingSqlClose.value.tabId
+    const saved = await saveSqlTab(tabId, saveAs)
+    if (!saved) {
+      return
+    }
+
+    pendingSqlClose.value = null
+    performCloseWorkspaceTab(tabId)
+  }
+
+  function discardPendingSqlClose() {
+    if (!pendingSqlClose.value) {
+      return
+    }
+
+    const tabId = pendingSqlClose.value.tabId
+    pendingSqlClose.value = null
+    performCloseWorkspaceTab(tabId)
+  }
+
+  function cancelPendingSqlClose() {
+    pendingSqlClose.value = null
+  }
+
+  async function openSqlFileTab(filePath: string, content: string) {
+    await openSqlTabWithContext({
+      filePath,
+      sqlText: content,
+      savedSqlText: content,
+    })
   }
 
   function selectSqlResultSet(tabId: string, selectedResultIndex: number) {
@@ -1489,6 +1704,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     globalSearch,
     searchColumns,
     tableSortState,
+    pendingSqlClose,
     visibleConnections,
     activeConnectionId,
     openPanels,
@@ -1539,9 +1755,16 @@ export const useExplorerStore = defineStore('explorer', () => {
     openTable,
     openSqlTab,
     openSqlTabWithContext,
+    openSqlFileTab,
     updateSqlTabConnection,
     updateSqlTabDatabase,
     updateSqlTabText,
+    markSqlTabSaved,
+    isSqlTabDirty,
+    saveSqlTab,
+    savePendingSqlClose,
+    discardPendingSqlClose,
+    cancelPendingSqlClose,
     selectSqlResultSet,
     executeSqlTab,
     ensureSqlContextLoaded,
