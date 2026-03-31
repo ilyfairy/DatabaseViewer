@@ -43,6 +43,7 @@ public static class DesktopApiHost
         var explorer = app.Services.GetRequiredService<ExplorerApiService>();
 
         app.MapGet("/api/explorer/bootstrap", async () => await explorer.GetBootstrapAsync());
+        app.MapGet("/api/explorer/connections/{connectionId:guid}", async (Guid connectionId) => await explorer.GetConnectionConfigAsync(connectionId));
         app.MapGet("/api/explorer/database-graph", async (Guid connectionId, string database) => await explorer.GetDatabaseGraphAsync(connectionId, database));
         app.MapGet("/api/explorer/table", async (string tableKey, int? offset, int? pageSize, string? sortColumn, string? sortDirection) => await explorer.GetTablePageAsync(tableKey, offset ?? 0, pageSize ?? 100, sortColumn, sortDirection));
         app.MapGet("/api/explorer/table-search", async (string tableKey, string query, string[]? columns, int? offset, int? pageSize, string? sortColumn, string? sortDirection) => await explorer.SearchTableAsync(tableKey, query, columns, offset ?? 0, pageSize ?? 100, sortColumn, sortDirection));
@@ -76,11 +77,45 @@ public static class DesktopApiHost
                 return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
             }
         });
+        app.MapPost("/api/explorer/table-row", async (TableRowInsertRequest request) =>
+        {
+            try
+            {
+                return Results.Ok(await explorer.InsertTableRowAsync(request));
+            }
+            catch (Exception ex)
+            {
+                return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
+        });
         app.MapPost("/api/explorer/connections", async (CreateConnectionRequest request) =>
         {
             try
             {
                 return Results.Ok(await explorer.CreateConnectionAsync(request));
+            }
+            catch (Exception ex)
+            {
+                return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
+        });
+        app.MapPost("/api/explorer/connections/test", async (TestConnectionRequest request) =>
+        {
+            try
+            {
+                await explorer.TestConnectionAsync(request);
+                return Results.NoContent();
+            }
+            catch (Exception ex)
+            {
+                return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
+        });
+        app.MapPut("/api/explorer/connections/{connectionId:guid}", async (Guid connectionId, CreateConnectionRequest request) =>
+        {
+            try
+            {
+                return Results.Ok(await explorer.UpdateConnectionAsync(connectionId, request));
             }
             catch (Exception ex)
             {

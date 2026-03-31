@@ -119,6 +119,27 @@ public sealed record CreateConnectionRequest(
     string? Password,
     bool TrustServerCertificate);
 
+public sealed record ConnectionConfigResponse(
+    Guid Id,
+    string Name,
+    string Provider,
+    string Authentication,
+    string Host,
+    int? Port,
+    string? Username,
+    bool TrustServerCertificate);
+
+public sealed record TestConnectionRequest(
+    Guid? ConnectionId,
+    string Name,
+    string Provider,
+    string Authentication,
+    string Host,
+    int? Port,
+    string? Username,
+    string? Password,
+    bool TrustServerCertificate);
+
 public sealed record SqlResultColumnDto(string Name, string Type);
 
 public sealed record SqlResultSetDto(
@@ -162,3 +183,19 @@ public sealed record TableCellUpdateResponse(
     string PreviousRowKey,
     string RowKey,
     Dictionary<string, object?> Row);
+
+public sealed record TableRowWriteValueRequest(
+    string ColumnName,
+    string ValueKind,
+    string? TextValue,
+    string? Base64Value,
+    bool SetNull);
+
+public sealed record TableRowInsertRequest(
+    string TableKey,
+    IReadOnlyList<TableRowWriteValueRequest> Values);
+
+public sealed record TableRowInsertResponse(
+    string TableKey,
+    string? RowKey,
+    Dictionary<string, object?>? Row);

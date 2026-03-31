@@ -52,6 +52,8 @@ const providerKeywords = computed(() => props.provider === 'mysql'
   ? MYSQL_KEYWORDS
   : props.provider === 'postgresql'
     ? POSTGRESQL_KEYWORDS
+    : props.provider === 'sqlite'
+      ? SQLITE_KEYWORDS
     : MSSQL_KEYWORDS)
 
 function inferContext(sqlTextBeforeCursor: string) {
@@ -342,6 +344,10 @@ const MYSQL_KEYWORDS = [
 
 const POSTGRESQL_KEYWORDS = [
   'SELECT', 'FROM', 'WHERE', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'FULL', 'OUTER', 'ON', 'GROUP', 'BY', 'ORDER', 'HAVING', 'LIMIT', 'OFFSET', 'DISTINCT', 'AS', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'INSERT', 'INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE', 'CREATE', 'ALTER', 'DROP', 'TABLE', 'VIEW', 'INDEX', 'SCHEMA', 'UNION', 'ALL', 'AND', 'OR', 'NOT', 'NULL', 'IS', 'IN', 'EXISTS', 'BETWEEN', 'LIKE', 'ILIKE', 'RETURNING', 'WITH'
+]
+
+const SQLITE_KEYWORDS = [
+  'SELECT', 'FROM', 'WHERE', 'JOIN', 'LEFT', 'INNER', 'ON', 'GROUP', 'BY', 'ORDER', 'HAVING', 'LIMIT', 'OFFSET', 'DISTINCT', 'AS', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'INSERT', 'INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE', 'CREATE', 'ALTER', 'DROP', 'TABLE', 'VIEW', 'INDEX', 'TRIGGER', 'UNION', 'ALL', 'AND', 'OR', 'NOT', 'NULL', 'IS', 'IN', 'EXISTS', 'BETWEEN', 'LIKE', 'PRAGMA', 'ATTACH', 'DETACH', 'WITH'
 ]
 </script>
 

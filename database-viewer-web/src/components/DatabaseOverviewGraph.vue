@@ -406,10 +406,14 @@ function closeContextMenu() {
 
 onMounted(() => {
   window.addEventListener('click', closeContextMenu)
+  window.addEventListener('contextmenu', closeContextMenu, true)
+  window.addEventListener('blur', closeContextMenu)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('click', closeContextMenu)
+  window.removeEventListener('contextmenu', closeContextMenu, true)
+  window.removeEventListener('blur', closeContextMenu)
 })
 
 function miniMapNodeColor(node: Node<DatabaseOverviewNodeData>) {

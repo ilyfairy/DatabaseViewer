@@ -11,6 +11,7 @@ public static class SqlDialect
             DatabaseProviderType.SqlServer => $"[{identifier.Replace("]", "]]", StringComparison.Ordinal)}]",
             DatabaseProviderType.MySql => $"`{identifier.Replace("`", "``", StringComparison.Ordinal)}`",
             DatabaseProviderType.PostgreSql => $"\"{identifier.Replace("\"", "\"\"", StringComparison.Ordinal)}\"",
+            DatabaseProviderType.Sqlite => $"\"{identifier.Replace("\"", "\"\"", StringComparison.Ordinal)}\"",
             _ => identifier,
         };
     }
@@ -24,6 +25,9 @@ public static class SqlDialect
                 : $"{QuoteIdentifier(providerType, table.DatabaseName)}.{QuoteIdentifier(providerType, table.SchemaName)}.{QuoteIdentifier(providerType, table.TableName)}",
             DatabaseProviderType.MySql => $"{QuoteIdentifier(providerType, table.DatabaseName)}.{QuoteIdentifier(providerType, table.TableName)}",
             DatabaseProviderType.PostgreSql => string.IsNullOrWhiteSpace(table.SchemaName)
+                ? QuoteIdentifier(providerType, table.TableName)
+                : $"{QuoteIdentifier(providerType, table.SchemaName)}.{QuoteIdentifier(providerType, table.TableName)}",
+            DatabaseProviderType.Sqlite => string.IsNullOrWhiteSpace(table.SchemaName)
                 ? QuoteIdentifier(providerType, table.TableName)
                 : $"{QuoteIdentifier(providerType, table.SchemaName)}.{QuoteIdentifier(providerType, table.TableName)}",
             _ => table.TableName,
@@ -48,6 +52,7 @@ public static class SqlDialect
                 ORDER BY [__RowNum]",
             DatabaseProviderType.MySql => $"SELECT * FROM {qualifiedTable} ORDER BY {orderBy} LIMIT @Take OFFSET @Offset",
             DatabaseProviderType.PostgreSql => $"SELECT * FROM {qualifiedTable} ORDER BY {orderBy} LIMIT @Take OFFSET @Offset",
+            DatabaseProviderType.Sqlite => $"SELECT * FROM {qualifiedTable} ORDER BY {orderBy} LIMIT @Take OFFSET @Offset",
             _ => throw new NotSupportedException(),
         };
     }
@@ -62,6 +67,7 @@ public static class SqlDialect
             DatabaseProviderType.SqlServer => $"SELECT TOP 1 * FROM {qualifiedTable} WHERE {whereClause}",
             DatabaseProviderType.MySql => $"SELECT * FROM {qualifiedTable} WHERE {whereClause} LIMIT 1",
             DatabaseProviderType.PostgreSql => $"SELECT * FROM {qualifiedTable} WHERE {whereClause} LIMIT 1",
+            DatabaseProviderType.Sqlite => $"SELECT * FROM {qualifiedTable} WHERE {whereClause} LIMIT 1",
             _ => throw new NotSupportedException(),
         };
     }
@@ -71,6 +77,27 @@ public static class SqlDialect
         var qualifiedTable = GetQualifiedTableName(providerType, table);
         var whereClause = string.Join(" AND ", keyColumns.Select(column => $"{QuoteIdentifier(providerType, column)} = @{column}"));
         return $"UPDATE {qualifiedTable} SET {QuoteIdentifier(providerType, columnName)} = @NewValue WHERE {whereClause}";
+    }
+
+    public static string BuildInsertRowQuery(DatabaseProviderType providerType, DbTableInfo table, IReadOnlyList<string> columnNames, IReadOnlyList<string> parameterNames)
+    {
+        if (columnNames.Count == 0 || columnNames.Count != parameterNames.Count)
+        {
+            throw new ArgumentException("Column and parameter lists must be non-empty and have the same length.");
+        }
+
+        var qualifiedTable = GetQualifiedTableName(providerType, table);
+        var columns = string.Join(", ", columnNames.Select(column => QuoteIdentifier(providerType, column)));
+        var values = string.Join(", ", parameterNames.Select(name => $"@{name}"));
+
+        return providerType switch
+        {
+            DatabaseProviderType.SqlServer => $"INSERT INTO {qualifiedTable} ({columns}) OUTPUT INSERTED.* VALUES ({values})",
+            DatabaseProviderType.MySql => $"INSERT INTO {qualifiedTable} ({columns}) VALUES ({values})",
+            DatabaseProviderType.PostgreSql => $"INSERT INTO {qualifiedTable} ({columns}) VALUES ({values}) RETURNING *",
+            DatabaseProviderType.Sqlite => $"INSERT INTO {qualifiedTable} ({columns}) VALUES ({values}) RETURNING *",
+            _ => throw new NotSupportedException(),
+        };
     }
 
     public static string BuildPreviewByColumnQuery(DatabaseProviderType providerType, DbTableInfo table, string filterColumn, IReadOnlyList<string> orderColumns)
@@ -84,6 +111,7 @@ public static class SqlDialect
             DatabaseProviderType.SqlServer => $"SELECT TOP (@Take) * FROM {qualifiedTable} WHERE {whereClause} ORDER BY {orderBy}",
             DatabaseProviderType.MySql => $"SELECT * FROM {qualifiedTable} WHERE {whereClause} ORDER BY {orderBy} LIMIT @Take",
             DatabaseProviderType.PostgreSql => $"SELECT * FROM {qualifiedTable} WHERE {whereClause} ORDER BY {orderBy} LIMIT @Take",
+            DatabaseProviderType.Sqlite => $"SELECT * FROM {qualifiedTable} WHERE {whereClause} ORDER BY {orderBy} LIMIT @Take",
             _ => throw new NotSupportedException(),
         };
     }
@@ -108,6 +136,7 @@ public static class SqlDialect
                 ORDER BY [__RowNum]",
             DatabaseProviderType.MySql => $"SELECT * FROM {qualifiedTable} WHERE {whereClause} ORDER BY {orderBy} LIMIT @Take OFFSET @Offset",
             DatabaseProviderType.PostgreSql => $"SELECT * FROM {qualifiedTable} WHERE {whereClause} ORDER BY {orderBy} LIMIT @Take OFFSET @Offset",
+            DatabaseProviderType.Sqlite => $"SELECT * FROM {qualifiedTable} WHERE {whereClause} ORDER BY {orderBy} LIMIT @Take OFFSET @Offset",
             _ => throw new NotSupportedException(),
         };
     }
@@ -147,6 +176,7 @@ public static class SqlDialect
             DatabaseProviderType.SqlServer => $"CONVERT(nvarchar(max), {quoted})",
             DatabaseProviderType.MySql => $"CAST({quoted} AS CHAR)",
             DatabaseProviderType.PostgreSql => $"CAST({quoted} AS text)",
+            DatabaseProviderType.Sqlite => $"CAST({quoted} AS TEXT)",
             _ => quoted,
         };
     }

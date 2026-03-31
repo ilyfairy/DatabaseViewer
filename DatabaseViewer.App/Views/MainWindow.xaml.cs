@@ -281,6 +281,51 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (string.Equals(request.Command, "pick-sqlite-database", StringComparison.Ordinal))
+        {
+            try
+            {
+                var payload = request.Payload.Deserialize<PickSqliteDatabasePayload>(JsonOptions)
+                    ?? throw new InvalidOperationException("无效的 SQLite 文件选择请求。");
+
+                var dialog = new SaveFileDialog
+                {
+                    Filter = "SQLite 数据库 (*.db;*.sqlite;*.sqlite3)|*.db;*.sqlite;*.sqlite3|所有文件 (*.*)|*.*",
+                    FileName = string.IsNullOrWhiteSpace(payload.FilePath)
+                        ? payload.SuggestedFileName
+                        : Path.GetFileName(payload.FilePath),
+                    AddExtension = true,
+                    DefaultExt = ".db",
+                    OverwritePrompt = false,
+                    CheckPathExists = true,
+                };
+
+                if (!string.IsNullOrWhiteSpace(payload.FilePath))
+                {
+                    var initialDirectory = Path.GetDirectoryName(payload.FilePath);
+                    if (!string.IsNullOrWhiteSpace(initialDirectory) && Directory.Exists(initialDirectory))
+                    {
+                        dialog.InitialDirectory = initialDirectory;
+                    }
+                }
+
+                var accepted = dialog.ShowDialog(this) == true;
+                if (!accepted)
+                {
+                    PostHostResponse(new HostResponse(request.Id, true, new { canceled = true, filePath = payload.FilePath }, null));
+                    return;
+                }
+
+                PostHostResponse(new HostResponse(request.Id, true, new { canceled = false, filePath = dialog.FileName }, null));
+            }
+            catch (Exception ex)
+            {
+                PostHostResponse(new HostResponse(request.Id, false, null, ex.Message));
+            }
+
+            return;
+        }
+
         if (!string.Equals(request.Command, "save-sql-file", StringComparison.Ordinal))
         {
             return;
@@ -473,6 +518,8 @@ public partial class MainWindow : Window
     private sealed record HostEventPayload(string Channel, string Event, object Payload);
 
     private sealed record SaveSqlFilePayload(string? FilePath, string SuggestedFileName, string? Content, bool SaveAs);
+
+    private sealed record PickSqliteDatabasePayload(string? FilePath, string SuggestedFileName);
 
     private sealed record CloseAppResponsePayload(string Result);
 }

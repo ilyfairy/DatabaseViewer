@@ -1,5 +1,6 @@
 using System.Data.Common;
 using Microsoft.Data.SqlClient;
+using Microsoft.Data.Sqlite;
 using MySqlConnector;
 using Npgsql;
 using DatabaseViewer.Core.Models;
@@ -15,6 +16,7 @@ public static class DbConnectionFactory
             DatabaseProviderType.SqlServer => CreateSqlServer(definition, databaseName),
             DatabaseProviderType.MySql => CreateMySql(definition, databaseName),
             DatabaseProviderType.PostgreSql => CreatePostgreSql(definition, databaseName),
+            DatabaseProviderType.Sqlite => CreateSqlite(definition),
             _ => throw new NotSupportedException($"Unsupported provider: {definition.ProviderType}"),
         };
     }
@@ -94,5 +96,30 @@ public static class DbConnectionFactory
         };
 
         return new NpgsqlConnection(builder.ConnectionString);
+    }
+
+    private static DbConnection CreateSqlite(ConnectionDefinition definition)
+    {
+        if (string.IsNullOrWhiteSpace(definition.Host))
+        {
+            throw new InvalidOperationException("SQLite database path is required.");
+        }
+
+        var filePath = Path.GetFullPath(definition.Host.Trim());
+        var directory = Path.GetDirectoryName(filePath);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        var builder = new SqliteConnectionStringBuilder
+        {
+            DataSource = filePath,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Cache = SqliteCacheMode.Shared,
+            ForeignKeys = true,
+        };
+
+        return new SqliteConnection(builder.ConnectionString);
     }
 }

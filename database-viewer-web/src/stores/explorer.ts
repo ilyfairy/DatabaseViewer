@@ -4,6 +4,7 @@ import { useLocalStorage } from '@vueuse/core'
 import dayjs from 'dayjs'
 import type {
   CellValue,
+  ConnectionConfig,
   ConnectionInfo,
   CreateConnectionRequest,
   GraphWorkspaceTab,
@@ -19,12 +20,15 @@ import type {
   SqlContext,
   TableCellUpdateRequest,
   TableCellUpdateResponse,
+  TableRowInsertRequest,
+  TableRowInsertResponse,
   SqlExecutionResponse,
   SqlWorkspaceTab,
   TableDefinition,
   TableWorkspaceTab,
   TableSearchResponse,
   TableRow,
+  TestConnectionRequest,
   WorkspaceTab,
 } from '../types/explorer'
 
@@ -56,6 +60,11 @@ type HostBridgeResponse = {
   success: boolean
   payload?: unknown
   error?: string
+}
+
+type HostFilePickerResult = {
+  canceled: boolean
+  filePath: string | null
 }
 
 function getHostWebView() {
@@ -1010,6 +1019,30 @@ export const useExplorerStore = defineStore('explorer', () => {
     }
   }
 
+  async function insertTableRow(request: TableRowInsertRequest) {
+    try {
+      const response = await requestJson<TableRowInsertResponse>('/api/explorer/table-row', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(request),
+      })
+
+      await reloadLoadedTable(response.tableKey)
+      if (isSearchActive(response.tableKey)) {
+        await reloadSearchResults(response.tableKey)
+      }
+      await reloadOpenDetailPanels(response.tableKey)
+      showNotice('success', '新行已插入')
+      return response
+    }
+    catch (error) {
+      showNotice('warning', error instanceof Error ? error.message : '新增数据失败')
+      throw error
+    }
+  }
+
   async function refreshActiveTableData() {
     const tableKey = gridPanel.value?.tableKey ?? activeTableTab.value?.tableKey
     if (!tableKey) {
@@ -1371,6 +1404,15 @@ export const useExplorerStore = defineStore('explorer', () => {
     })
   }
 
+  async function pickSqliteDatabaseFile(filePath: string | null, suggestedFileName: string) {
+    const result = await requestHost<{ filePath: string | null; suggestedFileName: string }, HostFilePickerResult>('pick-sqlite-database', {
+      filePath,
+      suggestedFileName,
+    })
+
+    return result.canceled ? null : result.filePath
+  }
+
   function selectSqlResultSet(tabId: string, selectedResultIndex: number) {
     updateSqlTab(tabId, (tab) => ({
       ...tab,
@@ -1684,6 +1726,43 @@ export const useExplorerStore = defineStore('explorer', () => {
     showNotice('success', '连接已创建')
   }
 
+  async function getConnectionConfig(connectionId: string) {
+    return await requestJson<ConnectionConfig>(`/api/explorer/connections/${encodeURIComponent(connectionId)}`)
+  }
+
+  async function testConnection(request: TestConnectionRequest) {
+    const response = await fetch('/api/explorer/connections/test', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+    })
+
+    if (!response.ok) {
+      throw new Error(await response.text())
+    }
+
+    showNotice('success', '连接测试成功')
+  }
+
+  async function updateConnection(connectionId: string, request: CreateConnectionRequest) {
+    const response = await fetch(`/api/explorer/connections/${encodeURIComponent(connectionId)}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+    })
+
+    if (!response.ok) {
+      throw new Error(await response.text())
+    }
+
+    await refreshBootstrap()
+    showNotice('success', '连接已更新')
+  }
+
   function getReverseReferences(panel: ExplorerDetailPanel): ReverseReferenceGroup[] {
     return detailCache.value[panel.id]?.reverseReferences ?? []
   }
@@ -1756,6 +1835,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     openSqlTab,
     openSqlTabWithContext,
     openSqlFileTab,
+    pickSqliteDatabaseFile,
     updateSqlTabConnection,
     updateSqlTabDatabase,
     updateSqlTabText,
@@ -1788,12 +1868,16 @@ export const useExplorerStore = defineStore('explorer', () => {
     loadAllSearchRows,
     fetchCellContent,
     updateTableCell,
+    insertTableRow,
     refreshActiveTableData,
     refreshDatabase,
     openDatabaseGraph,
     closeDatabaseGraph,
     defaultPageSize,
     createConnection,
+    getConnectionConfig,
+    testConnection,
+    updateConnection,
     deleteConnection,
     dismissNotice,
     refreshBootstrap,

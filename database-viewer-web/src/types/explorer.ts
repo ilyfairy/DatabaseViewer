@@ -1,4 +1,4 @@
-export type ProviderType = 'sqlserver' | 'mysql' | 'postgresql'
+export type ProviderType = 'sqlserver' | 'mysql' | 'postgresql' | 'sqlite'
 export type AuthenticationMode = 'windows' | 'password'
 export type CellValue = string | number | boolean | null
 
@@ -23,6 +23,21 @@ export interface CreateConnectionRequest {
   username?: string | null
   password?: string | null
   trustServerCertificate: boolean
+}
+
+export interface ConnectionConfig {
+  id: string
+  name: string
+  provider: ProviderType
+  authentication: AuthenticationMode
+  host: string
+  port?: number | null
+  username?: string | null
+  trustServerCertificate: boolean
+}
+
+export interface TestConnectionRequest extends CreateConnectionRequest {
+  connectionId?: string | null
 }
 
 export interface DatabaseInfo {
@@ -259,4 +274,23 @@ export interface TableCellUpdateResponse {
   previousRowKey: string
   rowKey: string
   row: TableRow
+}
+
+export interface TableRowWriteValueRequest {
+  columnName: string
+  valueKind: 'text' | 'binary' | 'null'
+  textValue?: string | null
+  base64Value?: string | null
+  setNull: boolean
+}
+
+export interface TableRowInsertRequest {
+  tableKey: string
+  values: TableRowWriteValueRequest[]
+}
+
+export interface TableRowInsertResponse {
+  tableKey: string
+  rowKey?: string | null
+  row?: TableRow | null
 }

@@ -292,12 +292,24 @@ function handleWindowClick() {
   closeContextMenu()
 }
 
+function handleWindowContextMenu() {
+  closeContextMenu()
+}
+
+function handleWindowBlur() {
+  closeContextMenu()
+}
+
 onMounted(() => {
   window.addEventListener('click', handleWindowClick)
+  window.addEventListener('contextmenu', handleWindowContextMenu, true)
+  window.addEventListener('blur', handleWindowBlur)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('click', handleWindowClick)
+  window.removeEventListener('contextmenu', handleWindowContextMenu, true)
+  window.removeEventListener('blur', handleWindowBlur)
 })
 </script>
 

@@ -37,9 +37,7 @@ const closeAppPromptSaving = ref(false)
 const hostWindow = window as typeof window & {
   __dbvHasDirtySqlTabs?: () => boolean
   __dbvSaveAllDirtySqlTabs?: () => Promise<boolean>
-  __dbvRequestCloseWithDirtySqlTabs?: () => Promise<'save' | 'discard' | 'cancel'>
 }
-let resolveCloseAppPrompt: ((value: 'save' | 'discard' | 'cancel') => void) | null = null
 
 watch(
   () => detailPanels.value.map((panel) => panel.id).join('|'),
@@ -94,7 +92,8 @@ function handleHostMessage(event: MessageEvent) {
   }
 
   if (payload.event === 'request-close-with-dirty-sql-tabs') {
-    void requestCloseWithDirtySqlTabs()
+    closeAppPromptVisible.value = true
+    closeAppPromptSaving.value = false
     return
   }
 
@@ -184,14 +183,6 @@ async function saveAllDirtySqlTabs() {
   return true
 }
 
-function requestCloseWithDirtySqlTabs() {
-  closeAppPromptVisible.value = true
-  closeAppPromptSaving.value = false
-  return new Promise<'save' | 'discard' | 'cancel'>((resolve) => {
-    resolveCloseAppPrompt = resolve
-  })
-}
-
 function respondToHostCloseRequest(result: 'save' | 'discard' | 'cancel') {
   const webview = (window as typeof window & {
     chrome?: {
@@ -222,29 +213,22 @@ async function confirmCloseAndSave() {
   closeAppPromptVisible.value = false
   closeAppPromptSaving.value = false
   respondToHostCloseRequest('save')
-  resolveCloseAppPrompt?.('save')
-  resolveCloseAppPrompt = null
 }
 
 function confirmCloseWithoutSave() {
   closeAppPromptVisible.value = false
   respondToHostCloseRequest('discard')
-  resolveCloseAppPrompt?.('discard')
-  resolveCloseAppPrompt = null
 }
 
 function cancelCloseAppPrompt() {
   closeAppPromptVisible.value = false
   closeAppPromptSaving.value = false
   respondToHostCloseRequest('cancel')
-  resolveCloseAppPrompt?.('cancel')
-  resolveCloseAppPrompt = null
 }
 
 onMounted(() => {
   hostWindow.__dbvHasDirtySqlTabs = hasDirtySqlTabs
   hostWindow.__dbvSaveAllDirtySqlTabs = saveAllDirtySqlTabs
-  hostWindow.__dbvRequestCloseWithDirtySqlTabs = requestCloseWithDirtySqlTabs
   window.addEventListener('keydown', handleGlobalKeydown, { capture: true })
   window.addEventListener('dragover', handleGlobalDragOver, { capture: true })
   window.addEventListener('drop', handleGlobalDropEvent, { capture: true })
@@ -256,7 +240,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   delete hostWindow.__dbvHasDirtySqlTabs
   delete hostWindow.__dbvSaveAllDirtySqlTabs
-  delete hostWindow.__dbvRequestCloseWithDirtySqlTabs
   window.removeEventListener('keydown', handleGlobalKeydown, { capture: true })
   window.removeEventListener('dragover', handleGlobalDragOver, { capture: true })
   window.removeEventListener('drop', handleGlobalDropEvent, { capture: true })
@@ -283,7 +266,7 @@ onBeforeUnmount(() => {
                   <Splitpanes v-if="activeDetailPanel" class="workspace-split workspace-body">
                     <Pane :size="68" :min-size="36">
                       <div class="workspace-main">
-                        <GridPanel :table-key="gridPanel.tableKey" />
+                        <GridPanel :key="activeTableTab.id" :table-key="gridPanel.tableKey" />
                       </div>
                     </Pane>
                     <Pane :size="32" :min-size="22">
@@ -296,7 +279,7 @@ onBeforeUnmount(() => {
                   </Splitpanes>
                   <div v-else class="workspace-body">
                     <div class="workspace-main">
-                      <GridPanel :table-key="gridPanel.tableKey" />
+                      <GridPanel :key="activeTableTab.id" :table-key="gridPanel.tableKey" />
                     </div>
                   </div>
                 </template>

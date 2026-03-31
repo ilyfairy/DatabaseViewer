@@ -11,8 +11,15 @@ const connectionContextMenu = ref<{ x: number; y: number; connectionId: string; 
 const databaseContextMenu = ref<{ x: number; y: number; connectionId: string; database: string } | null>(null)
 const tableContextMenu = ref<{ x: number; y: number; connectionId: string; database: string; table: TableSummary; showScriptSubmenu: boolean } | null>(null)
 const deleteConnectionConfirm = ref<{ connectionId: string; connectionName: string } | null>(null)
+const renameTableTarget = ref<{ connectionId: string; database: string; table: TableSummary } | null>(null)
+const renameTableVisible = ref(false)
+const renameTableLoading = ref(false)
+const renameTableError = ref<string | null>(null)
+const renameTableName = ref('')
+const editingConnectionId = ref<string | null>(null)
 const createConnectionVisible = ref(false)
 const createConnectionLoading = ref(false)
+const testConnectionLoading = ref(false)
 const createConnectionError = ref<string | null>(null)
 const createConnectionForm = reactive({
   name: '',
@@ -35,6 +42,7 @@ const providerOptions = [
   { label: 'SQL Server', value: 'sqlserver' },
   { label: 'MySQL', value: 'mysql' },
   { label: 'PostgreSQL', value: 'postgresql' },
+  { label: 'SQLite', value: 'sqlite' },
 ]
 const authenticationOptions = computed(() => createConnectionForm.provider === 'sqlserver'
   ? [
@@ -42,7 +50,7 @@ const authenticationOptions = computed(() => createConnectionForm.provider === '
       { label: 'Windows 身份验证', value: 'windows' },
     ]
   : [
-      { label: '账号密码', value: 'password' },
+      { label: createConnectionForm.provider === 'sqlite' ? '本地文件' : '账号密码', value: 'password' },
     ])
 
 function toggleConnection(connectionId: string) {
@@ -62,7 +70,9 @@ function providerLabel(connection: ConnectionInfo) {
     ? 'SQL Server'
     : connection.provider === 'postgresql'
       ? 'PostgreSQL'
-      : 'MySQL'
+      : connection.provider === 'sqlite'
+        ? 'SQLite'
+        : 'MySQL'
 }
 
 async function confirmDeleteConnection(connectionId: string) {
@@ -102,6 +112,35 @@ function openDeleteConnectionConfirm() {
     connectionName: connectionContextMenu.value.connectionName,
   }
   closeConnectionContextMenu()
+}
+
+async function openEditConnectionDialog() {
+  if (!connectionContextMenu.value) {
+    return
+  }
+
+  createConnectionLoading.value = true
+  createConnectionError.value = null
+  try {
+    const config = await store.getConnectionConfig(connectionContextMenu.value.connectionId)
+    editingConnectionId.value = config.id
+    createConnectionForm.name = config.name
+    createConnectionForm.provider = config.provider
+    createConnectionForm.authentication = config.authentication
+    createConnectionForm.host = config.host
+    createConnectionForm.port = config.port ? String(config.port) : ''
+    createConnectionForm.username = config.username ?? ''
+    createConnectionForm.password = ''
+    createConnectionForm.trustServerCertificate = config.trustServerCertificate
+    createConnectionVisible.value = true
+  }
+  catch (error) {
+    createConnectionError.value = error instanceof Error ? error.message : '连接配置加载失败'
+  }
+  finally {
+    createConnectionLoading.value = false
+    closeConnectionContextMenu()
+  }
 }
 
 function closeDeleteConnectionConfirm() {
@@ -160,7 +199,7 @@ function quoteIdentifier(provider: ProviderType, value: string) {
     return `\`${value.replace(/`/g, '``')}\``
   }
 
-  if (provider === 'postgresql') {
+  if (provider === 'postgresql' || provider === 'sqlite') {
     return `"${value.replace(/"/g, '""')}"`
   }
 
@@ -183,6 +222,10 @@ function buildBatchPrefix(provider: ProviderType, database: string) {
 
   if (provider === 'mysql') {
     return `USE ${quoteIdentifier(provider, database)};\n\n`
+  }
+
+  if (provider === 'sqlite') {
+    return `-- sqlite database: ${database}\n\n`
   }
 
   return `-- database: ${database}\n\n`
@@ -254,6 +297,42 @@ function buildCreateScript(provider: ProviderType, database: string, table: Tabl
   return `${buildBatchPrefix(provider, database)}CREATE TABLE ${formatSchemaTable(provider, table)}\n(\n${body}\n)${buildBatchSuffix(provider)}`
 }
 
+function buildRenameTableScript(provider: ProviderType, database: string, table: TableSummary, targetName: string) {
+  const currentName = formatSchemaTable(provider, table)
+
+  if (provider === 'sqlserver') {
+    return `${buildBatchPrefix(provider, database)}EXEC sp_rename '${currentName.replace(/'/g, "''")}', '${targetName.replace(/'/g, "''")}'${buildBatchSuffix(provider)}`
+  }
+
+  if (provider === 'postgresql' || provider === 'sqlite') {
+    return `${buildBatchPrefix(provider, database)}ALTER TABLE ${currentName}\n  RENAME TO ${quoteIdentifier(provider, targetName)}${buildBatchSuffix(provider)}`
+  }
+
+  return `${buildBatchPrefix(provider, database)}RENAME TABLE ${currentName}\n         TO ${table.schema ? `${quoteIdentifier(provider, table.schema)}.` : ''}${quoteIdentifier(provider, targetName)}${buildBatchSuffix(provider)}`
+}
+
+function buildCreateTableTemplate(provider: ProviderType, database: string) {
+  const idColumn = provider === 'sqlite'
+    ? `${quoteIdentifier(provider, 'id')} INTEGER PRIMARY KEY AUTOINCREMENT`
+    : provider === 'postgresql'
+      ? `${quoteIdentifier(provider, 'id')} bigint generated by default as identity primary key`
+      : provider === 'mysql'
+        ? `${quoteIdentifier(provider, 'id')} bigint not null auto_increment primary key`
+        : `${quoteIdentifier(provider, 'id')} bigint identity(1,1) not null primary key`
+  const nameColumn = provider === 'sqlite'
+    ? `${quoteIdentifier(provider, 'name')} TEXT NOT NULL`
+    : `${quoteIdentifier(provider, 'name')} varchar(255) NOT NULL`
+  const createdAtColumn = provider === 'sqlite'
+    ? `${quoteIdentifier(provider, 'created_at')} TEXT NULL DEFAULT CURRENT_TIMESTAMP`
+    : provider === 'postgresql'
+      ? `${quoteIdentifier(provider, 'created_at')} timestamp NULL DEFAULT CURRENT_TIMESTAMP`
+      : provider === 'mysql'
+        ? `${quoteIdentifier(provider, 'created_at')} datetime NULL DEFAULT CURRENT_TIMESTAMP`
+        : `${quoteIdentifier(provider, 'created_at')} datetime2 NULL DEFAULT sysdatetime()`
+
+  return `${buildBatchPrefix(provider, database)}CREATE TABLE ${quoteIdentifier(provider, 'new_table')}\n(\n    ${idColumn}\n   ,${nameColumn}\n   ,${createdAtColumn}\n)${buildBatchSuffix(provider)}`
+}
+
 async function openDatabaseSqlQuery() {
   if (!databaseContextMenu.value) {
     return
@@ -262,6 +341,21 @@ async function openDatabaseSqlQuery() {
   const { connectionId, database } = databaseContextMenu.value
   closeDatabaseContextMenu()
   await store.openSqlTabWithContext({ connectionId, database })
+}
+
+async function openCreateTableQuery() {
+  if (!databaseContextMenu.value) {
+    return
+  }
+
+  const { connectionId, database } = databaseContextMenu.value
+  closeDatabaseContextMenu()
+  const provider = providerForConnection(connectionId)
+  await store.openSqlTabWithContext({
+    connectionId,
+    database,
+    sqlText: buildCreateTableTemplate(provider, database),
+  })
 }
 
 async function openTableScript(kind: 'create' | 'drop' | 'select' | 'insert' | 'update' | 'delete') {
@@ -303,6 +397,74 @@ async function openDatabaseGraphOverview() {
   await store.openDatabaseGraph(connectionId, database)
 }
 
+async function openRenameTableQuery() {
+  if (!tableContextMenu.value) {
+    return
+  }
+
+  const { connectionId, database, table } = tableContextMenu.value
+  closeTableContextMenu()
+  renameTableTarget.value = { connectionId, database, table }
+  renameTableName.value = table.name
+  renameTableError.value = null
+  renameTableVisible.value = true
+}
+
+function closeRenameTableDialog() {
+  renameTableVisible.value = false
+  renameTableLoading.value = false
+  renameTableError.value = null
+  renameTableTarget.value = null
+  renameTableName.value = ''
+}
+
+async function submitRenameTable() {
+  if (!renameTableTarget.value) {
+    return
+  }
+
+  const nextName = renameTableName.value.trim()
+  if (!nextName) {
+    renameTableError.value = '表名不能为空'
+    return
+  }
+
+  if (nextName === renameTableTarget.value.table.name) {
+    closeRenameTableDialog()
+    return
+  }
+
+  renameTableLoading.value = true
+  renameTableError.value = null
+  try {
+    const provider = providerForConnection(renameTableTarget.value.connectionId)
+    const sql = buildRenameTableScript(provider, renameTableTarget.value.database, renameTableTarget.value.table, nextName)
+
+    const response = await fetch('/api/explorer/sql-execute', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        connectionId: renameTableTarget.value.connectionId,
+        database: renameTableTarget.value.database,
+        sql,
+      }),
+    })
+
+    if (!response.ok) {
+      throw new Error(await response.text())
+    }
+
+    await store.refreshDatabase(renameTableTarget.value.connectionId, renameTableTarget.value.database)
+    closeRenameTableDialog()
+  }
+  catch (error) {
+    renameTableError.value = error instanceof Error ? error.message : '表重命名失败'
+    renameTableLoading.value = false
+  }
+}
+
 async function refreshDatabaseFromMenu() {
   if (!databaseContextMenu.value) {
     return
@@ -314,6 +476,7 @@ async function refreshDatabaseFromMenu() {
 }
 
 function resetCreateConnectionForm() {
+  editingConnectionId.value = null
   createConnectionForm.name = ''
   createConnectionForm.provider = 'sqlserver'
   createConnectionForm.authentication = 'password'
@@ -333,13 +496,35 @@ function openCreateConnectionDialog() {
 
 function handleProviderChange(provider: ProviderType) {
   createConnectionForm.provider = provider
-  createConnectionForm.port = provider === 'sqlserver' ? '1433' : provider === 'postgresql' ? '5432' : '3306'
+  createConnectionForm.port = provider === 'sqlserver' ? '1433' : provider === 'postgresql' ? '5432' : provider === 'mysql' ? '3306' : ''
   if (provider === 'mysql' && createConnectionForm.authentication === 'windows') {
     createConnectionForm.authentication = 'password'
   }
 
   if (provider === 'postgresql' && createConnectionForm.authentication === 'windows') {
     createConnectionForm.authentication = 'password'
+  }
+
+  if (provider === 'sqlite') {
+    createConnectionForm.authentication = 'password'
+    createConnectionForm.username = ''
+    createConnectionForm.password = ''
+  }
+}
+
+async function browseSqliteDatabaseFile() {
+  createConnectionError.value = null
+
+  try {
+    const baseName = (createConnectionForm.name.trim() || 'database').replace(/[\\/:*?"<>|]/g, '_')
+    const suggestedFileName = /\.(db|sqlite|sqlite3)$/i.test(baseName) ? baseName : `${baseName}.db`
+    const filePath = await store.pickSqliteDatabaseFile(createConnectionForm.host || null, suggestedFileName)
+    if (filePath) {
+      createConnectionForm.host = filePath
+    }
+  }
+  catch (error) {
+    createConnectionError.value = error instanceof Error ? error.message : 'SQLite 文件选择失败'
   }
 }
 
@@ -348,16 +533,23 @@ async function submitCreateConnection() {
   createConnectionError.value = null
 
   try {
-    await store.createConnection({
+    const payload = {
       name: createConnectionForm.name,
       provider: createConnectionForm.provider,
       authentication: createConnectionForm.authentication,
       host: createConnectionForm.host,
-      port: Number.isFinite(Number(createConnectionForm.port)) ? Number(createConnectionForm.port) : null,
-      username: createConnectionForm.authentication === 'windows' ? null : createConnectionForm.username,
-      password: createConnectionForm.authentication === 'windows' ? null : createConnectionForm.password,
+      port: createConnectionForm.provider === 'sqlite' || !Number.isFinite(Number(createConnectionForm.port)) ? null : Number(createConnectionForm.port),
+      username: createConnectionForm.provider === 'sqlite' || createConnectionForm.authentication === 'windows' ? null : createConnectionForm.username,
+      password: createConnectionForm.provider === 'sqlite' || createConnectionForm.authentication === 'windows' ? null : createConnectionForm.password,
       trustServerCertificate: createConnectionForm.trustServerCertificate,
-    })
+    }
+
+    if (editingConnectionId.value) {
+      await store.updateConnection(editingConnectionId.value, payload)
+    }
+    else {
+      await store.createConnection(payload)
+    }
     createConnectionVisible.value = false
   }
   catch (error) {
@@ -368,12 +560,40 @@ async function submitCreateConnection() {
   }
 }
 
+async function testCurrentConnection() {
+  testConnectionLoading.value = true
+  createConnectionError.value = null
+  try {
+    await store.testConnection({
+      connectionId: editingConnectionId.value,
+      name: createConnectionForm.name,
+      provider: createConnectionForm.provider,
+      authentication: createConnectionForm.authentication,
+      host: createConnectionForm.host,
+      port: createConnectionForm.provider === 'sqlite' || !Number.isFinite(Number(createConnectionForm.port)) ? null : Number(createConnectionForm.port),
+      username: createConnectionForm.provider === 'sqlite' || createConnectionForm.authentication === 'windows' ? null : createConnectionForm.username,
+      password: createConnectionForm.provider === 'sqlite' || createConnectionForm.authentication === 'windows' ? null : (createConnectionForm.password || null),
+      trustServerCertificate: createConnectionForm.trustServerCertificate,
+    })
+  }
+  catch (error) {
+    createConnectionError.value = error instanceof Error ? error.message : '连接测试失败'
+  }
+  finally {
+    testConnectionLoading.value = false
+  }
+}
+
 onMounted(() => {
   window.addEventListener('click', closeAllContextMenus)
+  window.addEventListener('contextmenu', closeAllContextMenus, true)
+  window.addEventListener('blur', closeAllContextMenus)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('click', closeAllContextMenus)
+  window.removeEventListener('contextmenu', closeAllContextMenus, true)
+  window.removeEventListener('blur', closeAllContextMenus)
 })
 </script>
 
@@ -421,7 +641,7 @@ onBeforeUnmount(() => {
             {{ connection.error }}
           </n-alert>
 
-          <div v-if="expandedConnections.includes(connection.id)" class="database-list" @contextmenu.prevent.stop>
+          <div v-if="expandedConnections.includes(connection.id)" class="database-list database-list-animated" @contextmenu.prevent.stop>
             <div
               v-for="database in store.getDatabases(connection.id)"
               :key="`${connection.id}:${database.name}`"
@@ -481,6 +701,9 @@ onBeforeUnmount(() => {
       @click.stop
       @mousedown.stop
     >
+      <button type="button" class="database-context-menu-item" @click.stop="openEditConnectionDialog()">
+        编辑连接
+      </button>
       <button type="button" class="database-context-menu-item" @click.stop="openDeleteConnectionConfirm()">
         删除连接
       </button>
@@ -496,6 +719,9 @@ onBeforeUnmount(() => {
       <button type="button" class="database-context-menu-item" @click="openDatabaseSqlQuery()">
         新建查询
       </button>
+      <button type="button" class="database-context-menu-item" @click="openCreateTableQuery">
+        新建表...
+      </button>
       <button type="button" class="database-context-menu-item" @click="refreshDatabaseFromMenu">
         刷新数据库
       </button>
@@ -510,40 +736,57 @@ onBeforeUnmount(() => {
       :style="{ left: `${tableContextMenu.x}px`, top: `${tableContextMenu.y}px` }"
       @click.stop
       @mousedown.stop
+      @mouseleave="setTableScriptSubmenu(false)"
     >
-      <button
-        type="button"
-        class="database-context-menu-item database-context-menu-item-arrow"
-        @mouseenter="setTableScriptSubmenu(true)"
-        @click="setTableScriptSubmenu(!tableContextMenu.showScriptSubmenu)"
-      >
-        编写脚本为
-      </button>
+      <button type="button" class="database-context-menu-item" @click="openRenameTableQuery">重命名表...</button>
+      <div class="database-context-submenu-anchor" @mouseenter="setTableScriptSubmenu(true)" @mouseleave="setTableScriptSubmenu(false)">
+        <button
+          type="button"
+          class="database-context-menu-item database-context-menu-item-arrow"
+          @click="setTableScriptSubmenu(!tableContextMenu.showScriptSubmenu)"
+        >
+          编写脚本为
+        </button>
 
-      <div v-if="tableContextMenu.showScriptSubmenu" class="database-context-menu database-context-submenu">
-        <button type="button" class="database-context-menu-item" @click="openTableScript('create')">CREATE 到</button>
-        <button type="button" class="database-context-menu-item" @click="openTableScript('drop')">DROP 到</button>
-        <button type="button" class="database-context-menu-item" @click="openTableScript('select')">SELECT 到</button>
-        <button type="button" class="database-context-menu-item" @click="openTableScript('insert')">INSERT 到</button>
-        <button type="button" class="database-context-menu-item" @click="openTableScript('update')">UPDATE 到</button>
-        <button type="button" class="database-context-menu-item" @click="openTableScript('delete')">DELETE 到</button>
+        <div v-if="tableContextMenu.showScriptSubmenu" class="database-context-menu database-context-submenu">
+          <button type="button" class="database-context-menu-item" @click="openTableScript('create')">CREATE 到</button>
+          <button type="button" class="database-context-menu-item" @click="openTableScript('drop')">DROP 到</button>
+          <button type="button" class="database-context-menu-item" @click="openTableScript('select')">SELECT 到</button>
+          <button type="button" class="database-context-menu-item" @click="openTableScript('insert')">INSERT 到</button>
+          <button type="button" class="database-context-menu-item" @click="openTableScript('update')">UPDATE 到</button>
+          <button type="button" class="database-context-menu-item" @click="openTableScript('delete')">DELETE 到</button>
+        </div>
       </div>
     </div>
 
-    <n-modal v-model:show="createConnectionVisible" preset="card" style="width: min(460px, 92vw)" title="新建连接">
+    <n-modal v-model:show="createConnectionVisible" preset="card" style="width: min(460px, 92vw)" :title="editingConnectionId ? '编辑连接' : '新建连接'">
       <div class="connection-dialog-form">
         <n-input v-model:value="createConnectionForm.name" placeholder="连接名称" />
         <n-select :value="createConnectionForm.provider" :options="providerOptions" @update:value="handleProviderChange($event)" />
-        <n-select v-model:value="createConnectionForm.authentication" :options="authenticationOptions" />
-        <n-input v-model:value="createConnectionForm.host" placeholder="主机，例如 .\SQLEXPRESS 或 localhost" />
-        <n-input v-model:value="createConnectionForm.port" placeholder="端口" inputmode="numeric" />
-        <n-input v-if="createConnectionForm.authentication !== 'windows'" v-model:value="createConnectionForm.username" placeholder="用户名" />
-        <n-input v-if="createConnectionForm.authentication !== 'windows'" v-model:value="createConnectionForm.password" type="password" show-password-on="click" placeholder="密码" />
+        <n-select v-if="createConnectionForm.provider !== 'sqlite'" v-model:value="createConnectionForm.authentication" :options="authenticationOptions" />
+        <n-input v-model:value="createConnectionForm.host" :placeholder="createConnectionForm.provider === 'sqlite' ? '数据库文件路径，例如 C:\\data\\app.db' : '主机，例如 .\\SQLEXPRESS 或 localhost'" />
+        <n-button v-if="createConnectionForm.provider === 'sqlite'" tertiary type="primary" @click="browseSqliteDatabaseFile">选择或新建 SQLite 文件</n-button>
+        <n-text v-if="createConnectionForm.provider === 'sqlite'" depth="3">SQLite 会把这里当作数据库文件路径；如果文件不存在，会在首次连接时自动创建。</n-text>
+        <n-input v-if="createConnectionForm.provider !== 'sqlite'" v-model:value="createConnectionForm.port" placeholder="端口" inputmode="numeric" />
+        <n-input v-if="createConnectionForm.provider !== 'sqlite' && createConnectionForm.authentication !== 'windows'" v-model:value="createConnectionForm.username" placeholder="用户名" />
+        <n-input v-if="createConnectionForm.provider !== 'sqlite' && createConnectionForm.authentication !== 'windows'" v-model:value="createConnectionForm.password" type="password" show-password-on="click" :placeholder="editingConnectionId ? '密码，留空则保持不变' : '密码'" />
         <n-checkbox v-if="createConnectionForm.provider === 'sqlserver'" v-model:checked="createConnectionForm.trustServerCertificate">信任服务器证书</n-checkbox>
         <n-alert v-if="createConnectionError" type="warning" :show-icon="false">{{ createConnectionError }}</n-alert>
         <div class="connection-dialog-actions">
           <n-button tertiary @click="createConnectionVisible = false">取消</n-button>
-          <n-button type="primary" :loading="createConnectionLoading" @click="submitCreateConnection">保存连接</n-button>
+          <n-button tertiary :loading="testConnectionLoading" @click="testCurrentConnection">测试连接</n-button>
+          <n-button type="primary" :loading="createConnectionLoading" @click="submitCreateConnection">{{ editingConnectionId ? '保存修改' : '保存连接' }}</n-button>
+        </div>
+      </div>
+    </n-modal>
+
+    <n-modal v-model:show="renameTableVisible" preset="card" style="width: min(420px, 92vw)" title="重命名表">
+      <div class="connection-dialog-form">
+        <n-input v-model:value="renameTableName" placeholder="新的表名" @keydown.enter.prevent="submitRenameTable" />
+        <n-alert v-if="renameTableError" type="warning" :show-icon="false">{{ renameTableError }}</n-alert>
+        <div class="connection-dialog-actions">
+          <n-button tertiary :disabled="renameTableLoading" @click="closeRenameTableDialog">取消</n-button>
+          <n-button type="primary" :loading="renameTableLoading" @click="submitRenameTable">重命名</n-button>
         </div>
       </div>
     </n-modal>
