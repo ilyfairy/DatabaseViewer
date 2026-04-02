@@ -46,6 +46,7 @@ public static class DesktopApiHost
         app.MapGet("/api/explorer/connections/{connectionId:guid}", async (Guid connectionId) => await explorer.GetConnectionConfigAsync(connectionId));
         app.MapGet("/api/explorer/database-graph", async (Guid connectionId, string database) => await explorer.GetDatabaseGraphAsync(connectionId, database));
         app.MapGet("/api/explorer/table", async (string tableKey, int? offset, int? pageSize, string? sortColumn, string? sortDirection) => await explorer.GetTablePageAsync(tableKey, offset ?? 0, pageSize ?? 100, sortColumn, sortDirection));
+        app.MapGet("/api/explorer/table-design", async (string tableKey) => await explorer.GetTableDesignAsync(tableKey));
         app.MapGet("/api/explorer/table-search", async (string tableKey, string query, string[]? columns, int? offset, int? pageSize, string? sortColumn, string? sortDirection) => await explorer.SearchTableAsync(tableKey, query, columns, offset ?? 0, pageSize ?? 100, sortColumn, sortDirection));
         app.MapGet("/api/explorer/sql-context", async (Guid connectionId, string database) => await explorer.GetSqlContextAsync(connectionId, database));
         app.MapGet("/api/explorer/record", async (string tableKey, string rowKey) => await explorer.GetRecordAsync(tableKey, rowKey));

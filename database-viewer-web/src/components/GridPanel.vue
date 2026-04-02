@@ -1,21 +1,21 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { NAlert, NButton, NCard, NModal, NSelect, NSpin } from 'naive-ui'
-import GridCellEditorModal from './GridCellEditorModal.vue'
-import { useExplorerStore } from '../stores/explorer'
-import type { CellContentPreview, CellValue, ForeignKeyRef, TableColumn, TableRow, TableRowWriteValueRequest } from '../types/explorer'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { NAlert, NButton, NCard, NInput, NModal, NSelect, NSpin, NTag } from 'naive-ui';
+import GridCellEditorModal from './GridCellEditorModal.vue';
+import { useExplorerStore } from '../stores/explorer';
+import type { CellContentPreview, CellValue, ForeignKeyRef, TableColumn, TableRow, TableRowWriteValueRequest } from '../types/explorer';
 
-const props = defineProps<{ tableKey: string }>()
-const store = useExplorerStore()
+const props = defineProps<{ tableKey: string }>();
+const store = useExplorerStore();
 
-const table = computed(() => store.getLoadedTable(props.tableKey))
-const tableMeta = computed(() => store.getTable(props.tableKey))
-const rows = computed(() => store.getFilteredRows(props.tableKey))
-const searchState = computed(() => store.getTableSearchState(props.tableKey))
-const searchActive = computed(() => store.isSearchActive(props.tableKey))
-const sortState = computed(() => store.getTableSortState(props.tableKey))
-const columnWidths = ref<Record<string, number>>({})
-const previewCache = ref<Record<string, CellContentPreview>>({})
+const table = computed(() => store.getLoadedTable(props.tableKey));
+const tableMeta = computed(() => store.getTable(props.tableKey));
+const rows = computed(() => store.getFilteredRows(props.tableKey));
+const searchState = computed(() => store.getTableSearchState(props.tableKey));
+const searchActive = computed(() => store.isSearchActive(props.tableKey));
+const sortState = computed(() => store.getTableSortState(props.tableKey));
+const columnWidths = ref<Record<string, number>>({});
+const previewCache = ref<Record<string, CellContentPreview>>({});
 const previewState = ref<{
   show: boolean
   loading: boolean
@@ -28,7 +28,7 @@ const previewState = ref<{
   title: '',
   content: null,
   error: null,
-})
+});
 type VisibleColumn = TableColumn & { fk?: ForeignKeyRef }
 type ActiveEditorState = {
   rowKey: string
@@ -58,7 +58,7 @@ const contextMenu = ref<{
   column: VisibleColumn
   value: CellValue | undefined
   draft: boolean
-} | null>(null)
+} | null>(null);
 const dialogEditorState = ref<{
   show: boolean
   rowKey: string | null
@@ -73,280 +73,329 @@ const dialogEditorState = ref<{
   foreignKey: null,
   value: undefined,
   saving: false,
-})
-const editMode = ref(false)
-const activeEditor = ref<ActiveEditorState | null>(null)
-const activeEditorAnchor = ref<{ top: number; left: number; width: number; height: number } | null>(null)
-const activeEditorInitialPayload = ref<EditorPayload | null>(null)
-const activeEditorDirty = ref(false)
-const activeEditorTextValue = ref('')
-const activeEditorSetNull = ref(false)
-const activeEditorBinaryBase64 = ref<string | null>(null)
-const activeEditorBinaryFileName = ref('')
-const draftRowValues = ref<Record<string, DraftCellState>>({})
-const binaryFileInputRef = ref<HTMLInputElement | null>(null)
-const contextBinaryFileInputRef = ref<HTMLInputElement | null>(null)
-const pendingBinaryReplaceTarget = ref<{ rowKey: string; column: VisibleColumn; draft: boolean } | null>(null)
+});
+const editMode = ref(false);
+const activeEditor = ref<ActiveEditorState | null>(null);
+const activeEditorAnchor = ref<{ top: number; left: number; width: number; height: number } | null>(null);
+const activeEditorInitialPayload = ref<EditorPayload | null>(null);
+const activeEditorDirty = ref(false);
+const activeEditorTextValue = ref('');
+const activeEditorSetNull = ref(false);
+const activeEditorBinaryBase64 = ref<string | null>(null);
+const activeEditorBinaryFileName = ref('');
+const activeEditorInputRef = ref<HTMLTextAreaElement | null>(null);
+const activeEditorTextareaRef = ref<HTMLTextAreaElement | null>(null);
+const suppressWindowClickUntil = ref(0);
+const draftRowValues = ref<Record<string, DraftCellState>>({});
+const binaryFileInputRef = ref<HTMLInputElement | null>(null);
+const contextBinaryFileInputRef = ref<HTMLInputElement | null>(null);
+const pendingBinaryReplaceTarget = ref<{ rowKey: string; column: VisibleColumn; draft: boolean } | null>(null);
 
 function isBinaryColumn(columnName: string, columnType?: string) {
-  const normalizedType = (columnType ?? '').toLowerCase()
-  const normalizedName = columnName.toLowerCase()
+  const normalizedType = (columnType ?? '').toLowerCase();
+  const normalizedName = columnName.toLowerCase();
   return normalizedType.includes('binary')
     || normalizedType.includes('image')
     || normalizedType.includes('blob')
     || normalizedName.endsWith('image')
     || normalizedName.endsWith('photo')
-    || normalizedName.endsWith('thumbnail')
+    || normalizedName.endsWith('thumbnail');
 }
 
 const visibleColumns = computed<VisibleColumn[]>(() => {
   if (!table.value) {
-    return []
+    return [];
   }
 
   return table.value.columns.map((column) => {
-    const fk = store.getForeignKey(props.tableKey, column.name)
+    const fk = store.getForeignKey(props.tableKey, column.name);
     return {
       ...column,
       isPrimaryKey: !!column.isPrimaryKey,
       fk,
-    }
-  })
-})
+    };
+  });
+});
 
-const hasPrimaryKeyColumns = computed(() => visibleColumns.value.some((column) => column.isPrimaryKey))
+const hasPrimaryKeyColumns = computed(() => visibleColumns.value.some((column) => column.isPrimaryKey));
 
 function cellValue(row: TableRow, columnName: string, columnType: string | undefined) {
-  return store.formatFieldValue(columnName, columnType, row[columnName] ?? null)
+  return store.formatFieldValue(columnName, columnType, row[columnName] ?? null);
 }
 
 function displayCellValue(row: TableRow, column: VisibleColumn) {
-  const rawValue = row[column.name] ?? null
+  const rawValue = row[column.name] ?? null;
   if (typeof rawValue === 'string' && !isBinaryColumn(column.name, column.type)) {
-    const normalized = rawValue.replace(/\r\n/g, '\n')
+    const normalized = rawValue.replace(/\r\n/g, '\n');
     if (normalized.includes('\n')) {
-      const [firstLine, ...rest] = normalized.split('\n')
-      const preview = `${firstLine || ' '} ↵${rest.length > 0 ? ` +${rest.length}` : ''}`
-      return store.formatFieldValue(column.name, column.type, preview)
+      const [firstLine, ...rest] = normalized.split('\n');
+      const preview = `${firstLine || ' '} ↵${rest.length > 0 ? ` +${rest.length}` : ''}`;
+      return store.formatFieldValue(column.name, column.type, preview);
     }
   }
 
-  return cellValue(row, column.name, column.type)
+  return cellValue(row, column.name, column.type);
 }
 
 function isNullCell(row: TableRow, columnName: string) {
-  return (row[columnName] ?? null) === null
+  return (row[columnName] ?? null) === null;
 }
 
 function isDraftNullCell(columnName: string) {
-  return draftRowValue(columnName)?.setNull === true
+  return draftRowValue(columnName)?.setNull === true;
 }
 
 function displayColumnType(column: TableColumn) {
   if (!column.type) {
-    return 'unknown'
+    return 'unknown';
   }
 
   if (column.maxLength === null || column.maxLength === undefined) {
-    return column.type
+    return column.type;
   }
 
   if (column.maxLength < 0) {
-    return `${column.type}(max)`
+    return `${column.type}(max)`;
   }
 
-  return `${column.type}(${column.maxLength})`
+  return `${column.type}(${column.maxLength})`;
 }
 
 function handleRowOpen(rowKey: string) {
-  store.openRowFromGrid(props.tableKey, rowKey)
+  store.openRowFromGrid(props.tableKey, rowKey);
 }
 
 function handleForeignKeyClick(rowKey: string, sourceColumn: string) {
   if (editMode.value) {
-    return
+    return;
   }
 
-  const foreignKey = store.getForeignKey(props.tableKey, sourceColumn)
+  const foreignKey = store.getForeignKey(props.tableKey, sourceColumn);
   if (!foreignKey) {
-    return
+    return;
   }
 
-  store.navigateForeignKeyFromGrid(props.tableKey, rowKey, foreignKey)
+  store.navigateForeignKeyFromGrid(props.tableKey, rowKey, foreignKey);
 }
 
 function isReadOnlySystemColumn(columnType: string | undefined) {
-  const normalized = (columnType ?? '').toLowerCase()
-  return normalized === 'timestamp' || normalized === 'rowversion'
+  const normalized = (columnType ?? '').toLowerCase();
+  return normalized === 'timestamp' || normalized === 'rowversion';
 }
 
 function isEditableColumn(column: VisibleColumn) {
   return !!table.value?.primaryKeys.length
     && !column.isAutoGenerated
     && !column.isComputed
-    && !isReadOnlySystemColumn(column.type)
+    && !isReadOnlySystemColumn(column.type);
 }
 
 function isWritableOnInsert(column: VisibleColumn) {
-  return !column.isAutoGenerated && !column.isComputed && !isReadOnlySystemColumn(column.type)
+  return !column.isAutoGenerated && !column.isComputed && !isReadOnlySystemColumn(column.type);
 }
 
 function isBooleanColumn(column: VisibleColumn) {
-  return ['bit', 'bool', 'boolean'].includes((column.type ?? '').toLowerCase())
+  return ['bit', 'bool', 'boolean'].includes((column.type ?? '').toLowerCase());
 }
 
 function isMultilineTextColumn(column: VisibleColumn) {
-  const normalizedType = (column.type ?? '').toLowerCase()
+  const normalizedType = (column.type ?? '').toLowerCase();
   if (isBinaryColumn(column.name, column.type) || isBooleanColumn(column)) {
-    return false
+    return false;
   }
 
   return normalizedType.includes('char')
     || normalizedType.includes('text')
     || normalizedType.includes('json')
-    || normalizedType.includes('xml')
+    || normalizedType.includes('xml');
 }
 
 function isRowOpenCell(columnName: string, columnType: string | undefined, isPrimaryKey: boolean | undefined, columnIndex: number) {
   if (isPrimaryKey) {
-    return true
+    return true;
   }
 
   if (hasPrimaryKeyColumns.value) {
-    return false
+    return false;
   }
 
-  return columnIndex === 0 && !isBinaryColumn(columnName, columnType)
+  return columnIndex === 0 && !isBinaryColumn(columnName, columnType);
 }
 
 function sortIndicator(columnName: string) {
   if (sortState.value.columnName !== columnName) {
-    return ''
+    return '';
   }
 
   return sortState.value.direction === 'asc'
     ? '↑'
     : sortState.value.direction === 'desc'
       ? '↓'
-      : ''
+      : '';
 }
 
 function handleHeaderSort(columnName: string, columnType: string | undefined) {
-  void store.toggleTableSort(props.tableKey, columnName, columnType)
+  void store.toggleTableSort(props.tableKey, columnName, columnType);
 }
 
-const hasRows = computed(() => rows.value.length > 0)
-const loadedRowCount = computed(() => searchActive.value ? (searchState.value?.rows.length ?? 0) : (table.value?.rows.length ?? 0))
-const totalRowCount = computed(() => searchActive.value ? (searchState.value?.totalMatches ?? 0) : (tableMeta.value?.rowCount ?? loadedRowCount.value))
-const hasMoreRows = computed(() => searchActive.value ? !!searchState.value?.hasMoreRows : !!table.value?.hasMoreRows)
-const canEnableEditMode = computed(() => !!table.value && visibleColumns.value.some((column) => isEditableColumn(column) || isWritableOnInsert(column)))
-const draftRowHasValues = computed(() => Object.values(draftRowValues.value).some((item) => item.setNull || item.base64Value !== null || item.textValue.trim().length > 0))
+const hasRows = computed(() => rows.value.length > 0);
+const loadedRowCount = computed(() => searchActive.value ? (searchState.value?.rows.length ?? 0) : (table.value?.rows.length ?? 0));
+const totalRowCount = computed(() => searchActive.value ? (searchState.value?.totalMatches ?? 0) : (tableMeta.value?.rowCount ?? loadedRowCount.value));
+const hasMoreRows = computed(() => searchActive.value ? !!searchState.value?.hasMoreRows : !!table.value?.hasMoreRows);
+const canEnableEditMode = computed(() => !!table.value && visibleColumns.value.some((column) => isEditableColumn(column) || isWritableOnInsert(column)));
+const draftRowHasValues = computed(() => Object.values(draftRowValues.value).some((item) => item.setNull || item.base64Value !== null || item.textValue.trim().length > 0));
+
+// ── Filter / search ──
+const filterOpen = ref(false);
+const tableStats = computed(() => store.tableStats(props.tableKey));
+const searchColumnOptions = computed(() =>
+  store.getSearchableColumns(props.tableKey).map((column) => ({
+    label: `${column.name} (${column.type})`,
+    value: column.name,
+  })),
+);
 
 const previewImageUrl = computed(() => {
-  const content = previewState.value.content
+  const content = previewState.value.content;
   if (!content?.base64Data || content.kind !== 'image') {
-    return null
+    return null;
   }
 
-  return `data:${content.mimeType};base64,${content.base64Data}`
-})
+  return `data:${content.mimeType};base64,${content.base64Data}`;
+});
 
 const activeEditorColumn = computed(() => activeEditor.value
   ? visibleColumns.value.find((column) => column.name === activeEditor.value?.columnName) ?? null
-  : null)
+  : null);
 
-const activeEditorIsBinary = computed(() => activeEditorColumn.value ? isBinaryColumn(activeEditorColumn.value.name, activeEditorColumn.value.type) : false)
-const activeEditorIsBoolean = computed(() => activeEditorColumn.value ? isBooleanColumn(activeEditorColumn.value) : false)
-const activeEditorIsMultiline = computed(() => activeEditorColumn.value ? isMultilineTextColumn(activeEditorColumn.value) : false)
+const activeEditorIsBinary = computed(() => activeEditorColumn.value ? isBinaryColumn(activeEditorColumn.value.name, activeEditorColumn.value.type) : false);
+const activeEditorIsBoolean = computed(() => activeEditorColumn.value ? isBooleanColumn(activeEditorColumn.value) : false);
+const activeEditorIsMultiline = computed(() => activeEditorColumn.value ? isMultilineTextColumn(activeEditorColumn.value) : false);
 const activeBooleanOptions = [
   { label: 'True', value: 'true' },
   { label: 'False', value: 'false' },
-]
+];
 
 const activeEditorPopupStyle = computed(() => {
   if (!activeEditorAnchor.value) {
-    return undefined
+    return undefined;
   }
 
-  const width = Math.max(120, Math.round(activeEditorAnchor.value.width))
+  const innerHeight = Math.max(20, Math.round(activeEditorAnchor.value.height));
+  const width = Math.max(120, Math.round(activeEditorAnchor.value.width));
   return {
     top: `${Math.round(activeEditorAnchor.value.top)}px`,
     left: `${Math.round(activeEditorAnchor.value.left)}px`,
     width: `${width}px`,
-    height: activeEditorIsMultiline.value ? undefined : `${Math.max(20, Math.round(activeEditorAnchor.value.height))}px`,
-    minHeight: activeEditorIsMultiline.value ? `${Math.max(24, Math.round(activeEditorAnchor.value.height))}px` : undefined,
+    height: activeEditorIsMultiline.value ? undefined : `${innerHeight}px`,
+    minHeight: activeEditorIsMultiline.value ? `${Math.max(24, innerHeight) + 4}px` : undefined,
+    '--grid-editor-inner-height': `${innerHeight}px`,
+  };
+});
+
+function focusActiveEditorSoon() {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      if (activeEditorIsMultiline.value) {
+        const textarea = activeEditorTextareaRef.value;
+        if (!textarea) {
+          return;
+        }
+
+        textarea.focus();
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+        return;
+      }
+
+      const input = activeEditorInputRef.value;
+      if (!input) {
+        return;
+      }
+
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    });
+  });
+}
+
+watch(activeEditor, async (value) => {
+  if (!value) {
+    return;
   }
-})
+
+  await nextTick();
+  focusActiveEditorSoon();
+}, { flush: 'post' });
 
 function draftRowValue(columnName: string) {
-  return draftRowValues.value[columnName] ?? null
+  return draftRowValues.value[columnName] ?? null;
 }
 
 function draftRowDisplayValue(column: VisibleColumn) {
-  const state = draftRowValue(column.name)
+  const state = draftRowValue(column.name);
   if (!state) {
-    return column.isAutoGenerated ? '自动生成' : '双击输入'
+    return column.isAutoGenerated ? '自动生成' : '双击输入';
   }
 
   if (state.setNull) {
-    return 'NULL'
+    return 'NULL';
   }
 
   if (state.valueKind === 'binary') {
     if (!state.base64Value) {
-      return '空二进制'
+      return '空二进制';
     }
 
-    return `[binary ${Math.ceil(state.base64Value.length * 0.75)} B]`
+    return `[binary ${Math.ceil(state.base64Value.length * 0.75)} B]`;
   }
 
   if (state.textValue.includes('\n')) {
-    const [firstLine, ...rest] = state.textValue.replace(/\r\n/g, '\n').split('\n')
-    return `${firstLine || ' '} ↵${rest.length > 0 ? ` +${rest.length}` : ''}`
+    const [firstLine, ...rest] = state.textValue.replace(/\r\n/g, '\n').split('\n');
+    return `${firstLine || ' '} ↵${rest.length > 0 ? ` +${rest.length}` : ''}`;
   }
 
-  return state.textValue || '空字符串'
+  return state.textValue || '空字符串';
 }
 
 function isActiveEditor(rowKey: string, columnName: string, draft = false) {
   return !!activeEditor.value
     && activeEditor.value.rowKey === rowKey
     && activeEditor.value.columnName === columnName
-    && activeEditor.value.draft === draft
+    && activeEditor.value.draft === draft;
 }
 
 function resetActiveEditor() {
-  activeEditor.value = null
-  activeEditorAnchor.value = null
-  activeEditorInitialPayload.value = null
-  activeEditorDirty.value = false
-  activeEditorTextValue.value = ''
-  activeEditorSetNull.value = false
-  activeEditorBinaryBase64.value = null
-  activeEditorBinaryFileName.value = ''
+  activeEditor.value = null;
+  activeEditorAnchor.value = null;
+  activeEditorInitialPayload.value = null;
+  activeEditorDirty.value = false;
+  activeEditorTextValue.value = '';
+  activeEditorSetNull.value = false;
+  activeEditorBinaryBase64.value = null;
+  activeEditorBinaryFileName.value = '';
 }
 
 function toggleEditMode() {
-  editMode.value = !editMode.value
-  resetActiveEditor()
+  editMode.value = !editMode.value;
+  resetActiveEditor();
   if (!editMode.value) {
-    draftRowValues.value = {}
+    draftRowValues.value = {};
   }
 }
 
 function markActiveEditorDirty() {
-  activeEditorDirty.value = true
+  activeEditorDirty.value = true;
 }
 
 function buildInitialPayload(column: VisibleColumn, value: CellValue | undefined, draft: boolean): EditorPayload {
   if (draft) {
-    const draftState = draftRowValue(column.name)
+    const draftState = draftRowValue(column.name);
     return {
       valueKind: draftState?.valueKind ?? 'text',
       textValue: draftState?.textValue ?? '',
       base64Value: draftState?.base64Value ?? null,
       setNull: draftState?.setNull ?? false,
-    }
+    };
   }
 
   if (value === null || value === undefined) {
@@ -355,7 +404,7 @@ function buildInitialPayload(column: VisibleColumn, value: CellValue | undefined
       textValue: null,
       base64Value: null,
       setNull: true,
-    }
+    };
   }
 
   if (isBinaryColumn(column.name, column.type)) {
@@ -364,7 +413,7 @@ function buildInitialPayload(column: VisibleColumn, value: CellValue | undefined
       textValue: null,
       base64Value: typeof value === 'string' ? value : null,
       setNull: false,
-    }
+    };
   }
 
   return {
@@ -372,122 +421,124 @@ function buildInitialPayload(column: VisibleColumn, value: CellValue | undefined
     textValue: String(value),
     base64Value: null,
     setNull: false,
-  }
+  };
 }
 
 function payloadEquals(left: EditorPayload | null, right: EditorPayload) {
   if (!left) {
-    return false
+    return false;
   }
 
   return left.valueKind === right.valueKind
     && left.textValue === right.textValue
     && left.base64Value === right.base64Value
-    && left.setNull === right.setNull
+    && left.setNull === right.setNull;
 }
 
 function beginInlineEdit(rowKey: string, column: VisibleColumn, value: CellValue | undefined, draft = false, anchorTarget?: EventTarget | null) {
   if ((!draft && !isEditableColumn(column)) || (draft && !isWritableOnInsert(column))) {
-    return
+    return;
   }
 
-  closeContextMenu()
-  const anchorElement = anchorTarget instanceof HTMLElement ? anchorTarget.closest('td') as HTMLElement | null : null
+  closeContextMenu();
+  /** 锚定到 td 本身，因为 td padding (0 3px) 和编辑框 input padding (0 3px) 一致，文本起点自然对齐 */
+  const anchorElement = anchorTarget instanceof HTMLElement ? anchorTarget.closest('td') as HTMLElement | null : null;
   if (anchorElement) {
-    const rect = anchorElement.getBoundingClientRect()
+    const rect = anchorElement.getBoundingClientRect();
     activeEditorAnchor.value = {
       top: rect.top,
       left: rect.left,
       width: rect.width,
       height: rect.height,
-    }
+    };
   }
-  const draftValue = draft ? draftRowValue(column.name) : null
+  const draftValue = draft ? draftRowValue(column.name) : null;
   activeEditor.value = {
     rowKey,
     columnName: column.name,
     draft,
     saving: false,
-  }
-  activeEditorInitialPayload.value = buildInitialPayload(column, value, draft)
-  activeEditorDirty.value = false
+  };
+  suppressWindowClickUntil.value = Date.now() + 220;
+  activeEditorInitialPayload.value = buildInitialPayload(column, value, draft);
+  activeEditorDirty.value = false;
 
   if (draftValue) {
-    activeEditorTextValue.value = draftValue.textValue
-    activeEditorSetNull.value = draftValue.setNull
-    activeEditorBinaryBase64.value = draftValue.base64Value
-    activeEditorBinaryFileName.value = draftValue.fileName
-    return
+    activeEditorTextValue.value = draftValue.textValue;
+    activeEditorSetNull.value = draftValue.setNull;
+    activeEditorBinaryBase64.value = draftValue.base64Value;
+    activeEditorBinaryFileName.value = draftValue.fileName;
+    return;
   }
 
   if (draft) {
-    activeEditorSetNull.value = false
-    activeEditorBinaryBase64.value = null
-    activeEditorBinaryFileName.value = ''
-    activeEditorTextValue.value = ''
-    return
+    activeEditorSetNull.value = false;
+    activeEditorBinaryBase64.value = null;
+    activeEditorBinaryFileName.value = '';
+    activeEditorTextValue.value = '';
+    return;
   }
 
-  activeEditorSetNull.value = false
-  activeEditorBinaryBase64.value = typeof value === 'string' && isBinaryColumn(column.name, column.type) ? value : null
-  activeEditorBinaryFileName.value = ''
+  activeEditorSetNull.value = false;
+  activeEditorBinaryBase64.value = typeof value === 'string' && isBinaryColumn(column.name, column.type) ? value : null;
+  activeEditorBinaryFileName.value = '';
   if (activeEditorIsBoolean.value) {
     activeEditorTextValue.value = value === null || value === undefined
       ? ''
-      : (String(value).toLowerCase() === 'true' ? 'true' : 'false')
-    return
+      : (String(value).toLowerCase() === 'true' ? 'true' : 'false');
+    return;
   }
 
-  activeEditorTextValue.value = value === null || value === undefined ? '' : String(value)
+  activeEditorTextValue.value = value === null || value === undefined ? '' : String(value);
 }
 
 function cancelInlineEdit() {
   if (activeEditor.value?.saving) {
-    return
+    return;
   }
 
-  resetActiveEditor()
+  resetActiveEditor();
 }
 
 function currentBinarySize() {
-  const base64Value = activeEditorBinaryBase64.value
+  const base64Value = activeEditorBinaryBase64.value;
   if (!base64Value) {
-    return 0
+    return 0;
   }
 
-  const padding = base64Value.endsWith('==') ? 2 : base64Value.endsWith('=') ? 1 : 0
-  return Math.max(0, Math.floor(base64Value.length * 0.75) - padding)
+  const padding = base64Value.endsWith('==') ? 2 : base64Value.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor(base64Value.length * 0.75) - padding);
 }
 
 function chooseBinaryFile() {
-  binaryFileInputRef.value?.click()
+  binaryFileInputRef.value?.click();
 }
 
 async function handleBinaryFileSelected(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
   if (!file) {
-    return
+    return;
   }
 
-  activeEditorBinaryFileName.value = file.name
-  const buffer = await file.arrayBuffer()
-  const bytes = new Uint8Array(buffer)
-  let binary = ''
+  activeEditorBinaryFileName.value = file.name;
+  const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
   bytes.forEach((value) => {
-    binary += String.fromCharCode(value)
-  })
-  activeEditorBinaryBase64.value = btoa(binary)
-  activeEditorSetNull.value = false
-  markActiveEditorDirty()
-  input.value = ''
+    binary += String.fromCharCode(value);
+  });
+  activeEditorBinaryBase64.value = btoa(binary);
+  activeEditorSetNull.value = false;
+  markActiveEditorDirty();
+  input.value = '';
 }
 
 function clearInlineBinary() {
-  activeEditorBinaryBase64.value = null
-  activeEditorBinaryFileName.value = ''
-  activeEditorSetNull.value = !!activeEditorColumn.value?.isNullable
-  markActiveEditorDirty()
+  activeEditorBinaryBase64.value = null;
+  activeEditorBinaryFileName.value = '';
+  activeEditorSetNull.value = !!activeEditorColumn.value?.isNullable;
+  markActiveEditorDirty();
 }
 
 function buildActiveEditorPayload(column: VisibleColumn) {
@@ -497,7 +548,7 @@ function buildActiveEditorPayload(column: VisibleColumn) {
       textValue: null,
       base64Value: null,
       setNull: true,
-    }
+    };
   }
 
   if (isBinaryColumn(column.name, column.type)) {
@@ -506,7 +557,7 @@ function buildActiveEditorPayload(column: VisibleColumn) {
       textValue: null,
       base64Value: activeEditorBinaryBase64.value,
       setNull: false,
-    }
+    };
   }
 
   return {
@@ -514,24 +565,24 @@ function buildActiveEditorPayload(column: VisibleColumn) {
     textValue: activeEditorTextValue.value,
     base64Value: null,
     setNull: false,
-  }
+  };
 }
 
 async function saveInlineEdit() {
   if (!activeEditor.value || !activeEditorColumn.value) {
-    return
+    return;
   }
 
-  const payload = buildActiveEditorPayload(activeEditorColumn.value)
+  const payload = buildActiveEditorPayload(activeEditorColumn.value);
   if (!activeEditor.value.draft && (!activeEditorDirty.value || payloadEquals(activeEditorInitialPayload.value, payload))) {
-    resetActiveEditor()
-    return
+    resetActiveEditor();
+    return;
   }
 
   if (activeEditor.value.draft) {
     if (!activeEditorDirty.value && payloadEquals(activeEditorInitialPayload.value, payload)) {
-      resetActiveEditor()
-      return
+      resetActiveEditor();
+      return;
     }
 
     draftRowValues.value = {
@@ -543,15 +594,15 @@ async function saveInlineEdit() {
         setNull: payload.setNull,
         fileName: activeEditorBinaryFileName.value,
       },
-    }
-    resetActiveEditor()
-    return
+    };
+    resetActiveEditor();
+    return;
   }
 
   activeEditor.value = {
     ...activeEditor.value,
     saving: true,
-  }
+  };
 
   try {
     await store.updateTableCell({
@@ -562,18 +613,18 @@ async function saveInlineEdit() {
       textValue: payload.textValue,
       base64Value: payload.base64Value,
       setNull: payload.setNull,
-    })
+    });
 
-    const nextCache = { ...previewCache.value }
-    delete nextCache[previewCacheKey(activeEditor.value.rowKey, activeEditorColumn.value.name)]
-    previewCache.value = nextCache
-    resetActiveEditor()
+    const nextCache = { ...previewCache.value };
+    delete nextCache[previewCacheKey(activeEditor.value.rowKey, activeEditorColumn.value.name)];
+    previewCache.value = nextCache;
+    resetActiveEditor();
   }
   catch {
     activeEditor.value = {
       ...activeEditor.value,
       saving: false,
-    }
+    };
   }
 }
 
@@ -585,19 +636,19 @@ async function insertDraftRow() {
       textValue: state.valueKind === 'text' ? state.textValue : null,
       base64Value: state.valueKind === 'binary' ? state.base64Value : null,
       setNull: state.setNull,
-    })) satisfies TableRowWriteValueRequest[]
+    })) satisfies TableRowWriteValueRequest[];
 
   if (values.length === 0) {
-    return
+    return;
   }
 
   try {
     await store.insertTableRow({
       tableKey: props.tableKey,
       values,
-    })
-    draftRowValues.value = {}
-    resetActiveEditor()
+    });
+    draftRowValues.value = {};
+    resetActiveEditor();
   }
   catch {
     // Store already surfaces the failure.
@@ -605,128 +656,128 @@ async function insertDraftRow() {
 }
 
 function clearDraftRow() {
-  draftRowValues.value = {}
+  draftRowValues.value = {};
   if (activeEditor.value?.draft) {
-    resetActiveEditor()
+    resetActiveEditor();
   }
 }
 
 function handleEditableCellDoubleClick(event: MouseEvent, rowKey: string, column: VisibleColumn, value: CellValue | undefined, draft = false) {
   if (!editMode.value) {
-    return
+    return;
   }
 
   if (isBinaryColumn(column.name, column.type)) {
-    return
+    return;
   }
 
-  event.preventDefault()
-  event.stopPropagation()
-  beginInlineEdit(rowKey, column, value, draft, event.currentTarget)
+  event.preventDefault();
+  event.stopPropagation();
+  beginInlineEdit(rowKey, column, value, draft, event.currentTarget);
 }
 
 function handlePrimaryCellDoubleClick(event: MouseEvent, rowKey: string, column: VisibleColumn, value: CellValue | undefined) {
   if (editMode.value) {
-    handleEditableCellDoubleClick(event, rowKey, column, value)
-    return
+    handleEditableCellDoubleClick(event, rowKey, column, value);
+    return;
   }
 
-  event.preventDefault()
-  event.stopPropagation()
-  handleRowOpen(rowKey)
+  event.preventDefault();
+  event.stopPropagation();
+  handleRowOpen(rowKey);
 }
 
 function handleForeignKeyDoubleClick(event: MouseEvent, rowKey: string, column: VisibleColumn, value: CellValue | undefined) {
   if (editMode.value) {
-    handleEditableCellDoubleClick(event, rowKey, column, value)
-    return
+    handleEditableCellDoubleClick(event, rowKey, column, value);
+    return;
   }
 
-  event.preventDefault()
-  event.stopPropagation()
-  handleForeignKeyClick(rowKey, column.name)
+  event.preventDefault();
+  event.stopPropagation();
+  handleForeignKeyClick(rowKey, column.name);
 }
 
 function handleEditorKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') {
-    event.preventDefault()
-    cancelInlineEdit()
-    return
+    event.preventDefault();
+    cancelInlineEdit();
+    return;
   }
 
   if (event.key === 'Enter' && !event.shiftKey && (!activeEditorIsMultiline.value || event.ctrlKey)) {
-    event.preventDefault()
-    void saveInlineEdit()
+    event.preventDefault();
+    void saveInlineEdit();
   }
 }
 
 function columnStyle(columnName: string) {
-  const width = columnWidths.value[columnName]
+  const width = columnWidths.value[columnName];
   if (!width) {
-    return undefined
+    return undefined;
   }
 
   return {
     width: `${width}px`,
     minWidth: `${width}px`,
     maxWidth: `${width}px`,
-  }
+  };
 }
 
 function beginResize(event: MouseEvent, columnName: string) {
-  event.preventDefault()
-  event.stopPropagation()
+  event.preventDefault();
+  event.stopPropagation();
 
-  const header = (event.currentTarget as HTMLElement).closest('th')
-  const startWidth = header?.getBoundingClientRect().width ?? columnWidths.value[columnName] ?? 120
-  const startX = event.clientX
+  const header = (event.currentTarget as HTMLElement).closest('th');
+  const startWidth = header?.getBoundingClientRect().width ?? columnWidths.value[columnName] ?? 120;
+  const startX = event.clientX;
 
   const onMouseMove = (moveEvent: MouseEvent) => {
-    const nextWidth = Math.max(56, startWidth + moveEvent.clientX - startX)
+    const nextWidth = Math.max(56, startWidth + moveEvent.clientX - startX);
     columnWidths.value = {
       ...columnWidths.value,
       [columnName]: nextWidth,
-    }
-  }
+    };
+  };
 
   const onMouseUp = () => {
-    window.removeEventListener('mousemove', onMouseMove)
-    window.removeEventListener('mouseup', onMouseUp)
-  }
+    window.removeEventListener('mousemove', onMouseMove);
+    window.removeEventListener('mouseup', onMouseUp);
+  };
 
-  window.addEventListener('mousemove', onMouseMove)
-  window.addEventListener('mouseup', onMouseUp)
+  window.addEventListener('mousemove', onMouseMove);
+  window.addEventListener('mouseup', onMouseUp);
 }
 
 function resetColumnWidth(columnName: string) {
-  const next = { ...columnWidths.value }
-  delete next[columnName]
-  columnWidths.value = next
+  const next = { ...columnWidths.value };
+  delete next[columnName];
+  columnWidths.value = next;
 }
 
 function previewCacheKey(rowKey: string, columnName: string) {
-  return `${rowKey}::${columnName}`
+  return `${rowKey}::${columnName}`;
 }
 
 async function ensureCellContent(rowKey: string, columnName: string) {
-  const key = previewCacheKey(rowKey, columnName)
+  const key = previewCacheKey(rowKey, columnName);
   if (previewCache.value[key]) {
-    return previewCache.value[key]
+    return previewCache.value[key];
   }
 
-  const content = await store.fetchCellContent(props.tableKey, rowKey, columnName)
+  const content = await store.fetchCellContent(props.tableKey, rowKey, columnName);
   previewCache.value = {
     ...previewCache.value,
     [key]: content,
-  }
-  return content
+  };
+  return content;
 }
 
 async function openBinaryPreview(rowKey: string, columnName: string) {
   try {
-    const content = await ensureCellContent(rowKey, columnName)
+    const content = await ensureCellContent(rowKey, columnName);
     if (content.kind === 'empty' || content.sizeBytes === 0) {
-      return
+      return;
     }
 
     previewState.value = {
@@ -735,7 +786,7 @@ async function openBinaryPreview(rowKey: string, columnName: string) {
       title: `${tableMeta.value?.name ?? props.tableKey}.${columnName}`,
       content,
       error: null,
-    }
+    };
   }
   catch (error) {
     previewState.value = {
@@ -744,16 +795,28 @@ async function openBinaryPreview(rowKey: string, columnName: string) {
       title: `${tableMeta.value?.name ?? props.tableKey}.${columnName}`,
       content: null,
       error: error instanceof Error ? error.message : '二进制内容读取失败',
-    }
+    };
   }
 }
 
 function closeContextMenu() {
-  contextMenu.value = null
+  contextMenu.value = null;
+}
+
+function hasCellContextActions(column: VisibleColumn, draft: boolean) {
+  const editable = draft ? isWritableOnInsert(column) : isEditableColumn(column);
+  return editable
+    || (column.isNullable && editable)
+    || isBinaryColumn(column.name, column.type);
 }
 
 function openCellContextMenu(event: MouseEvent, rowKey: string, column: VisibleColumn, value: CellValue | undefined, draft = false) {
-  closeContextMenu()
+  if (!hasCellContextActions(column, draft)) {
+    closeContextMenu();
+    return;
+  }
+
+  closeContextMenu();
   contextMenu.value = {
     show: true,
     x: event.clientX,
@@ -762,15 +825,15 @@ function openCellContextMenu(event: MouseEvent, rowKey: string, column: VisibleC
     column,
     value,
     draft,
-  }
+  };
 }
 
 function openCellEditor(rowKey: string, column: VisibleColumn, value: CellValue | undefined) {
   if (!isEditableColumn(column)) {
-    return
+    return;
   }
 
-  closeContextMenu()
+  closeContextMenu();
   dialogEditorState.value = {
     show: true,
     rowKey,
@@ -778,64 +841,64 @@ function openCellEditor(rowKey: string, column: VisibleColumn, value: CellValue 
     foreignKey: column.fk ?? null,
     value,
     saving: false,
-  }
+  };
 }
 
 function handleCellDoubleClick(event: MouseEvent, rowKey: string, column: VisibleColumn, value: CellValue | undefined) {
   if (editMode.value) {
-    handleEditableCellDoubleClick(event, rowKey, column, value)
-    return
+    handleEditableCellDoubleClick(event, rowKey, column, value);
+    return;
   }
 
   if (isBinaryColumn(column.name, column.type)) {
-    event.preventDefault()
-    event.stopPropagation()
-    void openBinaryPreview(rowKey, column.name)
-    return
+    event.preventDefault();
+    event.stopPropagation();
+    void openBinaryPreview(rowKey, column.name);
+    return;
   }
 }
 
 function handleCellMouseDown(event: MouseEvent, suppressSelection: boolean) {
   if (suppressSelection && event.detail > 1) {
-    event.preventDefault()
+    event.preventDefault();
   }
 }
 
 function handleBinaryCellClick(event: MouseEvent, rowKey: string, columnName: string, columnType: string | undefined) {
   if (!isBinaryColumn(columnName, columnType) || editMode.value) {
-    return
+    return;
   }
 
-  event.stopPropagation()
-  void openBinaryPreview(rowKey, columnName)
+  event.stopPropagation();
+  void openBinaryPreview(rowKey, columnName);
 }
 
 function base64ToBytes(base64: string) {
-  const raw = atob(base64)
-  const bytes = new Uint8Array(raw.length)
+  const raw = atob(base64);
+  const bytes = new Uint8Array(raw.length);
   for (let index = 0; index < raw.length; index += 1) {
-    bytes[index] = raw.charCodeAt(index)
+    bytes[index] = raw.charCodeAt(index);
   }
-  return bytes
+  return bytes;
 }
 
 async function saveCellContent(rowKey: string, columnName: string) {
-  closeContextMenu()
-  const content = await ensureCellContent(rowKey, columnName)
+  closeContextMenu();
+  const content = await ensureCellContent(rowKey, columnName);
   if (!content.base64Data) {
-    return
+    return;
   }
 
-  const bytes = base64ToBytes(content.base64Data)
-  const blob = new Blob([bytes], { type: content.mimeType || 'application/octet-stream' })
+  const bytes = base64ToBytes(content.base64Data);
+  const blob = new Blob([bytes], { type: content.mimeType || 'application/octet-stream' });
   const windowWithPicker = window as Window & {
     showSaveFilePicker?: (options?: unknown) => Promise<{
       createWritable: () => Promise<{ write: (data: Blob) => Promise<void>; close: () => Promise<void> }>
     }>
-  }
+  };
 
   if (windowWithPicker.showSaveFilePicker) {
-    const extension = content.suggestedFileName.includes('.') ? `.${content.suggestedFileName.split('.').pop()}` : '.bin'
+    const extension = content.suggestedFileName.includes('.') ? `.${content.suggestedFileName.split('.').pop()}` : '.bin';
     const handle = await windowWithPicker.showSaveFilePicker({
       suggestedName: content.suggestedFileName,
       types: [{
@@ -844,52 +907,52 @@ async function saveCellContent(rowKey: string, columnName: string) {
           [content.mimeType || 'application/octet-stream']: [extension],
         },
       }],
-    })
-    const writable = await handle.createWritable()
-    await writable.write(blob)
-    await writable.close()
-    return
+    });
+    const writable = await handle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    return;
   }
 
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = content.suggestedFileName
-  anchor.click()
-  URL.revokeObjectURL(url)
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = content.suggestedFileName;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 function pickBinaryReplacement() {
   if (!contextMenu.value || !isBinaryColumn(contextMenu.value.column.name, contextMenu.value.column.type)) {
-    return
+    return;
   }
 
   pendingBinaryReplaceTarget.value = {
     rowKey: contextMenu.value.rowKey,
     column: contextMenu.value.column,
     draft: contextMenu.value.draft,
-  }
-  closeContextMenu()
-  contextBinaryFileInputRef.value?.click()
+  };
+  closeContextMenu();
+  contextBinaryFileInputRef.value?.click();
 }
 
 async function handleContextBinaryFileSelected(event: Event) {
-  const target = pendingBinaryReplaceTarget.value
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
+  const target = pendingBinaryReplaceTarget.value;
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
   if (!target || !file) {
-    pendingBinaryReplaceTarget.value = null
-    input.value = ''
-    return
+    pendingBinaryReplaceTarget.value = null;
+    input.value = '';
+    return;
   }
 
-  const buffer = await file.arrayBuffer()
-  const bytes = new Uint8Array(buffer)
-  let binary = ''
+  const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
   bytes.forEach((value) => {
-    binary += String.fromCharCode(value)
-  })
-  const base64Value = btoa(binary)
+    binary += String.fromCharCode(value);
+  });
+  const base64Value = btoa(binary);
 
   if (target.draft) {
     draftRowValues.value = {
@@ -901,7 +964,7 @@ async function handleContextBinaryFileSelected(event: Event) {
         setNull: false,
         fileName: file.name,
       },
-    }
+    };
   }
   else {
     try {
@@ -913,32 +976,32 @@ async function handleContextBinaryFileSelected(event: Event) {
         textValue: null,
         base64Value,
         setNull: false,
-      })
+      });
 
-      const nextCache = { ...previewCache.value }
-      delete nextCache[previewCacheKey(target.rowKey, target.column.name)]
-      previewCache.value = nextCache
+      const nextCache = { ...previewCache.value };
+      delete nextCache[previewCacheKey(target.rowKey, target.column.name)];
+      previewCache.value = nextCache;
     }
     catch {
       // Store already surfaced the error.
     }
   }
 
-  pendingBinaryReplaceTarget.value = null
-  input.value = ''
+  pendingBinaryReplaceTarget.value = null;
+  input.value = '';
 }
 
 async function handleDialogEditorSave(payload: { valueKind: 'text' | 'binary' | 'null'; textValue?: string | null; base64Value?: string | null; setNull: boolean }) {
-  const rowKey = dialogEditorState.value.rowKey
-  const column = dialogEditorState.value.column
+  const rowKey = dialogEditorState.value.rowKey;
+  const column = dialogEditorState.value.column;
   if (!rowKey || !column) {
-    return
+    return;
   }
 
   dialogEditorState.value = {
     ...dialogEditorState.value,
     saving: true,
-  }
+  };
 
   try {
     await store.updateTableCell({
@@ -949,11 +1012,11 @@ async function handleDialogEditorSave(payload: { valueKind: 'text' | 'binary' | 
       textValue: payload.textValue ?? null,
       base64Value: payload.base64Value ?? null,
       setNull: payload.setNull,
-    })
+    });
 
-    const nextCache = { ...previewCache.value }
-    delete nextCache[previewCacheKey(rowKey, column.name)]
-    previewCache.value = nextCache
+    const nextCache = { ...previewCache.value };
+    delete nextCache[previewCacheKey(rowKey, column.name)];
+    previewCache.value = nextCache;
     dialogEditorState.value = {
       show: false,
       rowKey: null,
@@ -961,23 +1024,23 @@ async function handleDialogEditorSave(payload: { valueKind: 'text' | 'binary' | 
       foreignKey: null,
       value: undefined,
       saving: false,
-    }
+    };
   }
   catch {
     dialogEditorState.value = {
       ...dialogEditorState.value,
       saving: false,
-    }
+    };
   }
 }
 
 async function setContextMenuValueNull() {
-  const menu = contextMenu.value
+  const menu = contextMenu.value;
   if (!menu || !menu.column.isNullable) {
-    return
+    return;
   }
 
-  closeContextMenu()
+  closeContextMenu();
 
   if (menu.draft) {
     draftRowValues.value = {
@@ -989,11 +1052,11 @@ async function setContextMenuValueNull() {
         setNull: true,
         fileName: '',
       },
-    }
+    };
     if (activeEditor.value?.draft && activeEditor.value.columnName === menu.column.name) {
-      resetActiveEditor()
+      resetActiveEditor();
     }
-    return
+    return;
   }
 
   try {
@@ -1005,11 +1068,11 @@ async function setContextMenuValueNull() {
       textValue: null,
       base64Value: null,
       setNull: true,
-    })
+    });
 
-    const nextCache = { ...previewCache.value }
-    delete nextCache[previewCacheKey(menu.rowKey, menu.column.name)]
-    previewCache.value = nextCache
+    const nextCache = { ...previewCache.value };
+    delete nextCache[previewCacheKey(menu.rowKey, menu.column.name)];
+    previewCache.value = nextCache;
   }
   catch {
     // Store already surfaced the error.
@@ -1017,37 +1080,41 @@ async function setContextMenuValueNull() {
 }
 
 function handleWindowClick() {
-  closeContextMenu()
+  closeContextMenu();
+  if (Date.now() < suppressWindowClickUntil.value) {
+    return;
+  }
+
   if (activeEditor.value) {
-    void saveInlineEdit()
+    void saveInlineEdit();
   }
 }
 
 function handleWindowContextMenu() {
-  closeContextMenu()
+  closeContextMenu();
 }
 
 function handleWindowBlur() {
-  closeContextMenu()
-  cancelInlineEdit()
+  closeContextMenu();
+  cancelInlineEdit();
 }
 
 onMounted(() => {
-  window.addEventListener('click', handleWindowClick)
-  window.addEventListener('contextmenu', handleWindowContextMenu, true)
-  window.addEventListener('blur', handleWindowBlur)
-})
+  window.addEventListener('click', handleWindowClick);
+  window.addEventListener('contextmenu', handleWindowContextMenu, true);
+  window.addEventListener('blur', handleWindowBlur);
+});
 
 onBeforeUnmount(() => {
-  window.removeEventListener('click', handleWindowClick)
-  window.removeEventListener('contextmenu', handleWindowContextMenu, true)
-  window.removeEventListener('blur', handleWindowBlur)
-})
+  window.removeEventListener('click', handleWindowClick);
+  window.removeEventListener('contextmenu', handleWindowContextMenu, true);
+  window.removeEventListener('blur', handleWindowBlur);
+});
 
 watch(() => props.tableKey, () => {
-  editMode.value = false
-  resetActiveEditor()
-  closeContextMenu()
+  editMode.value = false;
+  resetActiveEditor();
+  closeContextMenu();
   dialogEditorState.value = {
     show: false,
     rowKey: null,
@@ -1055,36 +1122,64 @@ watch(() => props.tableKey, () => {
     foreignKey: null,
     value: undefined,
     saving: false,
-  }
-})
+  };
+});
 </script>
 
 <template>
-  <n-card embedded class="workspace-panel grid-panel">
+  <NCard embedded class="workspace-panel grid-panel" :class="{ 'grid-panel-editing': editMode }">
     <template #header>
       <div class="panel-header grid-panel-header-compact">
         <div class="grid-panel-title-row">
-          <span class="grid-panel-kicker">主表数据</span>
           <h3>{{ tableMeta?.schema ? `${tableMeta.schema}.${tableMeta.name}` : tableMeta?.name }}</h3>
+          <span class="panel-meta">{{ loadedRowCount }} / {{ totalRowCount }} rows</span>
+          <NTag size="small" :bordered="false" type="default">{{ tableStats.rowCount }} 行</NTag>
+          <NTag size="small" :bordered="false" type="info">{{ tableStats.foreignKeyCount }} FK</NTag>
+          <NTag size="small" :bordered="false" type="warning">{{ tableStats.reverseCount }} 反向引用</NTag>
         </div>
         <div class="grid-panel-header-meta">
-          <div class="panel-meta">{{ loadedRowCount }} / {{ totalRowCount }} rows</div>
-          <n-button size="small" tertiary type="primary" :disabled="!canEnableEditMode" @click="toggleEditMode">
-            {{ editMode ? '退出编辑' : '编辑模式' }}
-          </n-button>
+          <NButton size="small" :tertiary="!filterOpen" :type="filterOpen || searchActive ? 'primary' : 'default'" @click="filterOpen = !filterOpen">
+            筛选
+          </NButton>
+          <NButton size="small" :tertiary="!editMode" :type="editMode ? 'success' : 'default'" :disabled="!canEnableEditMode" @click="toggleEditMode">
+            编辑模式
+          </NButton>
         </div>
       </div>
+      <Transition name="grid-filter">
+        <div v-if="filterOpen" class="grid-filter-bar">
+          <NInput
+            v-model:value="store.globalSearch"
+            size="small"
+            class="grid-filter-input"
+            placeholder="搜索当前表（服务端）"
+            @keyup.enter="store.applyActiveTableSearch()"
+          />
+          <NSelect
+            v-model:value="store.searchColumns"
+            class="grid-filter-select"
+            size="small"
+            multiple
+            filterable
+            max-tag-count="responsive"
+            :options="searchColumnOptions"
+            placeholder="指定列（留空=全部）"
+          />
+          <NButton size="small" tertiary type="primary" @click="store.applyActiveTableSearch()">搜索</NButton>
+          <NButton v-if="searchActive" size="small" tertiary @click="store.clearActiveTableSearch()">清除</NButton>
+        </div>
+      </Transition>
     </template>
 
     <div class="grid-panel-body">
-      <n-alert v-if="store.getTableError(props.tableKey)" type="warning" :show-icon="false" class="panel-inline-alert">
+      <NAlert v-if="store.getTableError(props.tableKey)" type="warning" :show-icon="false" class="panel-inline-alert">
         {{ store.getTableError(props.tableKey) }}
-      </n-alert>
-      <n-alert v-else-if="store.getTableSearchError(props.tableKey)" type="warning" :show-icon="false" class="panel-inline-alert">
+      </NAlert>
+      <NAlert v-else-if="store.getTableSearchError(props.tableKey)" type="warning" :show-icon="false" class="panel-inline-alert">
         {{ store.getTableSearchError(props.tableKey) }}
-      </n-alert>
+      </NAlert>
 
-      <n-spin :show="store.isTableLoading(props.tableKey) || store.isSearchLoading(props.tableKey)" class="grid-panel-spin">
+      <NSpin :show="store.isTableLoading(props.tableKey) || store.isSearchLoading(props.tableKey)" class="grid-panel-spin">
         <div v-if="table" class="grid-table-wrap">
           <template v-if="true">
             <table class="grid-table">
@@ -1193,8 +1288,8 @@ watch(() => props.tableKey, () => {
                   </td>
                   <td class="grid-row-action-cell grid-row-action-cell-draft">
                     <div class="grid-draft-actions">
-                      <n-button size="tiny" type="primary" :disabled="!draftRowHasValues" @click="insertDraftRow">新增</n-button>
-                      <n-button size="tiny" tertiary :disabled="!draftRowHasValues" @click="clearDraftRow">清空</n-button>
+                      <NButton size="tiny" type="primary" :disabled="!draftRowHasValues" @click="insertDraftRow">新增</NButton>
+                      <NButton size="tiny" tertiary :disabled="!draftRowHasValues" @click="clearDraftRow">清空</NButton>
                     </div>
                   </td>
                 </tr>
@@ -1202,21 +1297,21 @@ watch(() => props.tableKey, () => {
             </table>
           </template>
         </div>
-        <n-empty v-else description="表数据尚未加载完成" />
-      </n-spin>
+        <NEmpty v-else description="表数据尚未加载完成" />
+      </NSpin>
 
       <div v-if="table" class="grid-footer">
         <div class="grid-footer-meta">{{ searchActive ? '搜索结果' : '已加载' }} {{ loadedRowCount }} / {{ totalRowCount }} 行</div>
         <div class="grid-footer-actions">
-          <n-button size="small" tertiary :disabled="!hasMoreRows || store.isTableLoading(props.tableKey) || store.isSearchLoading(props.tableKey)" @click="searchActive ? store.loadMoreSearchRows(props.tableKey) : store.loadMoreTableRows(props.tableKey)">
+          <NButton size="small" tertiary :disabled="!hasMoreRows || store.isTableLoading(props.tableKey) || store.isSearchLoading(props.tableKey)" @click="searchActive ? store.loadMoreSearchRows(props.tableKey) : store.loadMoreTableRows(props.tableKey)">
             再加载 {{ store.defaultPageSize }} 行
-          </n-button>
-          <n-button size="small" tertiary type="primary" :disabled="!hasMoreRows || store.isTableLoading(props.tableKey) || store.isSearchLoading(props.tableKey)" @click="searchActive ? store.loadAllSearchRows(props.tableKey) : store.loadAllTableRows(props.tableKey)">
+          </NButton>
+          <NButton size="small" tertiary type="primary" :disabled="!hasMoreRows || store.isTableLoading(props.tableKey) || store.isSearchLoading(props.tableKey)" @click="searchActive ? store.loadAllSearchRows(props.tableKey) : store.loadAllTableRows(props.tableKey)">
             加载全部
-          </n-button>
-          <n-button v-if="searchActive" size="small" tertiary @click="store.clearActiveTableSearch()">
+          </NButton>
+          <NButton v-if="searchActive" size="small" tertiary @click="store.clearActiveTableSearch()">
             清除搜索
-          </n-button>
+          </NButton>
         </div>
       </div>
     </div>
@@ -1279,63 +1374,7 @@ watch(() => props.tableKey, () => {
     </div>
 
     <input ref="binaryFileInputRef" type="file" class="grid-inline-file-input" @change="handleBinaryFileSelected" />
-  <input ref="contextBinaryFileInputRef" type="file" class="grid-inline-file-input" @change="handleContextBinaryFileSelected" />
-
-    <div
-      v-if="activeEditor && activeEditorColumn && activeEditorPopupStyle"
-      class="grid-floating-editor"
-      :class="{ 'grid-floating-editor-dirty': activeEditorDirty }"
-      :style="activeEditorPopupStyle"
-      @click.stop
-      @mousedown.stop
-    >
-      <div class="grid-inline-editor" :class="{ 'grid-inline-editor-multiline': activeEditorIsMultiline, 'grid-inline-editor-binary': activeEditorIsBinary }">
-        <template v-if="activeEditorIsBinary">
-          <div class="grid-inline-binary-meta">
-            <span v-if="activeEditorBinaryFileName">{{ activeEditorBinaryFileName }}</span>
-            <span v-else-if="activeEditorBinaryBase64">{{ activeEditor.draft ? '待写入' : '当前内容' }} {{ currentBinarySize() }} B</span>
-            <span v-else>{{ activeEditor.draft ? '请选择文件' : '当前内容为空' }}</span>
-          </div>
-          <div class="grid-inline-binary-actions">
-            <n-button size="tiny" type="primary" :disabled="activeEditor.saving" @click.stop="chooseBinaryFile">选择文件</n-button>
-            <n-button size="tiny" tertiary :disabled="activeEditor.saving" @click.stop="clearInlineBinary">清空</n-button>
-            <n-button size="tiny" type="primary" :loading="activeEditor.saving" @click.stop="saveInlineEdit">{{ activeEditor.draft ? '确定' : '保存' }}</n-button>
-            <n-button size="tiny" tertiary :disabled="activeEditor.saving" @click.stop="cancelInlineEdit">取消</n-button>
-          </div>
-        </template>
-
-        <template v-else-if="activeEditorIsBoolean">
-          <n-select
-            v-model:value="activeEditorTextValue"
-            :options="activeBooleanOptions"
-            size="small"
-            :disabled="activeEditor.saving"
-            class="grid-floating-select"
-            @update:value="markActiveEditorDirty"
-          />
-        </template>
-
-        <template v-else-if="activeEditorIsMultiline">
-          <textarea
-            v-model="activeEditorTextValue"
-            class="grid-floating-textarea"
-            :disabled="activeEditor.saving"
-            @input="markActiveEditorDirty"
-            @keydown="handleEditorKeydown"
-          />
-        </template>
-
-        <template v-else>
-          <input
-            v-model="activeEditorTextValue"
-            class="grid-floating-input"
-            :disabled="activeEditor.saving"
-            @input="markActiveEditorDirty"
-            @keydown="handleEditorKeydown"
-          >
-        </template>
-      </div>
-    </div>
+    <input ref="contextBinaryFileInputRef" type="file" class="grid-inline-file-input" @change="handleContextBinaryFileSelected" />
 
     <GridCellEditorModal
       v-model:show="dialogEditorState.show"
@@ -1348,8 +1387,8 @@ watch(() => props.tableKey, () => {
       @save="handleDialogEditorSave"
     />
 
-    <n-modal v-model:show="previewState.show" preset="card" style="width: min(960px, 92vw)" :title="previewState.title">
-      <n-spin :show="previewState.loading">
+    <NModal v-model:show="previewState.show" class="binary-preview-modal" preset="card" style="width: min(960px, 92vw)" :title="previewState.title">
+      <NSpin :show="previewState.loading">
         <div v-if="previewState.error" class="binary-preview-empty">{{ previewState.error }}</div>
         <template v-else-if="previewState.content">
           <img v-if="previewState.content.kind === 'image' && previewImageUrl" :src="previewImageUrl" class="binary-preview-image">
@@ -1362,10 +1401,596 @@ watch(() => props.tableKey, () => {
             <span>{{ previewState.content.sizeBytes }} B</span>
           </div>
           <div class="binary-preview-actions">
-            <n-button type="primary" @click="saveCellContent(previewState.content.rowKey, previewState.content.columnName)">保存到文件...</n-button>
+            <NButton type="primary" @click="saveCellContent(previewState.content.rowKey, previewState.content.columnName)">保存到文件...</NButton>
           </div>
         </template>
-      </n-spin>
-    </n-modal>
-  </n-card>
+      </NSpin>
+    </NModal>
+
+    <Teleport to="body">
+      <div
+        v-if="activeEditor && activeEditorColumn && activeEditorPopupStyle"
+        class="grid-floating-editor"
+        :class="{ 'grid-floating-editor-dirty': activeEditorDirty }"
+        :style="activeEditorPopupStyle"
+        @click.stop
+        @mousedown.stop
+      >
+        <div class="grid-inline-editor" :class="{ 'grid-inline-editor-multiline': activeEditorIsMultiline, 'grid-inline-editor-binary': activeEditorIsBinary }">
+          <template v-if="activeEditorIsBinary">
+            <div class="grid-inline-binary-meta">
+              <span v-if="activeEditorBinaryFileName">{{ activeEditorBinaryFileName }}</span>
+              <span v-else-if="activeEditorBinaryBase64">{{ activeEditor.draft ? '待写入' : '当前内容' }} {{ currentBinarySize() }} B</span>
+              <span v-else>{{ activeEditor.draft ? '请选择文件' : '当前内容为空' }}</span>
+            </div>
+            <div class="grid-inline-binary-actions">
+              <NButton size="tiny" type="primary" :disabled="activeEditor.saving" @click.stop="chooseBinaryFile">选择文件</NButton>
+              <NButton size="tiny" tertiary :disabled="activeEditor.saving" @click.stop="clearInlineBinary">清空</NButton>
+              <NButton size="tiny" type="primary" :loading="activeEditor.saving" @click.stop="saveInlineEdit">{{ activeEditor.draft ? '确定' : '保存' }}</NButton>
+              <NButton size="tiny" tertiary :disabled="activeEditor.saving" @click.stop="cancelInlineEdit">取消</NButton>
+            </div>
+          </template>
+
+          <template v-else-if="activeEditorIsBoolean">
+            <NSelect
+              v-model:value="activeEditorTextValue"
+              :options="activeBooleanOptions"
+              size="small"
+              :disabled="activeEditor.saving"
+              class="grid-floating-select"
+              @update:value="markActiveEditorDirty"
+            />
+          </template>
+
+          <template v-else-if="activeEditorIsMultiline">
+            <textarea
+              ref="activeEditorTextareaRef"
+              v-model="activeEditorTextValue"
+              class="grid-floating-textarea"
+              :disabled="activeEditor.saving"
+              @input="markActiveEditorDirty"
+              @keydown="handleEditorKeydown"
+            />
+          </template>
+
+          <template v-else>
+            <div class="grid-floating-inline-row">
+              <textarea
+                ref="activeEditorInputRef"
+                v-model="activeEditorTextValue"
+                class="grid-floating-input"
+                rows="1"
+                :disabled="activeEditor.saving"
+                @input="markActiveEditorDirty"
+                @keydown="handleEditorKeydown"
+              />
+            </div>
+          </template>
+        </div>
+      </div>
+    </Teleport>
+  </NCard>
 </template>
+
+<style scoped lang="scss">
+// ── Grid panel ──
+.grid-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+
+  :deep(.n-card-header) {
+    padding: 6px 8px 4px;
+  }
+
+  :deep(.n-card-content) {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    flex: 1;
+    padding: 0 !important;
+    overflow: hidden;
+  }
+}
+
+.grid-panel-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  flex: 1 1 auto;
+  padding: 0;
+  overflow: hidden;
+
+  > :deep(.n-empty),
+  > :deep(.n-alert),
+  > :deep(.n-spin) {
+    margin: 0;
+  }
+
+  > :deep(.n-spin) {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+  }
+}
+
+.grid-panel-header-compact {
+  gap: $gap-lg;
+  min-width: 0;
+}
+
+.grid-panel-editing {
+  box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.16);
+}
+
+.grid-panel-title-row {
+  display: flex;
+  align-items: center;
+  gap: $gap-md;
+  min-width: 0;
+  flex: 1 1 auto;
+
+  h3 {
+    min-width: 0;
+    font-size: $font-size-lg;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  :deep(.n-tag) {
+    flex: 0 0 auto;
+  }
+}
+
+.grid-panel-header-meta {
+  display: flex;
+  align-items: center;
+  gap: $gap-md;
+  flex: 0 0 auto;
+}
+
+.grid-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: $gap-md;
+  padding-top: $gap-md;
+}
+
+.grid-filter-input {
+  width: 200px;
+}
+
+.grid-filter-select {
+  width: min(300px, 30vw);
+}
+
+.grid-filter-enter-active,
+.grid-filter-leave-active {
+  transition: opacity 180ms ease, max-height 180ms ease;
+  overflow: hidden;
+}
+
+.grid-filter-enter-from,
+.grid-filter-leave-to {
+  opacity: 0;
+  max-height: 0;
+}
+
+.grid-filter-enter-to,
+.grid-filter-leave-from {
+  max-height: 50px;
+}
+
+.grid-panel-editing-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 $gap-lg;
+  border-radius: 999px;
+  background: rgba(220, 252, 231, 0.95);
+  color: $color-accent-green;
+  font-size: $font-size-sm;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.grid-panel-spin {
+  display: flex !important;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  flex: 1 1 auto;
+  overflow: hidden;
+
+  &:deep(.n-spin-container) {
+    display: flex !important;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+    flex: 1 1 auto;
+    overflow: hidden;
+  }
+
+  :deep(.n-spin-content) {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+    flex: 1 1 auto;
+    overflow: hidden;
+  }
+}
+
+// ── Grid table wrap + scrollbar ──
+.grid-table-wrap {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  min-height: 0;
+  height: 100%;
+  padding: 0;
+  scrollbar-gutter: stable;
+  overflow-x: auto;
+  overflow-y: auto;
+}
+
+// ── Grid table ──
+.grid-table {
+  border-collapse: collapse;
+  table-layout: auto;
+  width: max-content;
+  min-width: 100%;
+  background: rgba(255, 255, 255, 0.92);
+
+  thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    padding: 0 3px;
+    height: 38px;
+    border-bottom: 1px solid $color-border-strong;
+    border-right: 1px solid rgba(148, 163, 184, 0.14);
+    background: $color-surface-light;
+    color: $color-text-tertiary;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    text-align: left;
+
+    &:last-child {
+      border-right: 0;
+    }
+  }
+
+  tbody td {
+    padding: 0 3px;
+    height: 20px;
+    border-bottom: 1px solid $color-border-row;
+    border-right: 1px solid rgba(241, 245, 249, 0.8);
+    color: $color-text-primary;
+    font-size: 10.5px;
+    line-height: 1.2;
+    vertical-align: middle;
+
+    &:last-child {
+      border-right: 0;
+    }
+  }
+}
+
+.grid-header-sortable {
+  cursor: pointer;
+
+  &:hover {
+    background: #eef6ff;
+  }
+}
+
+.grid-action-column {
+  min-width: 112px;
+  width: 112px;
+}
+
+// ── Grid rows ──
+.grid-row {
+  &:hover td {
+    background: rgba(239, 246, 255, 0.56);
+  }
+}
+
+.grid-row-draft {
+  td {
+    background: rgba(240, 253, 244, 0.68);
+  }
+
+  &:hover td {
+    background: rgba(220, 252, 231, 0.82);
+  }
+}
+
+.grid-row-empty-state td {
+  background: rgba(255, 255, 255, 0.96);
+}
+
+// ── Grid header cells ──
+.grid-header-text,
+.grid-cell-text,
+.grid-link-button,
+.grid-primary-value {
+  display: block;
+  white-space: nowrap;
+}
+
+.grid-header-text {
+  display: grid;
+  gap: 2px;
+  line-height: 1.15;
+  padding-right: 8px;
+}
+
+.grid-header-name-row {
+  display: inline-flex;
+  align-items: center;
+  gap: $gap-sm;
+  color: $color-text-primary;
+  font-size: $font-size-sm;
+}
+
+.grid-header-type {
+  color: $color-text-secondary;
+  font-size: $font-size-xs;
+  font-weight: 600;
+}
+
+.grid-sort-indicator {
+  color: $color-accent-blue;
+  font-weight: 800;
+  font-size: $font-size-sm;
+}
+
+// ── Grid cell values ──
+.grid-cell-text,
+.grid-primary-value,
+.grid-link-button {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 20px;
+  font-size: 10.5px;
+}
+
+.grid-binary-value-cell {
+  cursor: pointer;
+  transition: background 140ms ease;
+
+  &:hover {
+    background: rgba(240, 249, 255, 0.72);
+
+    .grid-cell-text {
+      color: #0369a1;
+    }
+  }
+}
+
+.grid-cell-text {
+  color: $color-text-primary;
+}
+
+.grid-draft-cell-text {
+  color: $color-text-secondary;
+  font-style: italic;
+}
+
+.grid-empty-cell {
+  padding: 18px $gap-2xl !important;
+  color: $color-text-secondary;
+  font-size: $font-size-base;
+  text-align: center;
+}
+
+.grid-detail-open-value {
+  cursor: default;
+}
+
+.grid-draft-readonly-cell .grid-draft-cell-text {
+  opacity: 0.6;
+}
+
+.grid-link-button {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: $color-accent-teal;
+  cursor: pointer;
+  text-align: left;
+  font-size: inherit;
+}
+
+.grid-primary-value {
+  color: $color-accent-green-cell;
+  font-weight: 700;
+}
+
+.grid-editing-cell-value {
+  color: $color-accent-teal;
+}
+
+.grid-null-value {
+  color: $color-text-muted !important;
+}
+
+// ── Grid resize handle ──
+.grid-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -2px;
+  width: 8px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+
+  &::before {
+    content: '';
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    left: 3px;
+    width: 1px;
+    background: rgba(148, 163, 184, 0.45);
+  }
+}
+
+// ── Grid floating editor ──
+.grid-floating-editor {
+  position: fixed;
+  z-index: 95;
+  max-width: min(520px, calc(100vw - 24px));
+  box-sizing: border-box;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: $color-surface-white;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.14), inset 0 0 0 2px #3b82f6;
+  transform: none;
+  overflow: hidden;
+
+  &-dirty {
+    background: #eefbf4;
+  }
+}
+
+.grid-floating-input,
+.grid-floating-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 0;
+  outline: none;
+  border-radius: 0;
+  background: transparent;
+  color: $color-text-primary;
+  font: inherit;
+  font-size: 10.5px;
+}
+
+.grid-floating-input {
+  height: var(--grid-editor-inner-height, 20px);
+  min-height: 0;
+  margin: 0;
+  padding: 0 3px;
+  line-height: var(--grid-editor-inner-height, 20px);
+  appearance: none;
+  display: block;
+  resize: none;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.grid-floating-select {
+  min-width: 0;
+
+  :deep(.n-base-selection-label) {
+    padding-right: 3px;
+  }
+}
+
+.grid-floating-textarea {
+  min-height: 84px;
+  padding: 2px 3px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.grid-floating-inline-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 100%;
+}
+
+// ── Grid inline editor ──
+.grid-inline-editor {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+
+  &-multiline,
+  &-binary {
+    min-width: 0;
+  }
+
+  :deep(.n-base-selection) {
+    width: 100%;
+  }
+
+  :deep(.n-base-selection .n-base-selection-label) {
+    min-height: 20px;
+    padding: 0 3px;
+    font-size: 10.5px;
+  }
+}
+
+.grid-inline-action-buttons,
+.grid-inline-binary-actions,
+.grid-draft-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.grid-inline-binary-meta,
+.grid-row-action-hint {
+  color: $color-text-secondary;
+  font-size: $font-size-sm;
+  line-height: 1.3;
+}
+
+// ── Grid row actions ──
+.grid-row-action-cell {
+  min-width: 112px;
+  width: 112px;
+  white-space: nowrap;
+  vertical-align: middle;
+
+  &-draft {
+    background: rgba(240, 253, 244, 0.9);
+  }
+}
+
+.grid-inline-file-input {
+  display: none;
+}
+
+// ── Grid footer ──
+.grid-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $gap-lg;
+  padding: $gap-xs $gap-md;
+
+  &-meta {
+    color: $color-text-secondary;
+    font-size: $font-size-base;
+  }
+
+  &-actions {
+    display: flex;
+    gap: $gap-md;
+    flex-wrap: wrap;
+  }
+}
+
+.grid-editing-tip {
+  margin-bottom: 8px;
+}
+</style>

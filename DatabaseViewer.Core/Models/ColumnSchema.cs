@@ -6,6 +6,12 @@ public sealed class ColumnSchema
 
     public string DataType { get; set; } = string.Empty;
 
+    public string? Comment { get; set; }
+
+    public int? NumericPrecision { get; set; }
+
+    public int? NumericScale { get; set; }
+
     public bool IsPrimaryKey { get; set; }
 
     public bool IsNullable { get; set; }

@@ -1,186 +1,191 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { NAlert, NButton, NConfigProvider, NLayout, NLayoutContent, NMessageProvider, NModal } from 'naive-ui'
-import { Pane, Splitpanes } from 'splitpanes'
-import 'splitpanes/dist/splitpanes.css'
-import DatabaseOverviewGraph from './components/DatabaseOverviewGraph.vue'
-import DetailPanel from './components/DetailPanel.vue'
-import EmptyWorkspace from './components/EmptyWorkspace.vue'
-import ExplorerSidebar from './components/ExplorerSidebar.vue'
-import GridPanel from './components/GridPanel.vue'
-import SqlPanel from './components/SqlPanel.vue'
-import WorkspaceHeader from './components/WorkspaceHeader.vue'
-import WorkspaceTabsBar from './components/WorkspaceTabsBar.vue'
-import { useExplorerStore } from './stores/explorer'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { NAlert, NButton, NConfigProvider, NLayout, NLayoutContent, NMessageProvider, NModal } from 'naive-ui';
+import { Pane, Splitpanes } from 'splitpanes';
+import 'splitpanes/dist/splitpanes.css';
 
-const store = useExplorerStore()
-const activeTableTab = computed(() => store.activeTableTab)
-const activeSqlTab = computed(() => store.activeSqlTab)
-const activeGraphTab = computed(() => store.activeGraphTab)
+// Heavy components loaded lazily — not rendered on initial paint
+const DatabaseOverviewGraph = defineAsyncComponent(() => import('./components/DatabaseOverviewGraph.vue'));
+const SqlPanel = defineAsyncComponent(() => import('./components/SqlPanel.vue'));
+const TableDesignPanel = defineAsyncComponent(() => import('./components/TableDesignPanel.vue'));
+
+// Always visible on first render
+import DetailPanel from './components/DetailPanel.vue';
+import EmptyWorkspace from './components/EmptyWorkspace.vue';
+import ExplorerSidebar from './components/ExplorerSidebar.vue';
+import GridPanel from './components/GridPanel.vue';
+import WorkspaceTabsBar from './components/WorkspaceTabsBar.vue';
+import { useExplorerStore } from './stores/explorer';
+
+const store = useExplorerStore();
+const activeTableTab = computed(() => store.activeTableTab);
+const activeDesignTab = computed(() => store.activeDesignTab);
+const activeSqlTab = computed(() => store.activeSqlTab);
+const activeGraphTab = computed(() => store.activeGraphTab);
 const pendingSqlCloseTab = computed(() => {
-  const pending = store.pendingSqlClose
+  const pending = store.pendingSqlClose;
   if (!pending) {
-    return null
+    return null;
   }
 
-  return store.workspaceTabs.find((tab) => tab.id === pending.tabId && tab.type === 'sql') ?? null
-})
-const gridPanel = computed(() => store.gridPanel)
-const detailPanels = computed(() => store.detailPanels)
+  return store.workspaceTabs.find((tab) => tab.id === pending.tabId && tab.type === 'sql') ?? null;
+});
+const gridPanel = computed(() => store.gridPanel);
+const detailPanels = computed(() => store.detailPanels);
 const activeDetailPanel = computed(() => {
-  const panels = detailPanels.value
-  return panels.length ? panels[panels.length - 1] : undefined
-})
-const detailRailRef = ref<HTMLElement | null>(null)
-const closeAppPromptVisible = ref(false)
-const closeAppPromptSaving = ref(false)
+  const panels = detailPanels.value;
+  return panels.length ? panels[panels.length - 1] : undefined;
+});
+const detailRailRef = ref<HTMLElement | null>(null);
+const closeAppPromptVisible = ref(false);
+const closeAppPromptSaving = ref(false);
 const hostWindow = window as typeof window & {
   __dbvHasDirtySqlTabs?: () => boolean
   __dbvSaveAllDirtySqlTabs?: () => Promise<boolean>
-}
+};
 
 watch(
   () => detailPanels.value.map((panel) => panel.id).join('|'),
   async () => {
-    await nextTick()
-    const rail = detailRailRef.value
+    await nextTick();
+    const rail = detailRailRef.value;
     if (!rail) {
-      return
+      return;
     }
 
-    const lastPanel = rail.querySelector<HTMLElement>('.detail-panel-shell:last-child')
-    lastPanel?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    const lastPanel = rail.querySelector<HTMLElement>('.detail-panel-shell:last-child');
+    lastPanel?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   },
-)
+);
 
 function handleGlobalKeydown(event: KeyboardEvent) {
-  const normalizedKey = event.key.toLowerCase()
-  const isRefreshShortcut = event.key === 'F5'
+  const normalizedKey = event.key.toLowerCase();
+  const isRefreshShortcut = event.key === 'F5';
   const isSqlExecuteShortcut = (normalizedKey === 'r' && event.ctrlKey)
-    || (event.key === 'Enter' && event.ctrlKey)
-  const isSqlSaveShortcut = normalizedKey === 's' && event.ctrlKey
+    || (event.key === 'Enter' && event.ctrlKey);
+  const isSqlSaveShortcut = normalizedKey === 's' && event.ctrlKey;
 
-  const sqlTab = activeSqlTab.value
+  const sqlTab = activeSqlTab.value;
   if (sqlTab && isSqlSaveShortcut) {
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
-    void store.saveSqlTab(sqlTab.id, event.shiftKey)
-    return
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    void store.saveSqlTab(sqlTab.id, event.shiftKey);
+    return;
   }
 
   if (sqlTab && (isRefreshShortcut || isSqlExecuteShortcut)) {
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
-    window.dispatchEvent(new CustomEvent('dbv-request-execute-sql'))
-    return
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    window.dispatchEvent(new CustomEvent('dbv-request-execute-sql'));
+    return;
   }
 
   if (activeTableTab.value && isRefreshShortcut) {
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
-    void store.refreshActiveTableData()
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    void store.refreshActiveTableData();
   }
 }
 
 function handleHostMessage(event: MessageEvent) {
-  const payload = event.data as { channel?: string; event?: string; payload?: { files?: Array<{ path: string; content: string }> } }
+  const payload = event.data as { channel?: string; event?: string; payload?: { files?: Array<{ path: string; content: string }> } };
   if (!payload || payload.channel !== 'dbv-event') {
-    return
+    return;
   }
 
   if (payload.event === 'request-close-with-dirty-sql-tabs') {
-    closeAppPromptVisible.value = true
-    closeAppPromptSaving.value = false
-    return
+    closeAppPromptVisible.value = true;
+    closeAppPromptSaving.value = false;
+    return;
   }
 
   if (payload.event !== 'open-sql-files') {
-    return
+    return;
   }
 
   for (const file of payload.payload?.files ?? []) {
-    void store.openSqlFileTab(file.path, file.content)
+    void store.openSqlFileTab(file.path, file.content);
   }
 }
 
 function isSqlFile(file: File) {
-  return file.name.toLowerCase().endsWith('.sql')
+  return file.name.toLowerCase().endsWith('.sql');
 }
 
 function hasDroppedFiles(event: DragEvent) {
-  const types = Array.from(event.dataTransfer?.types ?? [])
-  return types.includes('Files') || (event.dataTransfer?.files?.length ?? 0) > 0
+  const types = Array.from(event.dataTransfer?.types ?? []);
+  return types.includes('Files') || (event.dataTransfer?.files?.length ?? 0) > 0;
 }
 
 function handleGlobalDragOver(event: DragEvent) {
   if (!hasDroppedFiles(event)) {
-    return
+    return;
   }
 
-  event.preventDefault()
-  event.stopPropagation()
+  event.preventDefault();
+  event.stopPropagation();
   if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'copy'
+    event.dataTransfer.dropEffect = 'copy';
   }
 }
 
 async function handleGlobalDrop(event: DragEvent) {
   if (!hasDroppedFiles(event)) {
-    return
+    return;
   }
 
-  event.preventDefault()
-  event.stopPropagation()
+  event.preventDefault();
+  event.stopPropagation();
 
-  const files = Array.from(event.dataTransfer?.files ?? []).filter(isSqlFile)
+  const files = Array.from(event.dataTransfer?.files ?? []).filter(isSqlFile);
   if (!files.length) {
-    return
+    return;
   }
 
   for (const file of files) {
-    const path = (file as File & { path?: string }).path ?? file.name
-    const content = await file.text()
-    await store.openSqlFileTab(path, content)
+    const path = (file as File & { path?: string }).path ?? file.name;
+    const content = await file.text();
+    await store.openSqlFileTab(path, content);
   }
 }
 
 function handleGlobalDropEvent(event: DragEvent) {
-  void handleGlobalDrop(event)
+  void handleGlobalDrop(event);
 }
 
 function handleHostExecuteSql() {
-  window.dispatchEvent(new CustomEvent('dbv-request-execute-sql'))
+  window.dispatchEvent(new CustomEvent('dbv-request-execute-sql'));
 }
 
 function handleHostRefresh() {
-  const sqlTab = activeSqlTab.value
+  const sqlTab = activeSqlTab.value;
   if (sqlTab) {
-    window.dispatchEvent(new CustomEvent('dbv-request-execute-sql'))
-    return
+    window.dispatchEvent(new CustomEvent('dbv-request-execute-sql'));
+    return;
   }
 
   if (activeTableTab.value) {
-    void store.refreshActiveTableData()
+    void store.refreshActiveTableData();
   }
 }
 
 function hasDirtySqlTabs() {
-  return store.workspaceTabs.some((tab) => tab.type === 'sql' && store.isSqlTabDirty(tab.id))
+  return store.workspaceTabs.some((tab) => tab.type === 'sql' && store.isSqlTabDirty(tab.id));
 }
 
 async function saveAllDirtySqlTabs() {
-  const dirtySqlTabs = store.workspaceTabs.filter((tab) => tab.type === 'sql' && store.isSqlTabDirty(tab.id))
+  const dirtySqlTabs = store.workspaceTabs.filter((tab) => tab.type === 'sql' && store.isSqlTabDirty(tab.id));
   for (const tab of dirtySqlTabs) {
-    const saved = await store.saveSqlTab(tab.id)
+    const saved = await store.saveSqlTab(tab.id);
     if (!saved) {
-      return false
+      return false;
     }
   }
 
-  return true
+  return true;
 }
 
 function respondToHostCloseRequest(result: 'save' | 'discard' | 'cancel') {
@@ -190,7 +195,7 @@ function respondToHostCloseRequest(result: 'save' | 'discard' | 'cancel') {
         postMessage: (message: unknown) => void
       }
     }
-  }).chrome?.webview
+  }).chrome?.webview;
 
   webview?.postMessage({
     channel: 'dbv-request',
@@ -199,68 +204,70 @@ function respondToHostCloseRequest(result: 'save' | 'discard' | 'cancel') {
     payload: {
       result,
     },
-  })
+  });
 }
 
 async function confirmCloseAndSave() {
-  closeAppPromptSaving.value = true
-  const saved = await saveAllDirtySqlTabs()
+  closeAppPromptSaving.value = true;
+  const saved = await saveAllDirtySqlTabs();
   if (!saved) {
-    closeAppPromptSaving.value = false
-    return
+    closeAppPromptSaving.value = false;
+    return;
   }
 
-  closeAppPromptVisible.value = false
-  closeAppPromptSaving.value = false
-  respondToHostCloseRequest('save')
+  closeAppPromptVisible.value = false;
+  closeAppPromptSaving.value = false;
+  respondToHostCloseRequest('save');
 }
 
 function confirmCloseWithoutSave() {
-  closeAppPromptVisible.value = false
-  respondToHostCloseRequest('discard')
+  closeAppPromptVisible.value = false;
+  respondToHostCloseRequest('discard');
 }
 
 function cancelCloseAppPrompt() {
-  closeAppPromptVisible.value = false
-  closeAppPromptSaving.value = false
-  respondToHostCloseRequest('cancel')
+  closeAppPromptVisible.value = false;
+  closeAppPromptSaving.value = false;
+  respondToHostCloseRequest('cancel');
 }
 
 onMounted(() => {
-  hostWindow.__dbvHasDirtySqlTabs = hasDirtySqlTabs
-  hostWindow.__dbvSaveAllDirtySqlTabs = saveAllDirtySqlTabs
-  window.addEventListener('keydown', handleGlobalKeydown, { capture: true })
-  window.addEventListener('dragover', handleGlobalDragOver, { capture: true })
-  window.addEventListener('drop', handleGlobalDropEvent, { capture: true })
-  window.addEventListener('dbv-host-execute-sql', handleHostExecuteSql)
+  hostWindow.__dbvHasDirtySqlTabs = hasDirtySqlTabs;
+  hostWindow.__dbvSaveAllDirtySqlTabs = saveAllDirtySqlTabs;
+  window.addEventListener('keydown', handleGlobalKeydown, { capture: true });
+  window.addEventListener('dragover', handleGlobalDragOver, { capture: true });
+  window.addEventListener('drop', handleGlobalDropEvent, { capture: true });
+  window.addEventListener('dbv-host-execute-sql', handleHostExecuteSql);
   window.addEventListener('dbv-host-refresh', handleHostRefresh)
-  ;(window as typeof window & { chrome?: { webview?: { addEventListener: (type: 'message', listener: (event: MessageEvent) => void) => void } } }).chrome?.webview?.addEventListener('message', handleHostMessage)
-})
+  ;(window as typeof window & { chrome?: { webview?: { addEventListener: (type: 'message', listener: (event: MessageEvent) => void) => void } } }).chrome?.webview?.addEventListener('message', handleHostMessage);
+});
 
 onBeforeUnmount(() => {
-  delete hostWindow.__dbvHasDirtySqlTabs
-  delete hostWindow.__dbvSaveAllDirtySqlTabs
-  window.removeEventListener('keydown', handleGlobalKeydown, { capture: true })
-  window.removeEventListener('dragover', handleGlobalDragOver, { capture: true })
-  window.removeEventListener('drop', handleGlobalDropEvent, { capture: true })
-  window.removeEventListener('dbv-host-execute-sql', handleHostExecuteSql)
-  window.removeEventListener('dbv-host-refresh', handleHostRefresh)
-})
+  delete hostWindow.__dbvHasDirtySqlTabs;
+  delete hostWindow.__dbvSaveAllDirtySqlTabs;
+  window.removeEventListener('keydown', handleGlobalKeydown, { capture: true });
+  window.removeEventListener('dragover', handleGlobalDragOver, { capture: true });
+  window.removeEventListener('drop', handleGlobalDropEvent, { capture: true });
+  window.removeEventListener('dbv-host-execute-sql', handleHostExecuteSql);
+  window.removeEventListener('dbv-host-refresh', handleHostRefresh);
+});
 </script>
 
 <template>
-  <n-config-provider :theme="null">
-    <n-message-provider>
-      <n-layout class="app-shell">
-        <n-layout-content class="content-shell">
-          <div class="workspace-layout">
-            <aside class="sidebar-column">
-              <ExplorerSidebar />
-            </aside>
-            <section class="workspace-column">
-              <div class="workspace-shell">
+  <NConfigProvider :theme="null">
+    <NMessageProvider>
+      <NLayout class="app-shell">
+        <NLayoutContent class="content-shell">
+          <Splitpanes class="workspace-layout workspace-layout-split">
+            <Pane :size="22" :min-size="14" :max-size="38">
+              <aside class="sidebar-column">
+                <ExplorerSidebar />
+              </aside>
+            </Pane>
+            <Pane :size="78" :min-size="62">
+              <section class="workspace-column">
+                <div class="workspace-shell">
                 <WorkspaceTabsBar />
-                <WorkspaceHeader v-if="activeTableTab" />
 
                 <template v-if="gridPanel && activeTableTab">
                   <Splitpanes v-if="activeDetailPanel" class="workspace-split workspace-body">
@@ -283,6 +290,11 @@ onBeforeUnmount(() => {
                     </div>
                   </div>
                 </template>
+                <div v-else-if="activeDesignTab" class="workspace-body">
+                  <div class="workspace-main">
+                    <TableDesignPanel :tab="activeDesignTab" />
+                  </div>
+                </div>
                 <div v-else-if="activeSqlTab" class="workspace-body">
                   <div class="workspace-main">
                     <SqlPanel :tab="activeSqlTab" />
@@ -297,13 +309,14 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
                 <EmptyWorkspace v-else />
-              </div>
-            </section>
-          </div>
+                </div>
+              </section>
+            </Pane>
+          </Splitpanes>
 
           <Teleport to="body">
             <Transition name="floating-notice">
-              <n-alert
+              <NAlert
                 v-if="store.notice"
                 closable
                 class="floating-notice"
@@ -311,11 +324,11 @@ onBeforeUnmount(() => {
                 @close="store.dismissNotice()"
               >
                 {{ store.notice.text }}
-              </n-alert>
+              </NAlert>
             </Transition>
           </Teleport>
 
-          <n-modal
+          <NModal
             :show="!!pendingSqlCloseTab"
             preset="card"
             style="width: min(460px, 92vw)"
@@ -323,18 +336,18 @@ onBeforeUnmount(() => {
             @update:show="(show) => { if (!show) store.cancelPendingSqlClose() }"
           >
             <div class="connection-dialog-form">
-              <n-alert type="warning" :show-icon="false">
+              <NAlert type="warning" :show-icon="false">
                 {{ pendingSqlCloseTab ? `“${store.getWorkspaceTabLabel(pendingSqlCloseTab)}” 尚未保存，是否先保存？` : '' }}
-              </n-alert>
+              </NAlert>
               <div class="connection-dialog-actions">
-                <n-button tertiary @click="store.cancelPendingSqlClose()">取消</n-button>
-                <n-button tertiary @click="store.discardPendingSqlClose()">不保存</n-button>
-                <n-button type="primary" @click="store.savePendingSqlClose()">保存</n-button>
+                <NButton tertiary @click="store.cancelPendingSqlClose()">取消</NButton>
+                <NButton tertiary @click="store.discardPendingSqlClose()">不保存</NButton>
+                <NButton type="primary" @click="store.savePendingSqlClose()">保存</NButton>
               </div>
             </div>
-          </n-modal>
+          </NModal>
 
-          <n-modal
+          <NModal
             :show="closeAppPromptVisible"
             preset="card"
             style="width: min(480px, 92vw)"
@@ -344,18 +357,90 @@ onBeforeUnmount(() => {
             :closable="false"
           >
             <div class="connection-dialog-form">
-              <n-alert type="warning" :show-icon="false">
+              <NAlert type="warning" :show-icon="false">
                 存在尚未保存的 SQL 标签页。是否先保存再关闭？
-              </n-alert>
+              </NAlert>
               <div class="connection-dialog-actions">
-                <n-button tertiary :disabled="closeAppPromptSaving" @click="cancelCloseAppPrompt()">取消</n-button>
-                <n-button tertiary :disabled="closeAppPromptSaving" @click="confirmCloseWithoutSave()">不保存</n-button>
-                <n-button type="primary" :loading="closeAppPromptSaving" @click="confirmCloseAndSave()">保存</n-button>
+                <NButton tertiary :disabled="closeAppPromptSaving" @click="cancelCloseAppPrompt()">取消</NButton>
+                <NButton tertiary :disabled="closeAppPromptSaving" @click="confirmCloseWithoutSave()">不保存</NButton>
+                <NButton type="primary" :loading="closeAppPromptSaving" @click="confirmCloseAndSave()">保存</NButton>
               </div>
             </div>
-          </n-modal>
-        </n-layout-content>
-      </n-layout>
-    </n-message-provider>
-  </n-config-provider>
+          </NModal>
+        </NLayoutContent>
+      </NLayout>
+    </NMessageProvider>
+  </NConfigProvider>
 </template>
+
+<style lang="scss">
+// App-only layout classes (not shared with other components)
+
+.app-shell {
+  height: 100vh;
+  background: transparent;
+  overflow: hidden;
+}
+
+.content-shell {
+  height: 100vh;
+  padding: 4px;
+  overflow: hidden;
+}
+
+.floating-notice {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 4000;
+  width: min(420px, calc(100vw - 28px));
+  border-radius: var(--radius-xl);
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.18);
+
+  &-enter-active,
+  &-leave-active {
+    transition: opacity 220ms ease, transform 220ms ease;
+  }
+
+  &-enter-from,
+  &-leave-to {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+.graph-workspace-body,
+.graph-workspace-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+}
+
+.graph-workspace-main {
+
+  > *,
+  .graph-workspace-graph,
+  .database-overview-shell,
+  .database-overview-stage,
+  .database-overview-canvas-wrap,
+  .database-overview-flow,
+  .vue-flow {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: 100%;
+    width: 100%;
+  }
+}
+
+.graph-workspace-body {
+
+  > .workspace-main,
+  > .workspace-main > * {
+    min-height: 0;
+    height: 100%;
+  }
+}
+</style>

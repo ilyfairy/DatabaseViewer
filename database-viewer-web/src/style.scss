@@ -1,0 +1,428 @@
+// Variables are auto-injected via vite.config.ts additionalData
+
+// ── Global variables & resets ──
+:root {
+  font-family: $font-family-sans;
+  line-height: 1.5;
+  font-weight: 400;
+  color: #172033;
+  background: #f4f6f8;
+  --radius-xs: 4px;
+  --radius-sm: 5px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+  --radius-pill: 999px;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html,
+body,
+#app {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+}
+
+// ── 全局滚动条样式 ──
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.22) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.22);
+  border-radius: var(--radius-pill);
+
+  &:hover {
+    background: rgba(148, 163, 184, 0.30);
+  }
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+// ── Ace editor overrides (third-party) ──
+.ace_editor,
+.ace_editor *,
+.ace_autocomplete,
+.ace_autocomplete *,
+.ace_tooltip,
+.ace_tooltip * {
+  font-family: $font-family-mono-ext !important;
+}
+
+.ace_autocomplete {
+  border: 1px solid $shadow-subtle !important;
+  border-radius: 8px !important;
+  background: #fcfdff !important;
+  box-shadow: 0 20px 44px $shadow-medium !important;
+
+  .ace_line {
+    color: #1e293b;
+  }
+
+  .ace_completion-meta {
+    color: $color-text-muted;
+  }
+
+  .ace_marker-layer .ace_active-line,
+  .ace_marker-layer .ace_line-hover {
+    background: rgba(219, 234, 254, 0.78) !important;
+  }
+}
+
+// ── Naive UI overrides ──
+.n-button {
+  border-radius: var(--radius-md) !important;
+}
+
+.n-base-selection,
+.n-input,
+.n-input .n-input-wrapper,
+.n-input .n-input__textarea,
+.n-tag,
+.n-alert,
+.n-card,
+.n-base-close,
+.n-popconfirm,
+.n-popover,
+.n-modal,
+.n-base-select-menu,
+.n-empty,
+.n-checkbox-box {
+  border-radius: var(--radius-md) !important;
+}
+
+.n-button.n-button--round,
+.n-tag.n-tag--round,
+.n-input.n-input--round .n-input-wrapper,
+.n-input.n-input--round .n-input__textarea {
+  border-radius: var(--radius-lg) !important;
+}
+
+.n-card {
+  > .n-card-header,
+  > .n-card-content,
+  > .n-card-footer {
+    border-radius: inherit;
+  }
+}
+
+.n-alert-body,
+.n-base-selection-label,
+.n-base-selection-tags,
+.n-input-wrapper,
+.n-popconfirm__panel,
+.n-popover__content {
+  border-radius: inherit;
+}
+
+.n-base-select-menu .n-base-select-option {
+  border-radius: inherit;
+}
+
+.n-modal {
+  .n-card-header,
+  .n-card-content {
+    border-radius: inherit;
+  }
+}
+
+// ── Workspace layout + splitpanes ──
+.workspace-layout {
+  height: 100%;
+  overflow: hidden;
+
+  &-split {
+    gap: 0;
+
+    .splitpanes__pane {
+      background: transparent;
+    }
+
+    .splitpanes__splitter {
+      position: relative;
+      width: 2px;
+      background: transparent;
+
+      &::before {
+        content: none;
+      }
+    }
+  }
+}
+
+.sidebar-column,
+.workspace-column,
+.sidebar-shell,
+.workspace-shell,
+.workspace-body,
+.workspace-main,
+.detail-rail {
+  min-height: 0;
+  height: 100%;
+}
+
+.sidebar-column,
+.workspace-column,
+.workspace-shell,
+.workspace-body,
+.workspace-main {
+  overflow: hidden;
+}
+
+.sidebar-column {
+  padding-right: $gap-sm;
+}
+
+.workspace-shell {
+  display: flex;
+  flex-direction: column;
+  gap: $gap-md;
+}
+
+.workspace-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+  gap: 2px;
+}
+
+.workspace-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.workspace-split {
+  height: 100%;
+
+  .splitpanes__pane {
+    background: transparent;
+  }
+
+  .splitpanes__splitter {
+    position: relative;
+    width: 1px;
+    background: transparent;
+
+    // 宽拖拽热区但视觉上不占空间
+    &::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: -4px;
+      right: -4px;
+      cursor: col-resize;
+    }
+  }
+}
+
+.detail-rail {
+  display: grid;
+  gap: $gap-md;
+  overflow: auto;
+  padding: 0;
+  align-content: start;
+}
+
+.detail-panel-shell {
+  min-height: 0;
+}
+
+// ── Shared panel classes (used by multiple components) ──
+.compact-panel {
+  border-radius: var(--radius-xl);
+}
+
+.workspace-panel {
+  height: 100%;
+  border-radius: var(--radius-lg);
+  background: $color-bg-panel;
+  border: 1px solid $color-border-subtle;
+  box-shadow: 0 20px 40px $shadow-subtle;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $gap-2xl;
+
+  h3 {
+    margin: 0;
+    line-height: 1.1;
+  }
+}
+
+.panel-meta {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.panel-inline-alert {
+  margin-bottom: $gap-md;
+  border-radius: var(--radius-md);
+}
+
+.panel-meta {
+  color: $color-text-secondary;
+  font-size: $font-size-sm;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+// ── Shared binary preview ──
+.binary-preview-image {
+  display: block;
+  max-width: 100%;
+  max-height: 70vh;
+  margin: 0 auto;
+  object-fit: contain;
+}
+
+.binary-preview-text {
+  max-height: 70vh;
+  margin: 0;
+  padding: $gap-2xl;
+  overflow: auto;
+  border-radius: var(--radius-md);
+  background: rgba(248, 250, 252, 0.95);
+  color: $color-text-primary;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.binary-preview-empty {
+  padding: 18px;
+  border-radius: var(--radius-md);
+  background: rgba(248, 250, 252, 0.95);
+  color: $color-text-tertiary;
+}
+
+.binary-preview-meta {
+  display: flex;
+  gap: $gap-xl;
+  flex-wrap: wrap;
+  margin-top: $gap-2xl;
+  color: $color-text-secondary;
+  font-size: $font-size-md;
+}
+
+.binary-preview-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: $gap-2xl;
+}
+
+.binary-preview-modal {
+  .fade-in-scale-up-transition-enter-active,
+  .fade-in-scale-up-transition-leave-active,
+  .fade-in-transition-enter-active,
+  .fade-in-transition-leave-active {
+    animation-duration: 90ms !important;
+    transition-duration: 90ms !important;
+  }
+}
+
+// ── Shared context menu ──
+.grid-context-menu {
+  position: fixed;
+  z-index: 80;
+  min-width: 180px;
+  padding: $gap-sm;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 16px 40px $shadow-strong;
+  transform-origin: top left;
+  animation: context-menu-enter 140ms ease;
+}
+
+.grid-context-menu-item {
+  width: 100%;
+  padding: $gap-lg $gap-xl;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+
+  &:hover {
+    background: $color-bg-hover;
+  }
+}
+
+@keyframes context-menu-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+// ── Connection dialog (shared: ExplorerSidebar + App.vue) ──
+.connection-dialog-form {
+  display: grid;
+  gap: $gap-xl;
+}
+
+.connection-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: $gap-lg;
+}
+
+// ── Global media queries ──
+@media (max-width: 1200px) {
+  .workspace-layout {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+
+  .workspace-body-with-rail {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 820px) {
+  .content-shell {
+    padding: 4px;
+  }
+
+  .workspace-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-field-row {
+    grid-template-columns: 1fr;
+  }
+}
