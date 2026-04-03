@@ -39,20 +39,20 @@ body {
 
 // 拍平选择器，避免嵌套编译异常
 *::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.22) !important;
+  background: #d5dbe2 !important;
   border-radius: var(--radius-pill) !important;
   border: 2px solid transparent !important;
   background-clip: padding-box !important;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.42) !important;
+  background: #bcc5cf !important;
   border: 2px solid transparent !important;
   background-clip: padding-box !important;
 }
 
 *::-webkit-scrollbar-thumb:active {
-  background: rgba(148, 163, 184, 0.42) !important;
+  background: #bcc5cf !important;
   border: 2px solid transparent !important;
   background-clip: padding-box !important;
 }

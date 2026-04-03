@@ -27,6 +27,7 @@ function tabTitle(tab: typeof tabs.value[number]) {
     : store.getWorkspaceTabLabel(tab);
 }
 
+/** 鼠标中键关闭 tab（兼容 auxclick 和 mouseup） */
 function handleTabAuxClick(event: MouseEvent, tabId: string) {
   if (event.button !== 1) {
     return;
@@ -72,6 +73,7 @@ function handleTabDragEnd() {
         draggable="true"
         @click="store.activateWorkspaceTab(tab.id)"
         @auxclick="handleTabAuxClick($event, tab.id)"
+        @mouseup="handleTabAuxClick($event, tab.id)"
         @dragstart="handleTabDragStart($event, tab.id)"
         @dragover.prevent
         @drop.prevent="handleTabDrop(tab.id)"

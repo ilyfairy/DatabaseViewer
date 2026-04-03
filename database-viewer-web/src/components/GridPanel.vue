@@ -77,14 +77,14 @@ const dialogEditorState = ref<{
 });
 const editMode = ref(false);
 const activeEditor = ref<ActiveEditorState | null>(null);
-const activeEditorAnchor = ref<{ top: number; left: number; width: number; height: number } | null>(null);
+const activeEditorAnchor = ref<{ top: number; left: number; width: number; height: number; verticalOffset: number; horizontalOffset: number; fontWeight: string } | null>(null);
 const activeEditorInitialPayload = ref<EditorPayload | null>(null);
 const activeEditorDirty = ref(false);
 const activeEditorTextValue = ref('');
 const activeEditorSetNull = ref(false);
 const activeEditorBinaryBase64 = ref<string | null>(null);
 const activeEditorBinaryFileName = ref('');
-const activeEditorInputRef = ref<HTMLTextAreaElement | null>(null);
+const activeEditorInputRef = ref<HTMLInputElement | null>(null);
 const activeEditorTextareaRef = ref<HTMLTextAreaElement | null>(null);
 const suppressWindowClickUntil = ref(0);
 const draftRowValues = ref<Record<string, DraftCellState>>({});
@@ -277,20 +277,28 @@ const activeBooleanOptions = [
   { label: 'False', value: 'false' },
 ];
 
+/** 编辑浮层样式：与 td 单元格精确对齐 */
 const activeEditorPopupStyle = computed(() => {
   if (!activeEditorAnchor.value) {
     return undefined;
   }
 
-  const innerHeight = Math.max(20, Math.round(activeEditorAnchor.value.height));
-  const width = Math.max(120, Math.round(activeEditorAnchor.value.width));
+  const { top, left, width: anchorWidth, height: anchorHeight, verticalOffset, horizontalOffset, fontWeight } = activeEditorAnchor.value;
+  const width = Math.max(120, anchorWidth);
+  /** 多行 textarea line-height (1.45 * 10.5 = 15.225px) 与 span line-height (20px) 的差值补偿 */
+  const multilineLineHeightCompensation = (20 - 10.5 * 1.45) / 2;
+  const textareaVOffset = verticalOffset + multilineLineHeightCompensation;
   return {
-    top: `${Math.round(activeEditorAnchor.value.top)}px`,
-    left: `${Math.round(activeEditorAnchor.value.left)}px`,
+    top: `${top}px`,
+    left: `${left}px`,
     width: `${width}px`,
-    height: activeEditorIsMultiline.value ? undefined : `${innerHeight}px`,
-    minHeight: activeEditorIsMultiline.value ? `${Math.max(24, innerHeight) + 4}px` : undefined,
-    '--grid-editor-inner-height': `${innerHeight}px`,
+    height: activeEditorIsMultiline.value ? undefined : `${anchorHeight}px`,
+    minHeight: activeEditorIsMultiline.value ? `${Math.max(24, anchorHeight) + 4}px` : undefined,
+    '--grid-editor-inner-height': `${anchorHeight}px`,
+    '--grid-editor-v-offset': `${verticalOffset}px`,
+    '--grid-editor-v-offset-multiline': `${textareaVOffset}px`,
+    '--grid-editor-h-offset': `${horizontalOffset}px`,
+    '--grid-editor-font-weight': fontWeight,
   };
 });
 
@@ -442,15 +450,23 @@ function beginInlineEdit(rowKey: string, column: VisibleColumn, value: CellValue
   }
 
   closeContextMenu();
-  /** 锚定到 td 本身，因为 td padding (0 3px) 和编辑框 input padding (0 3px) 一致，文本起点自然对齐 */
-  const anchorElement = anchorTarget instanceof HTMLElement ? anchorTarget.closest('td') as HTMLElement | null : null;
-  if (anchorElement) {
-    const rect = anchorElement.getBoundingClientRect();
+  /** 锚定到 td 单元格边界，通过 CSS 变量补偿 vertical-align:middle 和 padding 子像素偏移 */
+  const anchorTd = anchorTarget instanceof HTMLElement ? anchorTarget.closest('td') as HTMLElement | null : null;
+  if (anchorTd) {
+    const tdRect = anchorTd.getBoundingClientRect();
+    const anchorSpan = anchorTd.querySelector('.grid-cell-text, .grid-primary-value, .grid-link-button, .grid-draft-cell-text') as HTMLElement | null;
+    const spanRect = anchorSpan?.getBoundingClientRect();
+    const spanWeight = anchorSpan ? getComputedStyle(anchorSpan).fontWeight : '400';
+    const verticalOffset = spanRect ? spanRect.top - tdRect.top : 0;
+    const horizontalOffset = spanRect ? spanRect.left - tdRect.left : 3;
     activeEditorAnchor.value = {
-      top: rect.top,
-      left: rect.left,
-      width: rect.width,
-      height: rect.height,
+      top: tdRect.top,
+      left: tdRect.left,
+      width: tdRect.width,
+      height: tdRect.height,
+      verticalOffset,
+      horizontalOffset,
+      fontWeight: spanWeight,
     };
   }
   const draftValue = draft ? draftRowValue(column.name) : null;
@@ -1495,13 +1511,13 @@ watch(() => props.tableKey, () => {
 
           <template v-else>
             <div class="grid-floating-inline-row">
-              <textarea
+              <input
                 ref="activeEditorInputRef"
-                v-model="activeEditorTextValue"
+                :value="activeEditorTextValue"
+                type="text"
                 class="grid-floating-input"
-                rows="1"
                 :disabled="activeEditor.saving"
-                @input="markActiveEditorDirty"
+                @input="(e) => { activeEditorTextValue = (e.target as HTMLInputElement).value; markActiveEditorDirty(); }"
                 @keydown="handleEditorKeydown"
               />
             </div>
@@ -1561,7 +1577,8 @@ watch(() => props.tableKey, () => {
 }
 
 .grid-panel-editing {
-  box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.16);
+  border-color: rgba(16, 185, 129, 0.45) !important;
+  box-shadow: 0 0 6px 1px rgba(16, 185, 129, 0.15);
 }
 
 .grid-panel-title-row {
@@ -1680,7 +1697,6 @@ watch(() => props.tableKey, () => {
 .grid-table {
   border-collapse: collapse;
   table-layout: auto;
-  width: max-content;
   min-width: 100%;
   background: rgba(255, 255, 255, 0.92);
 
@@ -1701,6 +1717,7 @@ watch(() => props.tableKey, () => {
 
     &:last-child {
       border-right: 0;
+      overflow: hidden; // 防止 resize-handle 溢出导致水平滚动条
     }
   }
 
@@ -1916,16 +1933,18 @@ watch(() => props.tableKey, () => {
   color: $color-text-primary;
   font: inherit;
   font-size: 10.5px;
+  font-weight: var(--grid-editor-font-weight, 400);
 }
 
 .grid-floating-input {
-  height: var(--grid-editor-inner-height, 20px);
+  height: 100%;
   min-height: 0;
   margin: 0;
-  padding: 0 3px;
-  line-height: var(--grid-editor-inner-height, 20px);
+  padding: var(--grid-editor-v-offset, 0px) 3px 0 var(--grid-editor-h-offset, 3px);
+  line-height: 20px;
   appearance: none;
   display: block;
+  box-sizing: border-box;
   resize: none;
   overflow: hidden;
   white-space: nowrap;
@@ -1941,14 +1960,14 @@ watch(() => props.tableKey, () => {
 
 .grid-floating-textarea {
   min-height: 84px;
-  padding: 2px 3px;
+  padding: var(--grid-editor-v-offset-multiline, 2px) 3px 2px var(--grid-editor-h-offset, 3px);
   line-height: 1.45;
   resize: vertical;
 }
 
 .grid-floating-inline-row {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   min-width: 0;
   height: 100%;
 }
@@ -1958,6 +1977,7 @@ watch(() => props.tableKey, () => {
   display: grid;
   gap: 4px;
   min-width: 0;
+  height: 100%;
 
   &-multiline,
   &-binary {

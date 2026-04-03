@@ -22,9 +22,9 @@ public sealed class DesktopApiRuntime : IAsyncDisposable
 
 public static class DesktopApiHost
 {
-    public static async Task<DesktopApiRuntime> StartAsync(CancellationToken cancellationToken = default)
+    public static async Task<DesktopApiRuntime> StartAsync(string? overrideBaseUrl = null, CancellationToken cancellationToken = default)
     {
-        var baseUrl = GetAvailableBaseUrl();
+        var baseUrl = overrideBaseUrl ?? GetAvailableBaseUrl();
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
             ApplicationName = typeof(DesktopApiHost).Assembly.FullName,

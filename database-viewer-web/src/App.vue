@@ -23,8 +23,8 @@ const store = useExplorerStore();
 /** Naive UI 全局主题覆盖：让虚拟滚动条与原生滚动条一样 */
 const themeOverrides: GlobalThemeOverrides = {
   Scrollbar: {
-    color: 'rgba(148, 163, 184, 0.22)',
-    colorHover: 'rgba(148, 163, 184, 0.42)',
+    color: '#d5dbe2',
+    colorHover: '#bcc5cf',
   },
 };
 const activeTableTab = computed(() => store.activeTableTab);

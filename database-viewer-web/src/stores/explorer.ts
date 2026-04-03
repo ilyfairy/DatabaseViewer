@@ -200,6 +200,8 @@ export const useExplorerStore = defineStore('explorer', () => {
   const openPanels = ref<ExplorerPanel[]>([]);
   const notice = ref<{ type: NoticeType; text: string } | null>(null);
   const isBootstrapping = ref(false);
+  /** bootstrap 失败时保存错误信息 */
+  const bootstrapError = ref<string | null>(null);
   const tableLoadingState = ref<Record<string, boolean>>({});
   const recordLoadingState = ref<Record<string, boolean>>({});
   const tableErrorState = ref<Record<string, string>>({});
@@ -474,6 +476,7 @@ export const useExplorerStore = defineStore('explorer', () => {
 
   async function refreshBootstrap() {
     isBootstrapping.value = true;
+    bootstrapError.value = null;
     try {
       const payload = await requestJson<{ connections: ConnectionInfo[] }>('/api/explorer/bootstrap');
       connections.value = payload.connections;
@@ -483,7 +486,8 @@ export const useExplorerStore = defineStore('explorer', () => {
       reconcileWorkspaceTabs();
     }
     catch (error) {
-      showNotice('warning', error instanceof Error ? error.message : 'Failed to load bootstrap data');
+      bootstrapError.value = error instanceof Error ? error.message : '无法连接本地 API';
+      showNotice('warning', bootstrapError.value);
     }
     finally {
       isBootstrapping.value = false;
@@ -1955,6 +1959,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     databaseGraphState,
     notice,
     isBootstrapping,
+    bootstrapError,
     getDatabases,
     getConnectionDatabases,
     getConnectionInfo,
