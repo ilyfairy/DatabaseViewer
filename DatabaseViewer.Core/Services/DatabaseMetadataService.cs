@@ -17,12 +17,10 @@ public sealed class DatabaseMetadataService
             DatabaseProviderType.SqlServer => (await db.QueryAsync<string>(@"
                 SELECT name
                 FROM sys.databases
-                WHERE database_id > 4
                 ORDER BY name;")).ToArray(),
             DatabaseProviderType.MySql => (await db.QueryAsync<string>(@"
                 SELECT SCHEMA_NAME
                 FROM information_schema.SCHEMATA
-                WHERE SCHEMA_NAME NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
                 ORDER BY SCHEMA_NAME;")).ToArray(),
             DatabaseProviderType.PostgreSql => (await db.QueryAsync<string>(@"
                 SELECT datname

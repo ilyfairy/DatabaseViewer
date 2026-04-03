@@ -307,6 +307,12 @@ onBeforeUnmount(() => {
   window.removeEventListener('dbv-request-execute-sql', handleWindowExecuteSql);
 });
 
+/** 将结果标签栏的垂直滚轮转为水平滚动 */
+function onResultTabsWheel(event: WheelEvent): void {
+  const container = event.currentTarget as HTMLElement;
+  container.scrollLeft += event.deltaY;
+}
+
 onMounted(() => {
   window.addEventListener('dbv-request-execute-sql', handleWindowExecuteSql);
 
@@ -358,7 +364,6 @@ watch(() => hasVisibleResults.value, () => {
     <template #header>
       <div class="panel-header sql-panel-header">
         <div class="sql-panel-title-row">
-          <span class="grid-panel-kicker">SQL 执行器</span>
           <h3>{{ store.getWorkspaceTabLabel(tab) }}</h3>
           <NTag v-if="sqlFileName" size="small" :bordered="false">{{ sqlFileName }}</NTag>
           <NTag v-if="isDirty" size="small" :bordered="false" type="warning">未保存</NTag>
@@ -416,7 +421,11 @@ watch(() => hasVisibleResults.value, () => {
       </div>
 
       <div class="sql-panel-results">
-        <div v-if="tab.result && tab.result.resultSets.length > 1" class="sql-result-tabs">
+        <div
+          v-if="tab.result && tab.result.resultSets.length > 1"
+          class="sql-result-tabs"
+          @wheel.prevent="onResultTabsWheel"
+        >
           <button
             v-for="(resultSet, index) in tab.result.resultSets"
             :key="resultSet.name"
@@ -425,7 +434,7 @@ watch(() => hasVisibleResults.value, () => {
             :class="{ 'sql-result-tab-active': index === tab.selectedResultIndex }"
             @click="store.selectSqlResultSet(tab.id, index)"
           >
-            {{ resultSet.name }} · {{ resultSet.rowCount }} 行
+            {{ resultSet.name }}<span class="sql-result-tab-count">({{ resultSet.rowCount }}行)</span>
           </button>
         </div>
 
@@ -621,6 +630,7 @@ watch(() => hasVisibleResults.value, () => {
     height: 100%;
     flex: 1 1 auto;
     overflow: hidden;
+    position: relative;
   }
 }
 
@@ -634,16 +644,33 @@ watch(() => hasVisibleResults.value, () => {
 }
 
 .sql-result-tabs {
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   flex: 0 0 auto;
+  gap: $gap-sm;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none; // Firefox
+
+  &::-webkit-scrollbar {
+    display: none; // Chrome/Safari/Edge
+  }
 }
 
 .sql-result-tab {
   border: 1px solid $color-border-strong;
   border-radius: var(--radius-md);
   background: $color-bg-subtle;
-  padding: 5px $gap-xl;
+  padding: 2px $gap-md;
   cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-size: $font-size-sm;
+
+  &-count {
+    margin-left: 2px;
+    opacity: 0.6;
+    font-size: 0.9em;
+  }
 
   &-active {
     background: rgba(219, 234, 254, 0.95);
@@ -654,14 +681,16 @@ watch(() => hasVisibleResults.value, () => {
 
 // ── SQL result table ──
 .sql-result-table-wrap {
-  display: block;
-  min-height: 0;
-  min-width: 0;
-  width: 100%;
-  height: 100%;
+  position: absolute;
+  inset: 0;
   padding: 0 4px;
   overflow-x: auto;
   overflow-y: auto;
+
+  // 让竖向滚动条轨道从表头下方开始，避免滚动条与 sticky 表头重叠
+  &::-webkit-scrollbar-track:vertical {
+    margin-top: 28px;
+  }
 }
 
 .sql-result-table {
@@ -674,7 +703,7 @@ watch(() => hasVisibleResults.value, () => {
     position: sticky;
     top: 0;
     z-index: 1;
-    padding: $gap-md $gap-lg;
+    padding: $gap-xs $gap-md;
     border-bottom: 1px solid $color-border-strong;
     background: $color-surface-light;
     text-align: left;
@@ -718,14 +747,17 @@ watch(() => hasVisibleResults.value, () => {
 
 .sql-result-header-name {
   color: $color-text-primary;
-  font-size: $font-size-base;
+  font-size: $font-size-sm;
   font-weight: 700;
+  display: inline;
 }
 
 .sql-result-header-type {
   color: $color-text-secondary;
-  font-size: $font-size-sm;
-  font-weight: 500;
+  font-size: $font-size-xs;
+  font-weight: 400;
+  display: inline;
+  margin-left: 4px;
 }
 
 .sql-result-footer {

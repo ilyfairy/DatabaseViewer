@@ -38,17 +38,26 @@ public sealed class ExplorerApiService
                 var databaseNodes = new List<DatabaseNodeDto>();
                 foreach (var database in databases)
                 {
-                    var tables = await _metadataService.GetTablesAsync(connection, database);
-                    _tablesCache[BuildTablesCacheKey(connection.Id, database)] = tables;
-                    databaseNodes.Add(new DatabaseNodeDto(
-                        database,
-                        tables.Select(table => new TableNodeDto(
-                            BuildTableKey(connection.Id, table),
-                            table.DatabaseName,
-                            table.SchemaName,
-                            table.TableName,
-                            table.Comment,
-                            table.RowCount)).ToArray()));
+                    try
+                    {
+                        var tables = await _metadataService.GetTablesAsync(connection, database);
+                        _tablesCache[BuildTablesCacheKey(connection.Id, database)] = tables;
+                        databaseNodes.Add(new DatabaseNodeDto(
+                            database,
+                            tables.Select(table => new TableNodeDto(
+                                BuildTableKey(connection.Id, table),
+                                table.DatabaseName,
+                                table.SchemaName,
+                                table.TableName,
+                                table.Comment,
+                                table.RowCount)).ToArray()));
+                    }
+                    catch
+                    {
+                        // 如果某个数据库的表加载失败（如权限不足），仍然保留该数据库（空表列表），
+                        // 以便用户可以在 SQL 编辑器中选择并手动执行查询。
+                        databaseNodes.Add(new DatabaseNodeDto(database, Array.Empty<TableNodeDto>()));
+                    }
                 }
 
                 result.Add(new ConnectionNodeDto(
