@@ -102,10 +102,7 @@ public sealed class DatabaseQueryService
         updateCommand.Transaction = transaction;
         updateCommand.CommandText = updateSql;
         AddParameter(updateCommand, "NewValue", newValue);
-        foreach (var key in schema.PrimaryKeys)
-        {
-            AddParameter(updateCommand, key, keyValues[key]);
-        }
+        AddKeyParameters(updateCommand, schema.PrimaryKeys, keyValues);
 
         var affectedRows = await updateCommand.ExecuteNonQueryAsync();
         if (affectedRows == 0)
@@ -143,11 +140,7 @@ public sealed class DatabaseQueryService
         var deleteSql = SqlDialect.BuildDeleteRowQuery(definition.ProviderType, schema.Table, schema.PrimaryKeys);
         await using var command = connection.CreateCommand();
         command.CommandText = deleteSql;
-
-        foreach (var key in schema.PrimaryKeys)
-        {
-            AddParameter(command, key, keyValues[key]);
-        }
+        AddKeyParameters(command, schema.PrimaryKeys, keyValues);
 
         var affectedRows = await command.ExecuteNonQueryAsync();
         if (affectedRows == 0)
@@ -253,10 +246,7 @@ public sealed class DatabaseQueryService
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = sql;
-        foreach (var key in keys)
-        {
-            AddParameter(command, key, keyValues[key]);
-        }
+        AddKeyParameters(command, keys, keyValues);
 
         await using var reader = await command.ExecuteReaderAsync();
         var dataTable = new DataTable();
@@ -627,5 +617,15 @@ public sealed class DatabaseQueryService
         parameter.ParameterName = name;
         parameter.Value = value ?? DBNull.Value;
         command.Parameters.Add(parameter);
+    }
+
+    /// <summary>按索引化参数名（_k0, _k1...）添加主键 WHERE 参数，与 SqlDialect.BuildKeyWhereClause 匹配。</summary>
+    private static void AddKeyParameters(DbCommand command, IReadOnlyList<string> keyColumns, IReadOnlyDictionary<string, object?> keyValues)
+    {
+        var (_, parameterNames) = SqlDialect.BuildKeyWhereClause(default, keyColumns);
+        for (var index = 0; index < keyColumns.Count; index++)
+        {
+            AddParameter(command, parameterNames[index], keyValues[keyColumns[index]]);
+        }
     }
 }

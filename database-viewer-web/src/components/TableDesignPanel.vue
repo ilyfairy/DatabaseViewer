@@ -833,6 +833,25 @@ function buildAlterSql() {
     if (!typeDecl) {
       throw new Error(`字段 ${name} 的类型不能为空。`);
     }
+
+    /* 类型名/参数直接拼入 SQL（不是标识符也不是字符串字面量），必须严格校验防止注入。
+       类型名仅允许字母、数字、空格、下划线；参数仅允许数字或 'max'。 */
+    if (!/^[A-Za-z_][A-Za-z0-9_ ]*$/.test(column.typeBase.trim())) {
+      throw new Error(`字段 ${name} 的类型名 "${column.typeBase}" 包含非法字符。`);
+    }
+
+    const dimensionPattern = /^(?:\d+|max)?$/i;
+    if (!dimensionPattern.test(column.length.trim())) {
+      throw new Error(`字段 ${name} 的大小参数 "${column.length}" 包含非法字符，仅允许数字或 max。`);
+    }
+
+    if (!dimensionPattern.test(column.precision.trim())) {
+      throw new Error(`字段 ${name} 的精度参数 "${column.precision}" 包含非法字符，仅允许数字。`);
+    }
+
+    if (!dimensionPattern.test(column.scale.trim())) {
+      throw new Error(`字段 ${name} 的比例参数 "${column.scale}" 包含非法字符，仅允许数字。`);
+    }
   }
 
   const duplicate = draftColumns.value

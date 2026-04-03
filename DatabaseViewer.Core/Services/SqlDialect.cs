@@ -57,9 +57,17 @@ public static class SqlDialect
         };
     }
 
+    /// <summary>用安全的索引化参数名（_k0, _k1...）构建主键 WHERE 子句，避免列名含特殊字符导致参数名无效。</summary>
+    public static (string WhereClause, IReadOnlyList<string> ParameterNames) BuildKeyWhereClause(DatabaseProviderType providerType, IReadOnlyList<string> keyColumns)
+    {
+        var parameterNames = keyColumns.Select((_, index) => $"_k{index}").ToArray();
+        var whereClause = string.Join(" AND ", keyColumns.Select((column, index) => $"{QuoteIdentifier(providerType, column)} = @{parameterNames[index]}"));
+        return (whereClause, parameterNames);
+    }
+
     public static string BuildSingleRecordQuery(DatabaseProviderType providerType, DbTableInfo table, IReadOnlyList<string> keyColumns)
     {
-        var whereClause = string.Join(" AND ", keyColumns.Select(column => $"{QuoteIdentifier(providerType, column)} = @{column}"));
+        var (whereClause, _) = BuildKeyWhereClause(providerType, keyColumns);
         var qualifiedTable = GetQualifiedTableName(providerType, table);
 
         return providerType switch
@@ -75,7 +83,7 @@ public static class SqlDialect
     public static string BuildSingleColumnUpdateQuery(DatabaseProviderType providerType, DbTableInfo table, IReadOnlyList<string> keyColumns, string columnName)
     {
         var qualifiedTable = GetQualifiedTableName(providerType, table);
-        var whereClause = string.Join(" AND ", keyColumns.Select(column => $"{QuoteIdentifier(providerType, column)} = @{column}"));
+        var (whereClause, _) = BuildKeyWhereClause(providerType, keyColumns);
         return $"UPDATE {qualifiedTable} SET {QuoteIdentifier(providerType, columnName)} = @NewValue WHERE {whereClause}";
     }
 
@@ -83,7 +91,7 @@ public static class SqlDialect
     public static string BuildDeleteRowQuery(DatabaseProviderType providerType, DbTableInfo table, IReadOnlyList<string> keyColumns)
     {
         var qualifiedTable = GetQualifiedTableName(providerType, table);
-        var whereClause = string.Join(" AND ", keyColumns.Select(column => $"{QuoteIdentifier(providerType, column)} = @{column}"));
+        var (whereClause, _) = BuildKeyWhereClause(providerType, keyColumns);
         return $"DELETE FROM {qualifiedTable} WHERE {whereClause}";
     }
 
