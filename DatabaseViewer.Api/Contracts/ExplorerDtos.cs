@@ -219,3 +219,7 @@ public sealed record TableRowInsertResponse(
     string TableKey,
     string? RowKey,
     Dictionary<string, object?>? Row);
+
+public sealed record TableRowDeleteRequest(
+    string TableKey,
+    string RowKey);

@@ -629,10 +629,9 @@ onBeforeUnmount(() => {
 }
 
 .relation-graph-toolbar-actions {
-  flex: 1 1 360px;
+  flex: 0 0 auto;
   min-width: 0;
   justify-content: flex-end;
-  flex-wrap: wrap;
 }
 
 .relation-graph-controls {

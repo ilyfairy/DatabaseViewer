@@ -563,6 +563,27 @@ public sealed class ExplorerApiService
         }
     }
 
+    /// <summary>通过主键删除一行记录。</summary>
+    public async Task DeleteTableRowAsync(TableRowDeleteRequest request)
+    {
+        var context = await ResolveContextAsync(request.TableKey);
+        var schema = await GetSchemaAsync(context.Connection, context.Table);
+        var keyValues = DecodeRowKey(request.RowKey);
+
+        try
+        {
+            await _queryService.DeleteRowAsync(context.Connection, schema, keyValues);
+        }
+        catch (InvalidOperationException)
+        {
+            throw;
+        }
+        catch (DbException ex)
+        {
+            throw new InvalidOperationException($"删除失败: {ex.Message}");
+        }
+    }
+
     public async Task DeleteConnectionAsync(Guid connectionId)
     {
         var remaining = (await _connectionStore.LoadAsync()).Where(connection => connection.Id != connectionId).ToArray();

@@ -32,23 +32,29 @@ body {
 }
 
 // ── 全局滚动条样式 ──
-* {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, 0.22) transparent;
-}
-
 *::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 8px;
+  height: 8px;
 }
 
+// 拍平选择器，避免嵌套编译异常
 *::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.22);
-  border-radius: var(--radius-pill);
+  background: rgba(148, 163, 184, 0.22) !important;
+  border-radius: var(--radius-pill) !important;
+  border: 2px solid transparent !important;
+  background-clip: padding-box !important;
+}
 
-  &:hover {
-    background: rgba(148, 163, 184, 0.30);
-  }
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.42) !important;
+  border: 2px solid transparent !important;
+  background-clip: padding-box !important;
+}
+
+*::-webkit-scrollbar-thumb:active {
+  background: rgba(148, 163, 184, 0.42) !important;
+  border: 2px solid transparent !important;
+  background-clip: padding-box !important;
 }
 
 *::-webkit-scrollbar-track {
@@ -221,6 +227,7 @@ textarea {
 
   .splitpanes__pane {
     background: transparent;
+    overflow: visible;
   }
 
   .splitpanes__splitter {
@@ -228,14 +235,14 @@ textarea {
     width: 1px;
     background: transparent;
 
-    // 宽拖拽热区但视觉上不占空间
+    // 拖拽热区：右侧扩展，左侧不覆盖滚动条
     &::after {
       content: '';
       position: absolute;
       top: 0;
       bottom: 0;
-      left: -4px;
-      right: -4px;
+      left: 0;
+      right: -6px;
       cursor: col-resize;
     }
   }
@@ -260,7 +267,7 @@ textarea {
 
 .workspace-panel {
   height: 100%;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   background: $color-bg-panel;
   border: 1px solid $color-border-subtle;
   box-shadow: 0 20px 40px $shadow-subtle;
@@ -375,6 +382,14 @@ textarea {
 
   &:hover {
     background: $color-bg-hover;
+  }
+}
+
+.grid-context-menu-item-danger {
+  color: #dc2626;
+
+  &:hover {
+    background: rgba(239, 68, 68, 0.08);
   }
 }
 

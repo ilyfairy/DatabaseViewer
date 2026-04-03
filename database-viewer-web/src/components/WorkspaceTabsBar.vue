@@ -7,6 +7,19 @@ const store = useExplorerStore();
 const tabs = computed(() => store.workspaceTabs);
 const activeTabId = computed(() => store.activeTabId);
 const draggingTabId = ref<string | null>(null);
+const tabsListRef = ref<HTMLDivElement | null>(null);
+
+/** 将竖向滚轮转换为横向滚动 */
+function handleTabsWheel(event: WheelEvent) {
+  if (!tabsListRef.value) {
+    return;
+  }
+
+  if (event.deltaY !== 0) {
+    event.preventDefault();
+    tabsListRef.value.scrollLeft += event.deltaY;
+  }
+}
 
 function tabTitle(tab: typeof tabs.value[number]) {
   return tab.type === 'sql' && tab.filePath
@@ -48,7 +61,7 @@ function handleTabDragEnd() {
 
 <template>
   <div class="workspace-tabs-shell compact-panel">
-    <div class="workspace-tabs-list">
+    <div ref="tabsListRef" class="workspace-tabs-list" @wheel="handleTabsWheel">
       <button
         v-for="tab in tabs"
         :key="tab.id"

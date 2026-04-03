@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { NAlert, NButton, NCard, NInput, NModal, NSelect, NSpin, NTag } from 'naive-ui';
+import { NAlert, NButton, NCard, NInput, NModal, NSelect, NSpin, NTag, useDialog } from 'naive-ui';
 import GridCellEditorModal from './GridCellEditorModal.vue';
 import { useExplorerStore } from '../stores/explorer';
 import type { CellContentPreview, CellValue, ForeignKeyRef, TableColumn, TableRow, TableRowWriteValueRequest } from '../types/explorer';
 
 const props = defineProps<{ tableKey: string }>();
 const store = useExplorerStore();
+const dialog = useDialog();
 
 const table = computed(() => store.getLoadedTable(props.tableKey));
 const tableMeta = computed(() => store.getTable(props.tableKey));
@@ -803,8 +804,14 @@ function closeContextMenu() {
   contextMenu.value = null;
 }
 
+/** 判断右键菜单是否有可用操作 */
 function hasCellContextActions(column: VisibleColumn, draft: boolean) {
-  const editable = draft ? isWritableOnInsert(column) : isEditableColumn(column);
+  // 非草稿行始终有「删除行」操作可用
+  if (!draft) {
+    return true;
+  }
+
+  const editable = isWritableOnInsert(column);
   return editable
     || (column.isNullable && editable)
     || isBinaryColumn(column.name, column.type);
@@ -1077,6 +1084,31 @@ async function setContextMenuValueNull() {
   catch {
     // Store already surfaced the error.
   }
+}
+
+/** 右键菜单「删除行」：弹出确认对话框后删除 */
+function confirmDeleteRow() {
+  const menu = contextMenu.value;
+  if (!menu || menu.draft) {
+    return;
+  }
+
+  closeContextMenu();
+
+  dialog.warning({
+    title: '确认删除',
+    content: '确定要删除这一行数据吗？此操作不可撤销。',
+    positiveText: '删除',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      try {
+        await store.deleteTableRow(props.tableKey, menu.rowKey);
+      }
+      catch {
+        // Store already surfaced the error.
+      }
+    },
+  });
 }
 
 function handleWindowClick() {
@@ -1371,6 +1403,14 @@ watch(() => props.tableKey, () => {
       >
         保存二进制到文件...
       </button>
+      <button
+        v-if="!contextMenu.draft"
+        type="button"
+        class="grid-context-menu-item grid-context-menu-item-danger"
+        @click="confirmDeleteRow"
+      >
+        删除行
+      </button>
     </div>
 
     <input ref="binaryFileInputRef" type="file" class="grid-inline-file-input" @change="handleBinaryFileSelected" />
@@ -1478,7 +1518,6 @@ watch(() => props.tableKey, () => {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  overflow: hidden;
 
   :deep(.n-card-header) {
     padding: 6px 8px 4px;
@@ -1490,7 +1529,6 @@ watch(() => props.tableKey, () => {
     min-height: 0;
     flex: 1;
     padding: 0 !important;
-    overflow: hidden;
   }
 }
 
@@ -1634,7 +1672,6 @@ watch(() => props.tableKey, () => {
   min-height: 0;
   height: 100%;
   padding: 0;
-  scrollbar-gutter: stable;
   overflow-x: auto;
   overflow-y: auto;
 }

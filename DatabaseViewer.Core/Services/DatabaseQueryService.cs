@@ -126,6 +126,36 @@ public sealed class DatabaseQueryService
         return updatedRecord;
     }
 
+    /// <summary>通过主键删除一行记录。</summary>
+    public async Task DeleteRowAsync(
+        ConnectionDefinition definition,
+        TableSchema schema,
+        IReadOnlyDictionary<string, object?> keyValues)
+    {
+        if (schema.PrimaryKeys.Count == 0)
+        {
+            throw new InvalidOperationException("This table has no primary key and is read-only in the editor to avoid accidental deletes.");
+        }
+
+        await using var connection = DbConnectionFactory.Create(definition, schema.Table.DatabaseName);
+        await connection.OpenAsync();
+
+        var deleteSql = SqlDialect.BuildDeleteRowQuery(definition.ProviderType, schema.Table, schema.PrimaryKeys);
+        await using var command = connection.CreateCommand();
+        command.CommandText = deleteSql;
+
+        foreach (var key in schema.PrimaryKeys)
+        {
+            AddParameter(command, key, keyValues[key]);
+        }
+
+        var affectedRows = await command.ExecuteNonQueryAsync();
+        if (affectedRows == 0)
+        {
+            throw new InvalidOperationException("No rows were deleted. The record may have been changed or deleted by another user.");
+        }
+    }
+
     public async Task<RecordDetailsResult?> InsertRowAsync(
         ConnectionDefinition definition,
         TableSchema schema,

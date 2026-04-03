@@ -1141,6 +1141,30 @@ export const useExplorerStore = defineStore('explorer', () => {
     }
   }
 
+  /** 通过主键删除一行记录 */
+  async function deleteTableRow(tableKey: string, rowKey: string) {
+    try {
+      const url = '/api/explorer/table-row?' + new URLSearchParams({ tableKey, rowKey }).toString();
+      const response = await fetch(url, { method: 'DELETE' });
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || `${response.status} ${response.statusText}`);
+      }
+
+      await reloadLoadedTable(tableKey);
+      if (isSearchActive(tableKey)) {
+        await reloadSearchResults(tableKey);
+      }
+      await reloadOpenDetailPanels(tableKey);
+      showNotice('success', '已删除一行');
+    }
+    catch (error) {
+      showNotice('warning', error instanceof Error ? error.message : '删除数据失败');
+      throw error;
+    }
+  }
+
   async function refreshActiveTableData() {
     const tableKey = gridPanel.value?.tableKey ?? activeTableTab.value?.tableKey;
     if (!tableKey) {
@@ -2008,6 +2032,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     fetchCellContent,
     updateTableCell,
     insertTableRow,
+    deleteTableRow,
     refreshActiveTableData,
     refreshDatabase,
     openDatabaseGraph,

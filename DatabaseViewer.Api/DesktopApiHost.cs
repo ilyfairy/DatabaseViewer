@@ -89,6 +89,18 @@ public static class DesktopApiHost
                 return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
             }
         });
+        app.MapDelete("/api/explorer/table-row", async (string tableKey, string rowKey) =>
+        {
+            try
+            {
+                await explorer.DeleteTableRowAsync(new TableRowDeleteRequest(tableKey, rowKey));
+                return Results.NoContent();
+            }
+            catch (Exception ex)
+            {
+                return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
+        });
         app.MapPost("/api/explorer/connections", async (CreateConnectionRequest request) =>
         {
             try

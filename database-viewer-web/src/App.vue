@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { NAlert, NButton, NConfigProvider, NLayout, NLayoutContent, NMessageProvider, NModal } from 'naive-ui';
+import { NAlert, NButton, NConfigProvider, NDialogProvider, NLayout, NLayoutContent, NMessageProvider, NModal } from 'naive-ui';
+import type { GlobalThemeOverrides } from 'naive-ui';
 import { Pane, Splitpanes } from 'splitpanes';
 import 'splitpanes/dist/splitpanes.css';
 
@@ -18,6 +19,14 @@ import WorkspaceTabsBar from './components/WorkspaceTabsBar.vue';
 import { useExplorerStore } from './stores/explorer';
 
 const store = useExplorerStore();
+
+/** Naive UI 全局主题覆盖：让虚拟滚动条与原生滚动条一样 */
+const themeOverrides: GlobalThemeOverrides = {
+  Scrollbar: {
+    color: 'rgba(148, 163, 184, 0.22)',
+    colorHover: 'rgba(148, 163, 184, 0.42)',
+  },
+};
 const activeTableTab = computed(() => store.activeTableTab);
 const activeDesignTab = computed(() => store.activeDesignTab);
 const activeSqlTab = computed(() => store.activeSqlTab);
@@ -254,8 +263,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <NConfigProvider :theme="null">
+  <NConfigProvider :theme="null" :theme-overrides="themeOverrides">
     <NMessageProvider>
+    <NDialogProvider>
       <NLayout class="app-shell">
         <NLayoutContent class="content-shell">
           <Splitpanes class="workspace-layout workspace-layout-split">
@@ -369,6 +379,7 @@ onBeforeUnmount(() => {
           </NModal>
         </NLayoutContent>
       </NLayout>
+    </NDialogProvider>
     </NMessageProvider>
   </NConfigProvider>
 </template>

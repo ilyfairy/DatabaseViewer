@@ -79,6 +79,14 @@ public static class SqlDialect
         return $"UPDATE {qualifiedTable} SET {QuoteIdentifier(providerType, columnName)} = @NewValue WHERE {whereClause}";
     }
 
+    /// <summary>通过主键删除单行记录的 SQL 语句。</summary>
+    public static string BuildDeleteRowQuery(DatabaseProviderType providerType, DbTableInfo table, IReadOnlyList<string> keyColumns)
+    {
+        var qualifiedTable = GetQualifiedTableName(providerType, table);
+        var whereClause = string.Join(" AND ", keyColumns.Select(column => $"{QuoteIdentifier(providerType, column)} = @{column}"));
+        return $"DELETE FROM {qualifiedTable} WHERE {whereClause}";
+    }
+
     public static string BuildInsertRowQuery(DatabaseProviderType providerType, DbTableInfo table, IReadOnlyList<string> columnNames, IReadOnlyList<string> parameterNames)
     {
         if (columnNames.Count == 0 || columnNames.Count != parameterNames.Count)
