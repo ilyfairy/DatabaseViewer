@@ -4,9 +4,11 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Text.Json;
+using Antlr4.Runtime;
 using DatabaseViewer.Api.Contracts;
 using DatabaseViewer.Core.Models;
 using DatabaseViewer.Core.Services;
+using SQLParser.Parsers.TSql;
 
 namespace DatabaseViewer.Api.Services;
 
@@ -42,6 +44,23 @@ public sealed class ExplorerApiService
                     {
                         var tables = await _metadataService.GetTablesAsync(connection, database);
                         _tablesCache[BuildTablesCacheKey(connection.Id, database)] = tables;
+
+                        var routines = Array.Empty<RoutineNodeDto>();
+                        try
+                        {
+                            var routineInfos = await _metadataService.GetRoutinesAsync(connection, database);
+                            routines = routineInfos.Select(r => new RoutineNodeDto(
+                                r.SchemaName,
+                                r.RoutineName,
+                                r.RoutineType,
+                                r.Parameters.Select(p => new RoutineParameterDto(p.Name, p.DataType, p.Direction, p.DefaultValue)).ToArray()
+                            )).ToArray();
+                        }
+                        catch
+                        {
+                            // 函数/存储过程加载失败不影响表加载
+                        }
+
                         databaseNodes.Add(new DatabaseNodeDto(
                             database,
                             tables.Select(table => new TableNodeDto(
@@ -50,13 +69,14 @@ public sealed class ExplorerApiService
                                 table.SchemaName,
                                 table.TableName,
                                 table.Comment,
-                                table.RowCount)).ToArray()));
+                                table.RowCount)).ToArray(),
+                            routines));
                     }
                     catch
                     {
                         // 如果某个数据库的表加载失败（如权限不足），仍然保留该数据库（空表列表），
                         // 以便用户可以在 SQL 编辑器中选择并手动执行查询。
-                        databaseNodes.Add(new DatabaseNodeDto(database, Array.Empty<TableNodeDto>()));
+                        databaseNodes.Add(new DatabaseNodeDto(database, Array.Empty<TableNodeDto>(), Array.Empty<RoutineNodeDto>()));
                     }
                 }
 
@@ -455,6 +475,81 @@ public sealed class ExplorerApiService
             BuildTableKey(context.Connection.Id, targetTable),
             EncodeRowKey(DatabaseQueryService.ExtractPrimaryKeyValues(targetSchema, targetRecord.Row)),
             $"{columnName} → {foreignKey.TargetColumn}");
+    }
+
+    /// <summary>
+    /// 获取存储过程或函数的源代码。
+    /// SQL Server 使用 ALTER（兼容旧版本），PostgreSQL 使用 CREATE OR REPLACE，
+    /// 使用户可以直接 F5 保存修改。
+    /// </summary>
+    public async Task<RoutineSourceResponse> GetRoutineSourceAsync(RoutineSourceRequest request)
+    {
+        var connection = (await _connectionStore.LoadAsync()).FirstOrDefault(item => item.Id == request.ConnectionId)
+            ?? throw new InvalidOperationException("Connection not found.");
+        var source = await _metadataService.GetRoutineSourceAsync(connection, request.Database, request.Schema, request.Name, request.RoutineType);
+
+        if (source is not null && connection.ProviderType == DatabaseProviderType.SqlServer)
+        {
+            // 将 CREATE PROCEDURE/FUNCTION 替换为 ALTER（兼容 SQL Server 2008+）
+            source = ReplaceFirstCreateWithAlter(source);
+        }
+
+        return new RoutineSourceResponse(source);
+    }
+
+    /// <summary>
+    /// 使用 ANTLR TSql Lexer 将 DDL 中第一个 CREATE 关键字替换为 ALTER。
+    /// 通过 token 流精确定位，不会误改注释或字符串中的内容。
+    /// </summary>
+    private static string ReplaceFirstCreateWithAlter(string source)
+    {
+        var inputStream = new AntlrInputStream(source);
+        var lexer = new TSqlLexer(inputStream);
+        var tokens = lexer.GetAllTokens();
+
+        // 找到第一个 CREATE token
+        IToken? createToken = null;
+        IToken? nextKeywordToken = null;
+
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            var token = tokens[i];
+            // 跳过空白和注释 channel（channel 0 = default）
+            if (token.Channel != 0)
+                continue;
+
+            if (createToken is null)
+            {
+                if (token.Type == TSqlLexer.CREATE)
+                {
+                    createToken = token;
+                }
+                else
+                {
+                    break; // 第一个有效 token 不是 CREATE，不做替换
+                }
+            }
+            else
+            {
+                // CREATE 之后的第一个有效 token：检查是否是 PROCEDURE 或 FUNCTION
+                if (token.Type == TSqlLexer.PROCEDURE || token.Type == TSqlLexer.PROC
+                    || token.Type == TSqlLexer.FUNCTION)
+                {
+                    nextKeywordToken = token;
+                }
+                break;
+            }
+        }
+
+        if (createToken is null || nextKeywordToken is null)
+            return source;
+
+        // 精确替换 CREATE token 为 ALTER
+        var sb = new StringBuilder(source.Length + 10);
+        sb.Append(source, 0, createToken.StartIndex);
+        sb.Append("ALTER");
+        sb.Append(source, createToken.StopIndex + 1, source.Length - createToken.StopIndex - 1);
+        return sb.ToString();
     }
 
     public async Task<SqlExecutionResponse> ExecuteSqlAsync(SqlExecutionRequest request)

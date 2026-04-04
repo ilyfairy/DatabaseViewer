@@ -7,9 +7,36 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
-  <Target Name="BuildFrontend" BeforeTargets="Build">
+  <ItemGroup>
+    <FrontendBuildInputs Include="..\database-viewer-web\index.html" />
+    <FrontendBuildInputs Include="..\database-viewer-web\package.json" />
+    <FrontendBuildInputs Include="..\database-viewer-web\pnpm-lock.yaml" />
+    <FrontendBuildInputs Include="..\database-viewer-web\vite.config.ts" />
+    <FrontendBuildInputs Include="..\database-viewer-web\eslint.config.js" />
+    <FrontendBuildInputs Include="..\database-viewer-web\tsconfig*.json" />
+    <FrontendBuildInputs Include="..\database-viewer-web\src\**\*" />
+    <FrontendBuildInputs Include="..\database-viewer-web\public\**\*" />
+  </ItemGroup>
+
+  <Target Name="BuildFrontend"
+          BeforeTargets="AssignTargetPaths"
+          Condition="'$(DesignTimeBuild)' != 'true'"
+          Inputs="@(FrontendBuildInputs)"
+          Outputs="..\database-viewer-web\dist\index.html">
     <Message Text="Building database-viewer-web frontend..." Importance="high" />
     <Exec WorkingDirectory="..\database-viewer-web" Command="pnpm build" />
+  </Target>
+
+  <Target Name="IncludeFrontendDistFiles"
+          AfterTargets="BuildFrontend"
+          BeforeTargets="AssignTargetPaths;GetCopyToOutputDirectoryItems">
+    <ItemGroup>
+      <Content Include="..\database-viewer-web\dist\**\*">
+        <Link>dist\%(RecursiveDir)%(Filename)%(Extension)</Link>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </Content>
+    </ItemGroup>
   </Target>
 
   <ItemGroup>
@@ -26,10 +53,9 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
-    <Content Include="..\database-viewer-web\dist\**\*">
-      <Link>dist\%(RecursiveDir)%(Filename)%(Extension)</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SQLParser" Version="4.1.0" />
   </ItemGroup>
 </Project>

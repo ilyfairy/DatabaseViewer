@@ -2,22 +2,32 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { NAlert, NButton, NCheckbox, NEmpty, NInput, NModal, NSelect, NSpin, NText } from 'naive-ui';
 import { useExplorerStore } from '../stores/explorer';
-import type { AuthenticationMode, ProviderType, TableColumn, TableSummary } from '../types/explorer';
+import type { AuthenticationMode, ProviderType, RoutineInfo, TableColumn, TableSummary } from '../types/explorer';
 
 const store = useExplorerStore();
 const expandedConnections = ref<string[]>([]);
 const expandedDatabases = ref<string[]>([]);
 const expandedTables = ref<string[]>([]);
+const expandedRoutineGroups = ref<string[]>([]);
+const expandedRoutines = ref<string[]>([]);
+const expandedRoutineParamGroups = ref<string[]>([]);
 const expandedTableGroups = ref<string[]>([]);
 const connectionContextMenu = ref<{ x: number; y: number; connectionId: string; connectionName: string } | null>(null);
 const databaseContextMenu = ref<{ x: number; y: number; connectionId: string; database: string } | null>(null);
 const tableContextMenu = ref<{ x: number; y: number; connectionId: string; database: string; table: TableSummary; showScriptSubmenu: boolean } | null>(null);
+const routineContextMenu = ref<{ x: number; y: number; connectionId: string; database: string; provider: ProviderType; routine: RoutineInfo } | null>(null);
 const deleteConnectionConfirm = ref<{ connectionId: string; connectionName: string } | null>(null);
+const deleteRoutineConfirm = ref<{ connectionId: string; database: string; provider: ProviderType; routine: RoutineInfo } | null>(null);
 const renameTableTarget = ref<{ connectionId: string; database: string; table: TableSummary } | null>(null);
 const renameTableVisible = ref(false);
 const renameTableLoading = ref(false);
 const renameTableError = ref<string | null>(null);
 const renameTableName = ref('');
+const renameRoutineTarget = ref<{ connectionId: string; database: string; provider: ProviderType; routine: RoutineInfo } | null>(null);
+const renameRoutineVisible = ref(false);
+const renameRoutineLoading = ref(false);
+const renameRoutineError = ref<string | null>(null);
+const renameRoutineName = ref('');
 const editingConnectionId = ref<string | null>(null);
 const createConnectionVisible = ref(false);
 const createConnectionLoading = ref(false);
@@ -37,6 +47,7 @@ const closeAllContextMenus = () => {
   closeConnectionContextMenu();
   closeDatabaseContextMenu();
   closeTableContextMenu();
+  closeRoutineContextMenu();
 };
 
 const visibleConnections = computed(() => store.visibleConnections);
@@ -122,6 +133,86 @@ function treeForeignKeys(tableKey: string) {
 
 function treeTriggers(tableKey: string) {
   return tableDesignForTree(tableKey)?.triggers ?? [];
+}
+
+/** 切换存储过程/函数分组的展开状态 */
+function toggleRoutineGroup(connectionId: string, database: string, group: 'procedures' | 'functions') {
+  const key = `${connectionId}:${database}:${group}`;
+  expandedRoutineGroups.value = expandedRoutineGroups.value.includes(key)
+    ? expandedRoutineGroups.value.filter((entry) => entry !== key)
+    : [...expandedRoutineGroups.value, key];
+}
+
+function isRoutineGroupExpanded(connectionId: string, database: string, group: 'procedures' | 'functions') {
+  return expandedRoutineGroups.value.includes(`${connectionId}:${database}:${group}`);
+}
+
+/** 获取指定数据库下的存储过程列表 */
+function treeProcedures(connectionId: string, database: string): RoutineInfo[] {
+  return store.getRoutines(connectionId, database).filter((r) => r.routineType === 'Procedure');
+}
+
+/** 获取指定数据库下的函数列表 */
+function treeFunctions(connectionId: string, database: string): RoutineInfo[] {
+  return store.getRoutines(connectionId, database).filter((r) => r.routineType !== 'Procedure');
+}
+
+/** 格式化例程显示名（含 schema） */
+function formatRoutineName(provider: ProviderType, routine: RoutineInfo) {
+  if (routine.schema && provider !== 'mysql') {
+    return `${routine.schema}.${routine.name}`;
+  }
+  return routine.name;
+}
+
+/** 函数子类型显示标签 */
+function routineSubType(routine: RoutineInfo) {
+  switch (routine.routineType) {
+    case 'ScalarFunction': return '标量';
+    case 'TableFunction': return '表值';
+    case 'AggregateFunction': return '聚合';
+    default: return '';
+  }
+}
+
+/** 构造例程唯一 key */
+function routineKey(connectionId: string, database: string, routine: RoutineInfo): string {
+  return `${connectionId}:${database}:${routine.schema ?? ''}:${routine.name}`;
+}
+
+/** 切换单个例程的展开状态 */
+function toggleRoutine(connectionId: string, database: string, routine: RoutineInfo) {
+  const key = routineKey(connectionId, database, routine);
+  expandedRoutines.value = expandedRoutines.value.includes(key)
+    ? expandedRoutines.value.filter((entry) => entry !== key)
+    : [...expandedRoutines.value, key];
+}
+
+/** 例程是否已展开 */
+function isRoutineExpanded(connectionId: string, database: string, routine: RoutineInfo): boolean {
+  return expandedRoutines.value.includes(routineKey(connectionId, database, routine));
+}
+
+/** 切换例程参数分组的展开状态 */
+function toggleRoutineParamGroup(connectionId: string, database: string, routine: RoutineInfo) {
+  const key = `${routineKey(connectionId, database, routine)}:params`;
+  expandedRoutineParamGroups.value = expandedRoutineParamGroups.value.includes(key)
+    ? expandedRoutineParamGroups.value.filter((entry) => entry !== key)
+    : [...expandedRoutineParamGroups.value, key];
+}
+
+/** 例程参数分组是否已展开 */
+function isRoutineParamGroupExpanded(connectionId: string, database: string, routine: RoutineInfo): boolean {
+  return expandedRoutineParamGroups.value.includes(`${routineKey(connectionId, database, routine)}:params`);
+}
+
+/** 格式化参数方向标签 */
+function formatParamDirection(direction: string): string {
+  switch (direction) {
+    case 'OUT': return '输出';
+    case 'INOUT': return '输入/输出';
+    default: return '输入';
+  }
 }
 
 function formatTreeColumnType(column: TableColumn) {
@@ -263,6 +354,152 @@ function openTableContextMenu(event: MouseEvent, connectionId: string, database:
 
 function closeTableContextMenu() {
   tableContextMenu.value = null;
+}
+
+function openRoutineContextMenu(event: MouseEvent, connectionId: string, database: string, provider: ProviderType, routine: RoutineInfo) {
+  closeAllContextMenus();
+  routineContextMenu.value = {
+    x: event.clientX,
+    y: event.clientY,
+    connectionId,
+    database,
+    provider,
+    routine,
+  };
+}
+
+function closeRoutineContextMenu() {
+  routineContextMenu.value = null;
+}
+
+/** 删除存储过程或函数 */
+async function deleteRoutine() {
+  const ctx = deleteRoutineConfirm.value;
+  if (!ctx) return;
+
+  const isProcedure = ctx.routine.routineType === 'Procedure';
+  const objectType = isProcedure ? 'PROCEDURE' : 'FUNCTION';
+  const qualifiedName = ctx.routine.schema && ctx.provider !== 'mysql'
+    ? `[${ctx.routine.schema}].[${ctx.routine.name}]`
+    : `[${ctx.routine.name}]`;
+  const dropSql = `DROP ${objectType} ${qualifiedName};`;
+
+  try {
+    await store.openSqlTabWithContext({
+      connectionId: ctx.connectionId,
+      database: ctx.database,
+      sqlText: dropSql,
+      execute: true,
+    });
+  }
+  finally {
+    deleteRoutineConfirm.value = null;
+  }
+}
+
+/** 打开重命名例程对话框 */
+function openRenameRoutineDialog() {
+  if (!routineContextMenu.value) {
+    return;
+  }
+
+  const { connectionId, database, provider, routine } = routineContextMenu.value;
+  closeRoutineContextMenu();
+  renameRoutineTarget.value = { connectionId, database, provider, routine };
+  renameRoutineName.value = routine.name;
+  renameRoutineError.value = null;
+  renameRoutineVisible.value = true;
+}
+
+/** 关闭重命名例程对话框 */
+function closeRenameRoutineDialog() {
+  renameRoutineVisible.value = false;
+  renameRoutineLoading.value = false;
+  renameRoutineError.value = null;
+  renameRoutineTarget.value = null;
+  renameRoutineName.value = '';
+}
+
+/** 生成重命名例程 SQL */
+function buildRenameRoutineScript(provider: ProviderType, routine: RoutineInfo, newName: string): string {
+  const isProcedure = routine.routineType === 'Procedure';
+  const objectType = isProcedure ? 'PROCEDURE' : 'FUNCTION';
+
+  if (provider === 'sqlserver') {
+    const oldQualified = routine.schema
+      ? `${quoteIdentifier(provider, routine.schema)}.${quoteIdentifier(provider, routine.name)}`
+      : quoteIdentifier(provider, routine.name);
+    return `EXEC sp_rename '${oldQualified.replace(/'/g, "''")}', '${newName.replace(/'/g, "''")}';`;
+  }
+
+  if (provider === 'postgresql') {
+    const oldQualified = routine.schema
+      ? `${quoteIdentifier(provider, routine.schema)}.${quoteIdentifier(provider, routine.name)}`
+      : quoteIdentifier(provider, routine.name);
+    return `ALTER ${objectType} ${oldQualified} RENAME TO ${quoteIdentifier(provider, newName)};`;
+  }
+
+  if (provider === 'mysql') {
+    // MySQL 不支持直接重命名存储过程/函数
+    return '';
+  }
+
+  return '';
+}
+
+/** 提交重命名例程 */
+async function submitRenameRoutine() {
+  if (!renameRoutineTarget.value) {
+    return;
+  }
+
+  const nextName = renameRoutineName.value.trim();
+  if (!nextName) {
+    renameRoutineError.value = '名称不能为空';
+    return;
+  }
+
+  if (nextName === renameRoutineTarget.value.routine.name) {
+    closeRenameRoutineDialog();
+    return;
+  }
+
+  const sql = buildRenameRoutineScript(
+    renameRoutineTarget.value.provider,
+    renameRoutineTarget.value.routine,
+    nextName,
+  );
+
+  if (!sql) {
+    renameRoutineError.value = '该数据库类型不支持重命名存储过程/函数';
+    return;
+  }
+
+  renameRoutineLoading.value = true;
+  renameRoutineError.value = null;
+
+  try {
+    const response = await fetch('/api/explorer/sql-execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        connectionId: renameRoutineTarget.value.connectionId,
+        database: renameRoutineTarget.value.database,
+        sql,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+
+    await store.refreshDatabase(renameRoutineTarget.value.connectionId, renameRoutineTarget.value.database);
+    closeRenameRoutineDialog();
+  }
+  catch (error) {
+    renameRoutineError.value = error instanceof Error ? error.message : '重命名失败';
+    renameRoutineLoading.value = false;
+  }
 }
 
 function setTableScriptSubmenu(open: boolean) {
@@ -852,6 +1089,93 @@ onBeforeUnmount(() => {
                     </template>
                   </div>
                 </div>
+
+                <!-- 存储过程分组 -->
+                <div v-if="treeProcedures(connection.id, database.name).length > 0" class="tree-node">
+                  <div class="tree-row tree-row-group">
+                    <button class="tree-toggle" type="button" @click="toggleRoutineGroup(connection.id, database.name, 'procedures')">{{ isRoutineGroupExpanded(connection.id, database.name, 'procedures') ? '▾' : '▸' }}</button>
+                    <button type="button" class="tree-node-main" @click="toggleRoutineGroup(connection.id, database.name, 'procedures')">
+                      <span class="tree-icon tree-icon-procedure">SP</span>
+                      <span class="tree-label-main">存储过程</span>
+                      <span class="tree-row-count">{{ treeProcedures(connection.id, database.name).length }}</span>
+                    </button>
+                  </div>
+                  <div v-if="isRoutineGroupExpanded(connection.id, database.name, 'procedures')" class="tree-children tree-children-animated">
+                    <div v-for="routine in treeProcedures(connection.id, database.name)" :key="routine.name" class="tree-node">
+                      <div class="tree-row">
+                        <button class="tree-toggle" type="button" @click="toggleRoutine(connection.id, database.name, routine)">{{ isRoutineExpanded(connection.id, database.name, routine) ? '▾' : '▸' }}</button>
+                        <button type="button" class="tree-node-main" @dblclick.stop.prevent="store.openRoutineSource(connection.id, database.name, routine.schema ?? null, routine.name, routine.routineType)" @contextmenu.stop.prevent="openRoutineContextMenu($event, connection.id, database.name, connection.provider, routine)">
+                          <span class="tree-icon tree-icon-leaf">P</span>
+                          <span class="tree-leaf-name">{{ formatRoutineName(connection.provider, routine) }}</span>
+                        </button>
+                      </div>
+                      <div v-if="isRoutineExpanded(connection.id, database.name, routine)" class="tree-children tree-children-animated">
+                        <div class="tree-node">
+                          <div class="tree-row tree-row-group">
+                            <button class="tree-toggle" type="button" @click="toggleRoutineParamGroup(connection.id, database.name, routine)">{{ isRoutineParamGroupExpanded(connection.id, database.name, routine) ? '▾' : '▸' }}</button>
+                            <button type="button" class="tree-node-main" @click="toggleRoutineParamGroup(connection.id, database.name, routine)">
+                              <span class="tree-icon tree-icon-leaf">@</span>
+                              <span class="tree-label-main">参数</span>
+                              <span class="tree-row-count">{{ routine.parameters.length }}</span>
+                            </button>
+                          </div>
+                          <div v-if="isRoutineParamGroupExpanded(connection.id, database.name, routine)" class="tree-children tree-children-animated">
+                            <button v-for="param in routine.parameters" :key="param.name" type="button" class="tree-leaf-row">
+                              <span class="tree-icon tree-icon-leaf">@</span>
+                              <span class="tree-leaf-name">{{ param.name }}</span>
+                              <span class="tree-leaf-type">{{ param.dataType }}</span>
+                              <span v-if="param.direction !== 'IN'" class="tree-leaf-type tree-param-direction">{{ formatParamDirection(param.direction) }}</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 函数分组 -->
+                <div v-if="treeFunctions(connection.id, database.name).length > 0" class="tree-node">
+                  <div class="tree-row tree-row-group">
+                    <button class="tree-toggle" type="button" @click="toggleRoutineGroup(connection.id, database.name, 'functions')">{{ isRoutineGroupExpanded(connection.id, database.name, 'functions') ? '▾' : '▸' }}</button>
+                    <button type="button" class="tree-node-main" @click="toggleRoutineGroup(connection.id, database.name, 'functions')">
+                      <span class="tree-icon tree-icon-function">FN</span>
+                      <span class="tree-label-main">函数</span>
+                      <span class="tree-row-count">{{ treeFunctions(connection.id, database.name).length }}</span>
+                    </button>
+                  </div>
+                  <div v-if="isRoutineGroupExpanded(connection.id, database.name, 'functions')" class="tree-children tree-children-animated">
+                    <div v-for="routine in treeFunctions(connection.id, database.name)" :key="routine.name" class="tree-node">
+                      <div class="tree-row">
+                        <button class="tree-toggle" type="button" @click="toggleRoutine(connection.id, database.name, routine)">{{ isRoutineExpanded(connection.id, database.name, routine) ? '▾' : '▸' }}</button>
+                        <button type="button" class="tree-node-main" @dblclick.stop.prevent="store.openRoutineSource(connection.id, database.name, routine.schema ?? null, routine.name, routine.routineType)" @contextmenu.stop.prevent="openRoutineContextMenu($event, connection.id, database.name, connection.provider, routine)">
+                          <span class="tree-icon tree-icon-leaf">F</span>
+                          <span class="tree-leaf-name">{{ formatRoutineName(connection.provider, routine) }}</span>
+                          <span v-if="routineSubType(routine)" class="tree-leaf-type">{{ routineSubType(routine) }}</span>
+                        </button>
+                      </div>
+                      <div v-if="isRoutineExpanded(connection.id, database.name, routine)" class="tree-children tree-children-animated">
+                        <div class="tree-node">
+                          <div class="tree-row tree-row-group">
+                            <button class="tree-toggle" type="button" @click="toggleRoutineParamGroup(connection.id, database.name, routine)">{{ isRoutineParamGroupExpanded(connection.id, database.name, routine) ? '▾' : '▸' }}</button>
+                            <button type="button" class="tree-node-main" @click="toggleRoutineParamGroup(connection.id, database.name, routine)">
+                              <span class="tree-icon tree-icon-leaf">@</span>
+                              <span class="tree-label-main">参数</span>
+                              <span class="tree-row-count">{{ routine.parameters.length }}</span>
+                            </button>
+                          </div>
+                          <div v-if="isRoutineParamGroupExpanded(connection.id, database.name, routine)" class="tree-children tree-children-animated">
+                            <button v-for="param in routine.parameters" :key="param.name" type="button" class="tree-leaf-row">
+                              <span class="tree-icon tree-icon-leaf">@</span>
+                              <span class="tree-leaf-name">{{ param.name }}</span>
+                              <span class="tree-leaf-type">{{ param.dataType }}</span>
+                              <span v-if="param.direction !== 'IN'" class="tree-leaf-type tree-param-direction">{{ formatParamDirection(param.direction) }}</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -974,6 +1298,63 @@ onBeforeUnmount(() => {
         <div class="connection-dialog-actions">
           <NButton tertiary @click="closeDeleteConnectionConfirm()">取消</NButton>
           <NButton type="error" @click="deleteConnectionConfirm && confirmDeleteConnection(deleteConnectionConfirm.connectionId)">删除</NButton>
+        </div>
+      </div>
+    </NModal>
+
+    <!-- routine context menu -->
+    <div
+      v-if="routineContextMenu"
+      class="database-context-menu"
+      :style="{ left: `${routineContextMenu.x}px`, top: `${routineContextMenu.y}px` }"
+      @click.stop
+      @mousedown.stop
+    >
+      <button type="button" class="database-context-menu-item" @click="store.openRoutineSource(routineContextMenu.connectionId, routineContextMenu.database, routineContextMenu.routine.schema ?? null, routineContextMenu.routine.name, routineContextMenu.routine.routineType); closeRoutineContextMenu()">
+        修改...
+      </button>
+      <button type="button" class="database-context-menu-item" @click="openRenameRoutineDialog()">
+        重命名...
+      </button>
+      <button type="button" class="database-context-menu-item database-context-menu-item-danger" @click="deleteRoutineConfirm = { ...routineContextMenu }; closeRoutineContextMenu()">
+        删除
+      </button>
+    </div>
+
+    <!-- delete routine confirm -->
+    <NModal
+      :show="!!deleteRoutineConfirm"
+      preset="card"
+      style="width: min(420px, 92vw)"
+      title="删除对象"
+      @update:show="(show) => { if (!show) deleteRoutineConfirm = null }"
+    >
+      <div class="connection-dialog-form">
+        <NAlert type="warning" :show-icon="false">
+          确认删除 {{ deleteRoutineConfirm?.routine.routineType === 'Procedure' ? '存储过程' : '函数' }}
+          {{ deleteRoutineConfirm?.routine.schema ? `${deleteRoutineConfirm.routine.schema}.` : '' }}{{ deleteRoutineConfirm?.routine.name }}？
+        </NAlert>
+        <div class="connection-dialog-actions">
+          <NButton tertiary @click="deleteRoutineConfirm = null">取消</NButton>
+          <NButton type="error" @click="deleteRoutine()">删除</NButton>
+        </div>
+      </div>
+    </NModal>
+
+    <!-- rename routine dialog -->
+    <NModal
+      :show="renameRoutineVisible"
+      preset="card"
+      style="width: min(420px, 92vw)"
+      title="重命名"
+      @update:show="(show) => { if (!show) closeRenameRoutineDialog() }"
+    >
+      <div class="connection-dialog-form">
+        <NInput v-model:value="renameRoutineName" placeholder="新名称" @keydown.enter="submitRenameRoutine()" />
+        <NAlert v-if="renameRoutineError" type="error" :show-icon="false">{{ renameRoutineError }}</NAlert>
+        <div class="connection-dialog-actions">
+          <NButton tertiary @click="closeRenameRoutineDialog()">取消</NButton>
+          <NButton type="primary" :loading="renameRoutineLoading" @click="submitRenameRoutine()">确定</NButton>
         </div>
       </div>
     </NModal>
@@ -1248,6 +1629,16 @@ onBeforeUnmount(() => {
     color: $color-accent-red;
   }
 
+  &-procedure {
+    background: rgba(168, 85, 247, 0.16);
+    color: #9333ea;
+  }
+
+  &-function {
+    background: rgba(236, 72, 153, 0.16);
+    color: #db2777;
+  }
+
   &-leaf {
     min-width: 16px;
     width: 16px;
@@ -1320,6 +1711,13 @@ onBeforeUnmount(() => {
   white-space: nowrap;
   text-align: right;
   color: #a8b4c3 !important;
+}
+
+.tree-param-direction {
+  flex: 0 0 auto;
+  font-size: $font-size-xs;
+  color: #e0a060 !important;
+  margin-left: $gap-xs;
 }
 
 .tree-loading-row {

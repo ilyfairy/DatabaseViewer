@@ -714,4 +714,251 @@ public sealed class DatabaseMetadataService
         cache[tableName] = column;
         return column;
     }
+
+    /// <summary>
+    /// 获取指定数据库下的所有存储过程和函数。
+    /// </summary>
+    public async Task<IReadOnlyList<DbRoutineInfo>> GetRoutinesAsync(ConnectionDefinition connection, string databaseName)
+    {
+        await using var db = DbConnectionFactory.Create(connection, databaseName);
+        await db.OpenAsync();
+
+        if (connection.ProviderType == DatabaseProviderType.SqlServer)
+        {
+            var rows = await db.QueryAsync(@"
+                SELECT
+                    s.name AS SchemaName,
+                    o.name AS RoutineName,
+                    CASE o.type
+                        WHEN 'P'  THEN 'Procedure'
+                        WHEN 'PC' THEN 'Procedure'
+                        WHEN 'FN' THEN 'ScalarFunction'
+                        WHEN 'IF' THEN 'TableFunction'
+                        WHEN 'TF' THEN 'TableFunction'
+                        WHEN 'AF' THEN 'AggregateFunction'
+                        ELSE 'Unknown'
+                    END AS RoutineType
+                FROM sys.objects o
+                INNER JOIN sys.schemas s ON s.schema_id = o.schema_id
+                WHERE o.type IN ('P', 'PC', 'FN', 'IF', 'TF', 'AF')
+                  AND o.is_ms_shipped = 0
+                ORDER BY o.type, s.name, o.name;");
+
+            // 查询所有非系统存储过程/函数的参数
+            var paramRows = await db.QueryAsync(@"
+                SELECT
+                    s.name AS SchemaName,
+                    o.name AS RoutineName,
+                    p.name AS ParamName,
+                    t.name AS DataType,
+                    CASE WHEN p.is_output = 1 THEN 'OUT' ELSE 'IN' END AS Direction,
+                    p.has_default_value AS HasDefault,
+                    p.default_value AS DefaultValue
+                FROM sys.parameters p
+                INNER JOIN sys.objects o ON o.object_id = p.object_id
+                INNER JOIN sys.schemas s ON s.schema_id = o.schema_id
+                INNER JOIN sys.types t ON t.user_type_id = p.user_type_id
+                WHERE o.type IN ('P', 'PC', 'FN', 'IF', 'TF', 'AF')
+                  AND o.is_ms_shipped = 0
+                  AND p.parameter_id > 0
+                ORDER BY o.object_id, p.parameter_id;");
+
+            var paramLookup = paramRows
+                .GroupBy(p => $"{(string)p.SchemaName}.{(string)p.RoutineName}")
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.Select(p => new DbRoutineParameter
+                    {
+                        Name = (string)p.ParamName,
+                        DataType = (string)p.DataType,
+                        Direction = (string)p.Direction,
+                        DefaultValue = p.HasDefault ? p.DefaultValue?.ToString() : null,
+                    }).ToList());
+
+            return rows.Select(row =>
+            {
+                var key = $"{(string)row.SchemaName}.{(string)row.RoutineName}";
+                return new DbRoutineInfo
+                {
+                    DatabaseName = databaseName,
+                    SchemaName = row.SchemaName,
+                    RoutineName = row.RoutineName,
+                    RoutineType = row.RoutineType,
+                    Parameters = paramLookup.TryGetValue(key, out var parameters) ? parameters : [],
+                };
+            }).ToArray();
+        }
+
+        if (connection.ProviderType == DatabaseProviderType.PostgreSql)
+        {
+            var rows = await db.QueryAsync(@"
+                SELECT
+                    n.nspname AS SchemaName,
+                    p.proname AS RoutineName,
+                    CASE p.prokind
+                        WHEN 'p' THEN 'Procedure'
+                        WHEN 'f' THEN 'ScalarFunction'
+                        WHEN 'a' THEN 'AggregateFunction'
+                        WHEN 'w' THEN 'ScalarFunction'
+                        ELSE 'Unknown'
+                    END AS RoutineType
+                FROM pg_proc p
+                INNER JOIN pg_namespace n ON n.oid = p.pronamespace
+                WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+                ORDER BY p.prokind, n.nspname, p.proname;");
+
+            // 查询 PostgreSQL 函数/存储过程参数
+            var pgParamRows = await db.QueryAsync(@"
+                SELECT
+                    n.nspname AS SchemaName,
+                    p.proname AS RoutineName,
+                    pa.parameter_name AS ParamName,
+                    pa.data_type AS DataType,
+                    pa.parameter_mode AS Direction,
+                    pa.parameter_default AS DefaultValue
+                FROM information_schema.parameters pa
+                INNER JOIN pg_proc p ON p.proname = pa.specific_name
+                    AND p.oid::regprocedure::text LIKE '%' || pa.specific_name || '%'
+                INNER JOIN pg_namespace n ON n.oid = p.pronamespace
+                WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+                ORDER BY pa.specific_name, pa.ordinal_position;");
+
+            var pgParamLookup = pgParamRows
+                .GroupBy(p => $"{(string)p.SchemaName}.{(string)p.RoutineName}")
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.Select(p => new DbRoutineParameter
+                    {
+                        Name = (string)(p.ParamName ?? ""),
+                        DataType = (string)p.DataType,
+                        Direction = ((string)(p.Direction ?? "IN")).ToUpperInvariant() switch
+                        {
+                            "INOUT" => "INOUT",
+                            "OUT" => "OUT",
+                            _ => "IN",
+                        },
+                        DefaultValue = p.DefaultValue?.ToString(),
+                    }).ToList());
+
+            return rows.Select(row =>
+            {
+                var key = $"{(string)row.SchemaName}.{(string)row.RoutineName}";
+                return new DbRoutineInfo
+                {
+                    DatabaseName = databaseName,
+                    SchemaName = row.SchemaName,
+                    RoutineName = row.RoutineName,
+                    RoutineType = row.RoutineType,
+                    Parameters = pgParamLookup.TryGetValue(key, out var parameters) ? parameters : [],
+                };
+            }).ToArray();
+        }
+
+        if (connection.ProviderType == DatabaseProviderType.MySql)
+        {
+            var rows = await db.QueryAsync(@"
+                SELECT
+                    ROUTINE_NAME AS RoutineName,
+                    CASE ROUTINE_TYPE
+                        WHEN 'PROCEDURE' THEN 'Procedure'
+                        WHEN 'FUNCTION'  THEN 'ScalarFunction'
+                        ELSE 'Unknown'
+                    END AS RoutineType
+                FROM information_schema.ROUTINES
+                WHERE ROUTINE_SCHEMA = @databaseName
+                ORDER BY ROUTINE_TYPE, ROUTINE_NAME;", new { databaseName });
+
+            // 查询 MySQL 存储过程/函数参数
+            var mysqlParamRows = await db.QueryAsync(@"
+                SELECT
+                    SPECIFIC_NAME AS RoutineName,
+                    PARAMETER_NAME AS ParamName,
+                    DATA_TYPE AS DataType,
+                    PARAMETER_MODE AS Direction,
+                    '' AS DefaultValue
+                FROM information_schema.PARAMETERS
+                WHERE SPECIFIC_SCHEMA = @databaseName
+                  AND ORDINAL_POSITION > 0
+                ORDER BY SPECIFIC_NAME, ORDINAL_POSITION;", new { databaseName });
+
+            var mysqlParamLookup = mysqlParamRows
+                .GroupBy(p => (string)p.RoutineName)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.Select(p => new DbRoutineParameter
+                    {
+                        Name = (string)(p.ParamName ?? ""),
+                        DataType = (string)p.DataType,
+                        Direction = ((string)(p.Direction ?? "IN")).ToUpperInvariant() switch
+                        {
+                            "INOUT" => "INOUT",
+                            "OUT" => "OUT",
+                            _ => "IN",
+                        },
+                        DefaultValue = null,
+                    }).ToList());
+
+            return rows.Select(row =>
+            {
+                return new DbRoutineInfo
+                {
+                    DatabaseName = databaseName,
+                    SchemaName = databaseName,
+                    RoutineName = row.RoutineName,
+                    RoutineType = row.RoutineType,
+                    Parameters = mysqlParamLookup.TryGetValue((string)row.RoutineName, out var parameters) ? parameters : [],
+                };
+            }).ToArray();
+        }
+
+        // SQLite 不支持存储过程和函数
+        return Array.Empty<DbRoutineInfo>();
+    }
+
+    /// <summary>
+    /// 获取存储过程或函数的源代码定义。
+    /// </summary>
+    public async Task<string?> GetRoutineSourceAsync(ConnectionDefinition connection, string databaseName, string? schemaName, string routineName, string routineType)
+    {
+        await using var db = DbConnectionFactory.Create(connection, databaseName);
+        await db.OpenAsync();
+
+        if (connection.ProviderType == DatabaseProviderType.SqlServer)
+        {
+            var source = await db.QueryFirstOrDefaultAsync<string>(@"
+                SELECT m.definition
+                FROM sys.sql_modules m
+                INNER JOIN sys.objects o ON o.object_id = m.object_id
+                INNER JOIN sys.schemas s ON s.schema_id = o.schema_id
+                WHERE o.name = @routineName
+                  AND s.name = @schemaName;", new { routineName, schemaName = schemaName ?? "dbo" });
+            return source;
+        }
+
+        if (connection.ProviderType == DatabaseProviderType.PostgreSql)
+        {
+            var source = await db.QueryFirstOrDefaultAsync<string>(@"
+                SELECT pg_get_functiondef(p.oid)
+                FROM pg_proc p
+                INNER JOIN pg_namespace n ON n.oid = p.pronamespace
+                WHERE p.proname = @routineName
+                  AND n.nspname = @schemaName;", new { routineName, schemaName = schemaName ?? "public" });
+            return source;
+        }
+
+        if (connection.ProviderType == DatabaseProviderType.MySql)
+        {
+            var isProcedure = routineType == "Procedure";
+            var showSql = isProcedure ? $"SHOW CREATE PROCEDURE `{routineName}`" : $"SHOW CREATE FUNCTION `{routineName}`";
+            var row = await db.QueryFirstOrDefaultAsync(showSql);
+            if (row is null) return null;
+
+            var dict = (IDictionary<string, object?>)row;
+            // MySQL SHOW CREATE 返回的列名为 "Create Procedure" 或 "Create Function"
+            var key = isProcedure ? "Create Procedure" : "Create Function";
+            return dict.TryGetValue(key, out var val) ? val?.ToString() : null;
+        }
+
+        return null;
+    }
 }

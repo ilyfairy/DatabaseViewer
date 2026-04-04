@@ -67,6 +67,17 @@ public static class DesktopApiHost
                 return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
             }
         });
+        app.MapPost("/api/explorer/routine-source", async (RoutineSourceRequest request) =>
+        {
+            try
+            {
+                return Results.Ok(await explorer.GetRoutineSourceAsync(request));
+            }
+            catch (Exception ex)
+            {
+                return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
+        });
         app.MapPost("/api/explorer/table-cell", async (TableCellUpdateRequest request) =>
         {
             try

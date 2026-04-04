@@ -1,11 +1,16 @@
 <script setup lang="ts">
-import ace from 'ace-builds';
-import 'ace-builds/src-noconflict/ext-language_tools';
-import 'ace-builds/src-noconflict/mode-sql';
-import 'ace-builds/src-noconflict/theme-textmate';
+import * as monaco from 'monaco-editor/esm/vs/editor/editor.api.js';
+import 'monaco-editor/esm/vs/editor/contrib/dnd/browser/dnd.js';
+import 'monaco-editor/esm/vs/editor/contrib/hover/browser/hoverContribution.js';
+import 'monaco-editor/esm/vs/editor/contrib/linesOperations/browser/linesOperations.js';
+import 'monaco-editor/esm/vs/editor/contrib/snippet/browser/snippetController2.js';
+import 'monaco-editor/esm/vs/editor/contrib/suggest/browser/suggestController.js';
+import 'monaco-editor/esm/vs/editor/contrib/suggest/browser/suggestInlineCompletions.js';
+import 'monaco-editor/esm/vs/editor/contrib/wordOperations/browser/wordOperations.js';
+import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import type { Ace } from 'ace-builds';
-import type { ProviderType, SqlContextTable } from '../types/explorer';
+import { useLocalStorage } from '@vueuse/core';
+import type { ProviderType, RoutineInfo, SqlContextTable } from '../types/explorer';
 import { getSqlCompletions } from '../data/sql-completions';
 import { tryParseForCompletion, extractAnalysis, type AstAnalysis } from '../lib/sql-ast';
 
@@ -15,7 +20,9 @@ const props = defineProps<{
   database: string | null
   databases: string[]
   tables: SqlContextTable[]
+  routines: RoutineInfo[]
   height: number
+  fill?: boolean
 }>();
 
 const emit = defineEmits<{
@@ -23,66 +30,288 @@ const emit = defineEmits<{
   execute: []
 }>();
 
+const SQL_LANGUAGE_ID = 'database-viewer-sql';
+const SQL_THEME_ID = 'database-viewer-sql-theme';
+const MONACO_OWNER = 'database-viewer-sql';
+
 const hostRef = ref<HTMLDivElement | null>(null);
-let editor: Ace.Editor | null = null;
+const editorReady = ref(false);
+const editorFontSize = useLocalStorage('dbv-monaco-font-size-v1', 12);
+
+let editor: monaco.editor.IStandaloneCodeEditor | null = null;
+let model: monaco.editor.ITextModel | null = null;
 let suppressModelSync = false;
+let validationTimer: ReturnType<typeof setTimeout> | null = null;
+let modelCounter = 0;
+let monacoRegistered = false;
+let completionProviderDisposable: monaco.IDisposable | null = null;
+let invalidGlobalDecorationIds: string[] = [];
+let selectionClickState: {
+  selection: monaco.Selection
+  position: monaco.Position
+  moved: boolean
+} | null = null;
 
-type AceCompletionItem = {
-  caption: string
-  value: string
-  meta: string
-  score: number
-}
-
-type AceCompleter = {
-  getCompletions: (
-    editor: Ace.Editor,
-    session: Ace.EditSession,
-    pos: Ace.Point,
-    prefix: string,
-    callback: (error: unknown, results: AceCompletionItem[]) => void,
-  ) => void
-}
-
-const languageTools = ace.require('ace/ext/language_tools') as {
-  keyWordCompleter?: AceCompleter
-  snippetCompleter?: AceCompleter
-  textCompleter?: AceCompleter
-};
-
-const providerCompletions = computed(() => getSqlCompletions(props.provider));
-
-// ── AST 分析缓存 ──
-/** 上次 AST 分析结果 */
-let cachedAstAnalysis: AstAnalysis | null = null;
-/** 上次分析的 SQL 文本（用于跳过重复分析） */
-let cachedAstSql = '';
-/** AST 分析是否正在进行中 */
-let astAnalysisPending = false;
-
-/**
- * 异步触发 AST 分析，结果缓存到 cachedAstAnalysis。
- * 不阻塞补全流程——如果 AST 尚未就绪，fallback 到 regex。
- */
-function triggerAstAnalysis(fullSql: string, sqlBeforeCursor: string): void {
-  if (fullSql === cachedAstSql || astAnalysisPending) {
+function focusAtStart(): void {
+  if (!editor) {
     return;
   }
 
-  cachedAstSql = fullSql;
-  astAnalysisPending = true;
-
-  tryParseForCompletion(fullSql, sqlBeforeCursor, props.provider)
-    .then((astList) => {
-      if (astList) {
-        cachedAstAnalysis = extractAnalysis(astList);
-      }
-    })
-    .catch(() => { /* 解析失败，保留上次缓存 */ })
-    .finally(() => { astAnalysisPending = false; });
+  const position = { lineNumber: 1, column: 1 };
+  editor.focus();
+  editor.setPosition(position);
+  editor.setSelection(new monaco.Selection(1, 1, 1, 1));
+  editor.revealPositionInCenterIfOutsideViewport(position);
 }
 
-function inferContext(sqlTextBeforeCursor: string) {
+defineExpose<{
+  focusAtStart: () => void
+}>({
+  focusAtStart,
+});
+
+const globalScope = globalThis as typeof globalThis & {
+  MonacoEnvironment?: {
+    getWorker?: (workerId: string, label: string) => Worker
+  }
+};
+
+globalScope.MonacoEnvironment = {
+  ...globalScope.MonacoEnvironment,
+  getWorker(_workerId: string, _label: string): Worker {
+    return new editorWorker();
+  },
+};
+
+type CompletionCandidate = {
+  label: string
+  insertText?: string
+  meta: string
+  score: number
+  kind: monaco.languages.CompletionItemKind
+  labelDetail?: string
+  labelDescription?: string
+  documentation?: string
+  filterText?: string
+  range?: monaco.IRange
+};
+
+type ModelContext = {
+  provider: ProviderType
+  database: string | null
+  databases: string[]
+  tables: SqlContextTable[]
+  routines: RoutineInfo[]
+  astAnalysis: AstAnalysis | null
+  astSql: string
+  astPending: boolean
+};
+
+const modelContexts = new Map<string, ModelContext>();
+const providerCompletions = computed(() => getSqlCompletions(props.provider));
+const allCompletionSets = [
+  getSqlCompletions('sqlserver'),
+  getSqlCompletions('mysql'),
+  getSqlCompletions('postgresql'),
+  getSqlCompletions('sqlite'),
+];
+
+const highlightKeywords = [...new Set(allCompletionSets.flatMap((item) => item.keywords.map((keyword) => keyword.toLowerCase())))];
+const highlightFunctions = [...new Set(allCompletionSets.flatMap((item) => item.functions.map((fn) => fn.toLowerCase())))];
+const highlightGlobalVariables = [...new Set(allCompletionSets.flatMap((item) => item.globalVariables.map((variable) => variable.toLowerCase())))];
+const highlightGlobalVariableTails = [...new Set(highlightGlobalVariables.map((variable) => variable.replace(/^@/, '')))];
+const dataTypes = [
+  'int', 'integer', 'bigint', 'smallint', 'tinyint', 'decimal', 'numeric',
+  'float', 'real', 'double', 'char', 'varchar', 'nchar', 'nvarchar', 'text',
+  'ntext', 'date', 'time', 'datetime', 'datetime2', 'datetimeoffset',
+  'smalldatetime', 'timestamp', 'bit', 'binary', 'varbinary', 'image',
+  'money', 'smallmoney', 'uniqueidentifier', 'xml', 'sql_variant',
+  'boolean', 'bool', 'serial', 'bigserial', 'blob', 'clob', 'json', 'jsonb',
+  'uuid', 'bytea', 'interval', 'cidr', 'inet', 'macaddr', 'rowversion',
+  'hierarchyid', 'geometry', 'geography',
+];
+const boolNullValues = ['true', 'false', 'null'];
+
+function ensureMonacoRegistration(): void {
+  if (monacoRegistered) {
+    return;
+  }
+
+  monacoRegistered = true;
+
+  monaco.languages.register({ id: SQL_LANGUAGE_ID });
+  monaco.languages.setLanguageConfiguration(SQL_LANGUAGE_ID, {
+    comments: {
+      lineComment: '--',
+      blockComment: ['/*', '*/'],
+    },
+    brackets: [
+      ['(', ')'],
+      ['[', ']'],
+    ],
+    autoClosingPairs: [
+      { open: '(', close: ')' },
+      { open: '[', close: ']' },
+      { open: '"', close: '"' },
+      { open: "'", close: "'" },
+      { open: '`', close: '`' },
+    ],
+    surroundingPairs: [
+      { open: '(', close: ')' },
+      { open: '[', close: ']' },
+      { open: '"', close: '"' },
+      { open: "'", close: "'" },
+      { open: '`', close: '`' },
+    ],
+  });
+
+  monaco.languages.setMonarchTokensProvider(SQL_LANGUAGE_ID, {
+    ignoreCase: true,
+    keywords: highlightKeywords,
+    builtinFunctions: highlightFunctions,
+    globalVariables: highlightGlobalVariables,
+    globalVariableTails: highlightGlobalVariableTails,
+    dataTypes,
+    boolNullValues,
+    tokenizer: {
+      root: [
+        [/--.*$/, 'comment'],
+        [/\/\*/, 'comment', '@comment'],
+        [/[Nn]'/, { token: 'string', next: '@singleQuotedString' }],
+        [/'/, { token: 'string', next: '@singleQuotedString' }],
+        [/"/, { token: 'string', next: '@doubleQuotedString' }],
+        [/\[/, { token: 'string', next: '@bracketIdentifier' }],
+        [/`/, { token: 'string', next: '@backtickIdentifier' }],
+        [/[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b/, 'number'],
+        [/@(?=@\w+)/, { token: 'variable.predefined', next: '@globalVariableTail' }],
+        [/@\w+/, 'variable'],
+        [/[A-Za-z_$][A-Za-z0-9_$#]*/, {
+          cases: {
+            '@boolNullValues': 'constant',
+            '@dataTypes': 'type',
+            '@keywords': 'keyword',
+            '@default': 'identifier',
+          },
+        }],
+        [/[<>=!]=?|[+\-*/%&|^~]|\|\|/, 'operator'],
+        [/[()]/, '@brackets'],
+        [/[,;.]/, 'delimiter'],
+        [/\s+/, 'white'],
+      ],
+      comment: [
+        [/\*\//, 'comment', '@pop'],
+        [/./, 'comment'],
+      ],
+      globalVariableTail: [
+        [/@\w+/, {
+          cases: {
+            '@globalVariableTails': 'variable.predefined',
+            '@default': 'invalid',
+          },
+          next: '@pop',
+        }],
+        ['', '', '@pop'],
+      ],
+      singleQuotedString: [
+        [/''/, 'string'],
+        [/'/, 'string', '@pop'],
+        [/[^']+/, 'string'],
+      ],
+      doubleQuotedString: [
+        [/""/, 'string'],
+        [/"/, 'string', '@pop'],
+        [/[^\"]+/, 'string'],
+      ],
+      bracketIdentifier: [
+        [/\]\]/, 'string'],
+        [/\]/, 'string', '@pop'],
+        [/[^\]]+/, 'string'],
+      ],
+      backtickIdentifier: [
+        [/``/, 'string'],
+        [/`/, 'string', '@pop'],
+        [/[^`]+/, 'string'],
+      ],
+    },
+  });
+
+  monaco.editor.defineTheme(SQL_THEME_ID, {
+    base: 'vs',
+    inherit: true,
+    rules: [
+      { token: 'keyword', foreground: '1565c0', fontStyle: 'bold' },
+      { token: 'string', foreground: 'ff0000' },
+      { token: 'number', foreground: 'd97706' },
+      { token: 'comment', foreground: '64748b', fontStyle: 'italic' },
+      { token: 'identifier', foreground: '1f2937' },
+      { token: 'variable', foreground: '1f2937' },
+      { token: 'variable.predefined', foreground: 'ff00ff' },
+      { token: 'predefined', foreground: 'ff00ff' },
+      { token: 'type', foreground: '0f766e' },
+      { token: 'constant', foreground: '475569' },
+      { token: 'delimiter', foreground: '64748b' },
+      { token: 'operator', foreground: '0f172a' },
+      { token: 'invalid', foreground: 'dc2626' },
+    ],
+    colors: {
+      'editor.background': '#ffffff',
+      'editor.foreground': '#1f2937',
+      'editor.lineHighlightBackground': '#dbeafe8c',
+      'editor.selectionBackground': '#bfdbfeb3',
+      'editorCursor.foreground': '#1f2937',
+      'editorLineNumber.foreground': '#64748b',
+      'editorLineNumber.activeForeground': '#1f2937',
+      'editorGutter.background': '#f8fafc',
+      'editorSuggestWidget.background': '#ffffff',
+      'editorSuggestWidget.border': '#cbd5e1',
+      'editorSuggestWidget.foreground': '#1f2937',
+      'editorSuggestWidget.selectedBackground': '#e5e7eb',
+      'editorSuggestWidget.highlightForeground': '#2563eb',
+      'editorSuggestWidget.focusHighlightForeground': '#2563eb',
+      'editorSuggestWidget.selectedForeground': '#0f172a',
+      'editorWidget.background': '#ffffff',
+      'editorWidget.border': '#cbd5e1',
+      'editorHoverWidget.background': '#ffffff',
+      'editorHoverWidget.border': '#cbd5e1',
+      'scrollbarSlider.background': '#94a3b833',
+      'scrollbarSlider.hoverBackground': '#94a3b855',
+      'scrollbarSlider.activeBackground': '#94a3b877',
+      'editorError.foreground': '#dc2626',
+    },
+  });
+
+  completionProviderDisposable?.dispose();
+  completionProviderDisposable = monaco.languages.registerCompletionItemProvider(SQL_LANGUAGE_ID, {
+    triggerCharacters: ['.', '@'],
+    provideCompletionItems(currentModel: monaco.editor.ITextModel, position: monaco.Position) {
+      return { suggestions: buildSuggestions(currentModel, position) };
+    },
+  });
+}
+
+function getModelContext(currentModel: monaco.editor.ITextModel): ModelContext | null {
+  return modelContexts.get(currentModel.uri.toString()) ?? null;
+}
+
+function triggerAstAnalysis(context: ModelContext, fullSql: string, sqlBeforeCursor: string): void {
+  if (fullSql === context.astSql || context.astPending) {
+    return;
+  }
+
+  context.astSql = fullSql;
+  context.astPending = true;
+
+  tryParseForCompletion(fullSql, sqlBeforeCursor, context.provider)
+    .then((astList) => {
+      if (astList) {
+        context.astAnalysis = extractAnalysis(astList);
+      }
+    })
+    .catch(() => { /* keep previous cache */ })
+    .finally(() => { context.astPending = false; });
+}
+
+function inferContext(sqlTextBeforeCursor: string): 'database' | 'table' | 'qualified-column' | 'column' | 'general' {
   if (/\buse\s+[A-Za-z_\d$]*$/i.test(sqlTextBeforeCursor)) {
     return 'database';
   }
@@ -102,22 +331,14 @@ function inferContext(sqlTextBeforeCursor: string) {
   return 'general';
 }
 
-/**
- * 提取别名映射和引用的表集合。
- * 优先使用 AST 分析结果，fallback 到 regex。
- */
-function extractAliases(sqlText: string) {
+function extractAliases(sqlText: string, context: ModelContext) {
   const aliases = new Map<string, string>();
   const referencedTables = new Set<string>();
   const cteNames: string[] = [];
 
-  // 如果 AST 分析已就绪就使用 AST 数据
-  if (cachedAstAnalysis) {
-    for (const tableRef of cachedAstAnalysis.tables) {
-      const qualifiedName = tableRef.schema
-        ? `${tableRef.schema}.${tableRef.table}`
-        : tableRef.table;
-
+  if (context.astAnalysis) {
+    for (const tableRef of context.astAnalysis.tables) {
+      const qualifiedName = tableRef.schema ? `${tableRef.schema}.${tableRef.table}` : tableRef.table;
       referencedTables.add(qualifiedName.toLowerCase());
 
       if (tableRef.alias) {
@@ -125,9 +346,8 @@ function extractAliases(sqlText: string) {
       }
     }
 
-    cteNames.push(...cachedAstAnalysis.cteNames);
+    cteNames.push(...context.astAnalysis.cteNames);
   } else {
-    // Fallback: 用 regex 提取
     const regex = /\b(?:from|join|update|into)\s+([A-Za-z_][\w$]*(?:\.[A-Za-z_][\w$]*){0,2})(?:\s+(?:as\s+)?([A-Za-z_][\w$]*))?/gi;
     let match: RegExpExecArray | null;
     while ((match = regex.exec(sqlText)) !== null) {
@@ -147,24 +367,15 @@ function extractAliases(sqlText: string) {
   return { aliases, referencedTables, cteNames };
 }
 
-function resolveTableReference(reference: string, aliases: Map<string, string>) {
+function resolveTableReference(reference: string, aliases: Map<string, string>, tables: SqlContextTable[]): SqlContextTable | null {
   const aliasTarget = aliases.get(reference.toLowerCase());
   const target = (aliasTarget ?? reference).toLowerCase();
-  return props.tables.find((table) => table.qualifiedName.toLowerCase() === target
+  return tables.find((table) => table.qualifiedName.toLowerCase() === target
     || table.name.toLowerCase() === target
     || `${table.schema ?? ''}.${table.name}`.replace(/^\./, '').toLowerCase() === target) ?? null;
 }
 
-function toCompletionItems(items: Array<{ caption: string; value?: string; meta: string; score: number }>) {
-  return items.map((item) => ({
-    caption: item.caption,
-    value: item.value ?? item.caption,
-    meta: item.meta,
-    score: item.score,
-  }));
-}
-
-function completionInsertValue(caption: string, qualifiedPrefix?: string) {
+function completionInsertValue(caption: string, qualifiedPrefix?: string): string {
   if (!qualifiedPrefix) {
     return caption;
   }
@@ -175,39 +386,41 @@ function completionInsertValue(caption: string, qualifiedPrefix?: string) {
     : caption;
 }
 
-/** 将表列表拆为独立的 schema 和 table name 补全项（不输出 schema.table 合体） */
-function buildTableCompletionItems(qualifier?: string, baseScore = 1050, extraCteNames?: string[]) {
+function buildTableCompletionItems(context: ModelContext, qualifier?: string, baseScore = 1050, extraCteNames?: string[]): CompletionCandidate[] {
   const schemaSet = new Set<string>();
-  const items: Array<{ caption: string; value?: string; meta: string; score: number }> = [];
+  const items: CompletionCandidate[] = [];
 
-  for (const table of props.tables) {
+  for (const table of context.tables) {
     if (table.schema) {
       schemaSet.add(table.schema);
     }
 
     items.push({
-      caption: table.name,
-      value: completionInsertValue(table.name, qualifier),
+      label: table.name,
+      insertText: completionInsertValue(table.name, qualifier),
       meta: table.schema ? `${table.schema} · table` : 'table',
       score: baseScore,
+      kind: monaco.languages.CompletionItemKind.Struct,
+      labelDescription: table.schema ?? undefined,
     });
   }
 
   for (const schema of schemaSet) {
     items.push({
-      caption: schema,
+      label: schema,
       meta: 'schema',
       score: baseScore - 10,
+      kind: monaco.languages.CompletionItemKind.Module,
     });
   }
 
-  // CTE 名称也当作可引用的"表"
   if (extraCteNames) {
     for (const cteName of extraCteNames) {
       items.push({
-        caption: cteName,
+        label: cteName,
         meta: 'CTE',
         score: baseScore + 20,
+        kind: monaco.languages.CompletionItemKind.Struct,
       });
     }
   }
@@ -215,366 +428,267 @@ function buildTableCompletionItems(qualifier?: string, baseScore = 1050, extraCt
   return items;
 }
 
-function buildSqlCompleter(): AceCompleter {
-  return {
-    getCompletions: (_editor, session, pos, prefix, callback) => {
-      // 检查光标是否在字符串或注释内，如果是则不触发补全
-      const tokenAtCursor = session.getTokenAt(pos.row, pos.column);
-      if (tokenAtCursor && /\bstring\b|\bcomment\b/.test(tokenAtCursor.type)) {
-        callback(null, []);
-        return;
-      }
+function buildRoutineDocumentation(routine: RoutineInfo): string {
+  const routineLabel = routine.routineType === 'Procedure'
+    ? 'Stored Procedure'
+    : routine.routineType === 'ScalarFunction'
+      ? 'Scalar Function'
+      : routine.routineType === 'TableFunction'
+        ? 'Table Function'
+        : routine.routineType === 'AggregateFunction'
+          ? 'Aggregate Function'
+          : routine.routineType;
+  const paramRows = routine.parameters.length > 0
+    ? routine.parameters.map((param) => `- ${param.name} : ${param.dataType}${param.direction !== 'IN' ? ` (${param.direction})` : ''}`).join('\n')
+    : '- 无参数';
 
-      const lines = session.getDocument().getAllLines();
-      const currentLine = lines[pos.row] ?? '';
-      const beforeText = `${lines.slice(0, pos.row).join('\n')}${pos.row > 0 ? '\n' : ''}${currentLine.slice(0, pos.column)}`;
-      const sqlText = session.getValue();
-
-      // 异步触发 AST 分析（不阻塞当前补全）
-      triggerAstAnalysis(sqlText, beforeText);
-
-      const { aliases, referencedTables, cteNames } = extractAliases(sqlText);
-      const context = inferContext(beforeText);
-      const qualifierMatch = beforeText.match(/([A-Za-z_][\w$]*(?:\.[A-Za-z_][\w$]*)*)\.[A-Za-z_\d$]*$/i);
-      const qualifier = qualifierMatch?.[1];
-
-      // 检测 @ 或 @@ 全局变量前缀
-      const atMatch = beforeText.match(/@(@?\w*)$/);
-      const isAtContext = !!atMatch;
-
-      // eslint-disable-next-line no-useless-assignment
-      let items: AceCompletionItem[] = [];
-
-      if (isAtContext) {
-        // @ 或 @@ 全局变量模式
-        const completions = providerCompletions.value;
-        const typedAt = atMatch[1] ?? ''; // @@ 后输入的部分，如 @@VER → @VER 或 @V → V
-        const hasDoubleAt = typedAt.startsWith('@');
-        // 已输入 @@ 时，value 去掉 @@ 前缀；只输入 @ 时，去掉第一个 @
-        const sliceLen = hasDoubleAt ? 2 : 1;
-        items = toCompletionItems(completions.globalVariables.map((v) => ({
-          caption: v,
-          value: v.slice(sliceLen),
-          meta: 'variable',
-          score: 1200,
-        })));
-      }
-      else if (context === 'database') {
-        items = toCompletionItems(props.databases.map((database) => ({
-          caption: database,
-          meta: 'database',
-          score: 1100,
-        })));
-      }
-      else if (context === 'table') {
-        const completions = providerCompletions.value;
-        items = [
-          ...toCompletionItems(buildTableCompletionItems(qualifier, 1050, cteNames)),
-          ...toCompletionItems(completions.systemObjects.map((obj) => ({
-            caption: obj,
-            meta: 'system',
-            score: 1000,
-          }))),
-        ];
-      }
-      else if (context === 'qualified-column' && qualifier) {
-        const table = resolveTableReference(qualifier, aliases);
-        if (table) {
-          items = toCompletionItems(table.columns.map((column) => ({
-            caption: column,
-            meta: table.qualifiedName,
-            score: 1200,
-          })));
-        }
-        else {
-          // qualifier 不是表别名时，作为 schema 前缀匹配系统对象（如 sys. → objects, tables ...）
-          const completions = providerCompletions.value;
-          const qualLower = qualifier.toLowerCase();
-          items = [
-            ...toCompletionItems(buildTableCompletionItems(qualifier, 1100, cteNames)),
-            ...toCompletionItems(completions.systemObjects
-              .filter((obj) => obj.toLowerCase() !== qualLower) // 排除 schema 自身
-              .map((obj) => ({
-                caption: obj,
-                meta: `${qualifier} · system`,
-                score: 1050,
-              }))),
-          ];
-        }
-      }
-      else if (context === 'column') {
-        const referenced = props.tables.filter((table) => referencedTables.has(table.qualifiedName.toLowerCase()) || referencedTables.has(table.name.toLowerCase()));
-        const sourceTables = referenced.length ? referenced : props.tables.slice(0, 20);
-        const completions = providerCompletions.value;
-
-        // 收集别名作为点前缀补全项（输入别名后加 . 可触发列补全）
-        const aliasItems = [...aliases.keys()].map((alias) => ({
-          caption: alias,
-          meta: 'alias',
-          score: 1180,
-        }));
-
-        // CTE 名称也可在列上下文中引用
-        const cteItems = cteNames.map((cteName) => ({
-          caption: cteName,
-          meta: 'CTE',
-          score: 1170,
-        }));
-
-        items = [
-          ...toCompletionItems(sourceTables.flatMap((table) => table.columns.map((column) => ({
-            caption: column,
-            meta: table.qualifiedName,
-            score: 1150,
-          })))),
-          ...toCompletionItems(aliasItems),
-          ...toCompletionItems(cteItems),
-          ...toCompletionItems(completions.functions.map((fn) => ({
-            caption: fn,
-            meta: 'function',
-            score: 950,
-          }))),
-          ...toCompletionItems(completions.keywords.map((keyword) => ({
-            caption: keyword,
-            meta: 'keyword',
-            score: 900,
-          }))),
-        ];
-      }
-      else {
-        const completions = providerCompletions.value;
-        items = [
-          ...toCompletionItems(completions.keywords.map((keyword) => ({
-            caption: keyword,
-            meta: 'keyword',
-            score: 900,
-          }))),
-          ...toCompletionItems(completions.functions.map((fn) => ({
-            caption: fn,
-            meta: 'function',
-            score: 880,
-          }))),
-          ...toCompletionItems(completions.globalVariables.map((v) => ({
-            caption: v,
-            meta: 'variable',
-            score: 870,
-          }))),
-          ...toCompletionItems(completions.systemObjects.map((obj) => ({
-            caption: obj,
-            meta: 'system',
-            score: 860,
-          }))),
-          ...toCompletionItems(buildTableCompletionItems(qualifier, 850, cteNames)),
-          ...toCompletionItems(props.databases.map((database) => ({
-            caption: database,
-            meta: 'database',
-            score: 800,
-          }))),
-        ];
-      }
-
-      const deduped = new Map<string, AceCompletionItem>();
-      for (const item of items) {
-        const key = `${item.meta}:${item.caption.toLowerCase()}`;
-        if (!deduped.has(key)) {
-          deduped.set(key, item);
-        }
-      }
-
-      // 前缀匹配优先排序：完全前缀匹配的 score +200，包含匹配的不加分
-      const atContent = isAtContext ? (atMatch[1] ?? '').replace(/^@/, '') : '';
-      const effectivePrefix = isAtContext ? atContent.toLowerCase() : prefix.toLowerCase();
-      const results = [...deduped.values()]
-        .filter((item) => !effectivePrefix || item.caption.toLowerCase().includes(effectivePrefix))
-        .map((item) => {
-          if (effectivePrefix && item.caption.toLowerCase().startsWith(effectivePrefix)) {
-            return { ...item, score: item.score + 200 };
-          }
-
-          return item;
-        });
-
-      callback(null, results);
-    },
-  };
+  return `**${routine.name}**\n\n${routineLabel}${routine.schema ? ` · ${routine.schema}` : ''}\n\n${paramRows}`;
 }
 
-function applyCompleters(nextEditor: Ace.Editor) {
-  nextEditor.completers = [
-    buildSqlCompleter(),
-    languageTools.textCompleter,
-    languageTools.snippetCompleter,
-  ].filter(Boolean) as AceCompleter[];
+function buildRoutineCompletionItems(routines: RoutineInfo[], baseScore = 1040): CompletionCandidate[] {
+  return routines.map((routine) => ({
+    label: routine.name,
+    meta: routine.routineType,
+    score: baseScore,
+    kind: routine.routineType === 'Procedure'
+      ? monaco.languages.CompletionItemKind.Function
+      : monaco.languages.CompletionItemKind.Method,
+    labelDetail: routine.parameters.length > 0
+      ? ` (${routine.parameters.map((param) => `${param.dataType} ${param.name}`).join(', ')})`
+      : undefined,
+    labelDescription: routine.schema ?? undefined,
+    documentation: buildRoutineDocumentation(routine),
+  }));
 }
 
-function duplicateSelectionOrLine(nextEditor: Ace.Editor) {
-  if (nextEditor.selection.isEmpty()) {
-    nextEditor.copyLinesDown();
-    return;
+function toCompletionCandidates(items: Array<{ caption: string; value?: string; meta: string; score: number; kind: monaco.languages.CompletionItemKind; labelDescription?: string; documentation?: string }>): CompletionCandidate[] {
+  return items.map((item) => ({
+    label: item.caption,
+    insertText: item.value ?? item.caption,
+    meta: item.meta,
+    score: item.score,
+    kind: item.kind,
+    labelDescription: item.labelDescription,
+    documentation: item.documentation,
+  }));
+}
+
+function getTokenTypeAtPosition(sqlText: string, position: monaco.Position): string {
+  const tokenLines = monaco.editor.tokenize(sqlText, SQL_LANGUAGE_ID);
+  const lineTokens = tokenLines[position.lineNumber - 1] ?? [];
+  const currentColumn = Math.max(0, position.column - 1);
+
+  for (let index = 0; index < lineTokens.length; index++) {
+    const token = lineTokens[index]!;
+    const nextOffset = index + 1 < lineTokens.length ? lineTokens[index + 1]!.offset : Number.MAX_SAFE_INTEGER;
+    if (currentColumn >= token.offset && currentColumn < nextOffset) {
+      return token.type;
+    }
   }
 
-  nextEditor.duplicateSelection();
+  return '';
 }
 
-/**
- * 注册自定义 SQL 高亮模式到 Ace，支持 SSMS 风格着色：
- * - @@VARIABLE → variable.language（紫色）
- * - 内置函数 → support.function（紫色）
- * - GO → keyword（蓝色）
- * - 关键字 → keyword（蓝色）
- * - 数据类型 → storage.type
- */
-function registerCustomSqlMode(): void {
-  const completions = providerCompletions.value;
+function createSuggestionRange(position: monaco.Position, word: monaco.editor.IWordAtPosition | null | undefined): monaco.Range {
+  const startColumn = word?.startColumn ?? position.column;
+  const endColumn = word?.endColumn ?? position.column;
+  return new monaco.Range(position.lineNumber, startColumn, position.lineNumber, endColumn);
+}
 
-  // 构建查找集合（小写）
-  const keywordSet = new Set(completions.keywords.map((keyword) => keyword.toLowerCase()));
-  const functionSet = new Set(completions.functions.map((fn) => fn.toLowerCase()));
-  const globalVarSet = new Set(completions.globalVariables.map((v) => v.toLowerCase()));
+function buildSuggestions(currentModel: monaco.editor.ITextModel, position: monaco.Position): monaco.languages.CompletionItem[] {
+  const context = getModelContext(currentModel);
+  if (!context) {
+    return [];
+  }
 
-  const dataTypeSet = new Set([
-    'int', 'integer', 'bigint', 'smallint', 'tinyint', 'decimal', 'numeric',
-    'float', 'real', 'double', 'char', 'varchar', 'nchar', 'nvarchar', 'text',
-    'ntext', 'date', 'time', 'datetime', 'datetime2', 'datetimeoffset',
-    'smalldatetime', 'timestamp', 'bit', 'binary', 'varbinary', 'image',
-    'money', 'smallmoney', 'uniqueidentifier', 'xml', 'sql_variant',
-    'boolean', 'bool', 'serial', 'bigserial', 'blob', 'clob', 'json', 'jsonb',
-    'uuid', 'bytea', 'interval', 'cidr', 'inet', 'macaddr', 'rowversion',
-    'hierarchyid', 'geometry', 'geography',
-  ]);
+  const sqlText = currentModel.getValue();
+  const tokenType = getTokenTypeAtPosition(sqlText, position);
+  if (tokenType.includes('string') || tokenType.includes('comment')) {
+    return [];
+  }
 
-  const boolNullSet = new Set(['true', 'false', 'null']);
+  const beforeText = currentModel.getValueInRange(new monaco.Range(1, 1, position.lineNumber, position.column));
+  triggerAstAnalysis(context, sqlText, beforeText);
 
-  /** 根据标识符文本返回 token 类型（大小写不敏感） */
-  const classifyIdentifier = (value: string): string => {
-    const lower = value.toLowerCase();
+  const { aliases, referencedTables, cteNames } = extractAliases(sqlText, context);
+  const currentContextType = inferContext(beforeText);
+  const qualifierMatch = beforeText.match(/([A-Za-z_][\w$]*(?:\.[A-Za-z_][\w$]*)*)\.[A-Za-z_\d$]*$/i);
+  const qualifier = qualifierMatch?.[1];
+  const atMatch = beforeText.match(/@(@?\w*)$/);
+  const isAtContext = !!atMatch;
+  const defaultRange = createSuggestionRange(position, currentModel.getWordUntilPosition(position));
 
-    // @@VARIABLE（全局变量）
-    if (lower.startsWith('@@')) {
-      return globalVarSet.has(lower) ? 'variable.language' : 'invalid.illegal';
+  let items: CompletionCandidate[] = [];
+
+  if (isAtContext) {
+    const replaceLength = atMatch?.[0]?.length ?? 0;
+    const atRange = new monaco.Range(position.lineNumber, position.column - replaceLength, position.lineNumber, position.column);
+    items = providerCompletions.value.globalVariables.map((variable) => ({
+      label: variable,
+      insertText: variable,
+      filterText: variable,
+      meta: 'variable',
+      score: 1200,
+      kind: monaco.languages.CompletionItemKind.Variable,
+      range: atRange,
+    }));
+  } else if (currentContextType === 'database') {
+    items = context.databases.map((database) => ({
+      label: database,
+      meta: 'database',
+      score: 1100,
+      kind: monaco.languages.CompletionItemKind.Module,
+    }));
+  } else if (currentContextType === 'table') {
+    items = [
+      ...buildTableCompletionItems(context, qualifier, 1050, cteNames),
+      ...toCompletionCandidates(providerCompletions.value.systemObjects.map((objectName) => ({
+        caption: objectName,
+        meta: 'system',
+        score: 1000,
+        kind: monaco.languages.CompletionItemKind.Reference,
+      }))),
+    ];
+  } else if (currentContextType === 'qualified-column' && qualifier) {
+    const table = resolveTableReference(qualifier, aliases, context.tables);
+    if (table) {
+      items = table.columns.map((column) => ({
+        label: column,
+        meta: table.qualifiedName,
+        score: 1200,
+        kind: monaco.languages.CompletionItemKind.Field,
+      }));
+    } else {
+      const qualifierLower = qualifier.toLowerCase();
+      items = [
+        ...buildTableCompletionItems(context, qualifier, 1100, cteNames),
+        ...toCompletionCandidates(providerCompletions.value.systemObjects
+          .filter((objectName) => objectName.toLowerCase() !== qualifierLower)
+          .map((objectName) => ({
+            caption: objectName,
+            meta: `${qualifier} · system`,
+            score: 1050,
+            kind: monaco.languages.CompletionItemKind.Reference,
+          }))),
+      ];
     }
+  } else if (currentContextType === 'column') {
+    const referenced = context.tables.filter((table) => referencedTables.has(table.qualifiedName.toLowerCase()) || referencedTables.has(table.name.toLowerCase()));
+    const sourceTables = referenced.length > 0 ? referenced : context.tables.slice(0, 20);
+    const aliasItems = [...aliases.keys()].map((alias) => ({
+      label: alias,
+      meta: 'alias',
+      score: 1180,
+      kind: monaco.languages.CompletionItemKind.Variable,
+    }));
+    const cteItems = cteNames.map((cteName) => ({
+      label: cteName,
+      meta: 'CTE',
+      score: 1170,
+      kind: monaco.languages.CompletionItemKind.Struct,
+    }));
 
-    // @variable（用户变量）— 普通颜色
-    if (lower.startsWith('@')) {
-      return 'variable';
+    items = [
+      ...sourceTables.flatMap((table) => table.columns.map((column) => ({
+        label: column,
+        meta: table.qualifiedName,
+        score: 1150,
+        kind: monaco.languages.CompletionItemKind.Field,
+      }))),
+      ...aliasItems,
+      ...cteItems,
+      ...buildRoutineCompletionItems(context.routines, 960),
+      ...toCompletionCandidates(providerCompletions.value.functions.map((fn) => ({
+        caption: fn,
+        meta: 'function',
+        score: 950,
+        kind: monaco.languages.CompletionItemKind.Function,
+      }))),
+      ...toCompletionCandidates(providerCompletions.value.keywords.map((keyword) => ({
+        caption: keyword,
+        meta: 'keyword',
+        score: 900,
+        kind: monaco.languages.CompletionItemKind.Keyword,
+      }))),
+    ];
+  } else {
+    items = [
+      ...toCompletionCandidates(providerCompletions.value.keywords.map((keyword) => ({
+        caption: keyword,
+        meta: 'keyword',
+        score: 900,
+        kind: monaco.languages.CompletionItemKind.Keyword,
+      }))),
+      ...buildRoutineCompletionItems(context.routines, 890),
+      ...toCompletionCandidates(providerCompletions.value.functions.map((fn) => ({
+        caption: fn,
+        meta: 'function',
+        score: 880,
+        kind: monaco.languages.CompletionItemKind.Function,
+      }))),
+      ...toCompletionCandidates(providerCompletions.value.globalVariables.map((variable) => ({
+        caption: variable,
+        meta: 'variable',
+        score: 870,
+        kind: monaco.languages.CompletionItemKind.Variable,
+      }))),
+      ...toCompletionCandidates(providerCompletions.value.systemObjects.map((objectName) => ({
+        caption: objectName,
+        meta: 'system',
+        score: 860,
+        kind: monaco.languages.CompletionItemKind.Reference,
+      }))),
+      ...buildTableCompletionItems(context, qualifier, 850, cteNames),
+      ...context.databases.map((database) => ({
+        label: database,
+        meta: 'database',
+        score: 800,
+        kind: monaco.languages.CompletionItemKind.Module,
+      })),
+    ];
+  }
+
+  const deduped = new Map<string, CompletionCandidate>();
+  for (const item of items) {
+    const key = `${item.meta}:${item.label.toLowerCase()}`;
+    if (!deduped.has(key)) {
+      deduped.set(key, item);
     }
+  }
 
-    if (boolNullSet.has(lower)) {
-      return 'constant.language';
-    }
+  const typedPrefix = isAtContext
+    ? ((atMatch?.[1] ?? '').replace(/^@/, '').toLowerCase())
+    : currentModel.getWordUntilPosition(position).word.toLowerCase();
 
-    if (dataTypeSet.has(lower)) {
-      return 'storage.type';
-    }
+  return [...deduped.values()]
+    .filter((item) => !typedPrefix || item.label.toLowerCase().includes(typedPrefix))
+    .map((item) => {
+      const boostedScore = typedPrefix && item.label.toLowerCase().startsWith(typedPrefix)
+        ? item.score + 200
+        : item.score;
+      const label = item.labelDetail || item.labelDescription
+        ? {
+            label: item.label,
+            detail: item.labelDetail,
+            description: item.labelDescription,
+          }
+        : item.label;
 
-    // 函数优先于关键字（关键字兼函数的保留为关键字）
-    if (functionSet.has(lower) && !keywordSet.has(lower)) {
-      return 'support.function';
-    }
-
-    if (keywordSet.has(lower)) {
-      return 'keyword';
-    }
-
-    return 'identifier';
-  };
-
-  const oop = ace.require('ace/lib/oop');
-  const TextHighlightRules = ace.require('ace/mode/text_highlight_rules').TextHighlightRules;
-  const TextMode = ace.require('ace/mode/text').Mode;
-
-  // 定义高亮规则
-  const CustomSqlHighlightRules = function (this: { $rules: Record<string, unknown[]>; normalizeRules: () => void }) {
-    this.$rules = {
-      start: [
-        // 行注释
-        { token: 'comment', regex: '--.*$' },
-        // 块注释
-        { token: 'comment', regex: '/\\*', next: 'comment' },
-        // N'...' Unicode 字符串前缀（SQL Server）
-        { token: 'string', regex: "N'", next: 'qstring' },
-        // 单引号字符串
-        { token: 'string', regex: "'", next: 'qstring' },
-        // 双引号标识符
-        { token: 'string', regex: '"', next: 'qqstring' },
-        // [bracket] 标识符（SQL Server）
-        { token: 'string', regex: '\\[', next: 'bstring' },
-        // 反引号标识符（MySQL）
-        { token: 'string', regex: '`', next: 'btstring' },
-        // 数字
-        { token: 'constant.numeric', regex: '[+-]?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b' },
-        // @@VARIABLE / @variable / 普通标识符 — 使用函数动态分类
-        { token: classifyIdentifier, regex: '@@\\w+|@\\w+|[A-Za-z_$][A-Za-z0-9_$#]*' },
-        // 运算符
-        { token: 'keyword.operator', regex: '[<>=!]=?|[+\\-*/%&|^~]|\\|\\|' },
-        // 括号
-        { token: 'paren.lparen', regex: '[(]' },
-        { token: 'paren.rparen', regex: '[)]' },
-        // 标点
-        { token: 'punctuation', regex: '[,;.]' },
-        // 空白
-        { token: 'text', regex: '\\s+' },
-      ],
-      comment: [
-        { token: 'comment', regex: '\\*/', next: 'start' },
-        { token: 'comment', regex: '.+' },
-      ],
-      qstring: [
-        { token: 'string', regex: "''", merge: true },
-        { token: 'string', regex: "'", next: 'start' },
-        { token: 'string', regex: "[^']+", merge: true },
-      ],
-      qqstring: [
-        { token: 'string', regex: '""', merge: true },
-        { token: 'string', regex: '"', next: 'start' },
-        { token: 'string', regex: '[^"]+', merge: true },
-      ],
-      bstring: [
-        { token: 'string', regex: '\\]\\]', merge: true },
-        { token: 'string', regex: '\\]', next: 'start' },
-        { token: 'string', regex: '[^\\]]+', merge: true },
-      ],
-      btstring: [
-        { token: 'string', regex: '``', merge: true },
-        { token: 'string', regex: '`', next: 'start' },
-        { token: 'string', regex: '[^`]+', merge: true },
-      ],
-    };
-
-    this.normalizeRules();
-  };
-
-  oop.inherits(CustomSqlHighlightRules, TextHighlightRules);
-
-  // 定义自定义 mode
-  const CustomSqlMode = function (this: { HighlightRules: unknown; $behaviour: unknown }) {
-    this.HighlightRules = CustomSqlHighlightRules;
-  };
-
-  oop.inherits(CustomSqlMode, TextMode);
-
-  // 注册到 Ace
-  (ace as unknown as { define: (name: string, deps: string[], factory: (req: unknown, exp: Record<string, unknown>) => void) => void })
-    .define('ace/mode/custom_sql', [], (_require: unknown, exports: Record<string, unknown>) => {
-      exports.Mode = CustomSqlMode;
+      return {
+        label,
+        kind: item.kind,
+        insertText: item.insertText ?? item.label,
+        filterText: item.filterText,
+        detail: item.meta,
+        documentation: item.documentation ? { value: item.documentation } : undefined,
+        range: item.range ?? defaultRange,
+        sortText: String(999999 - boostedScore).padStart(6, '0'),
+      } satisfies monaco.languages.CompletionItem;
     });
 }
 
-// ── @variable 声明检查 ──
-
-/** 活跃的错误标记 ID 列表 */
-let activeVarMarkerIds: number[] = [];
-/** 防抖定时器 */
-let varValidationTimer: ReturnType<typeof setTimeout> | null = null;
-
-/**
- * 从 SQL 文本中提取所有 DECLARE @variable 声明的变量名（小写）。
- * 支持：DECLARE @a INT, @b VARCHAR(50) = 'hello'
- */
 function extractDeclaredVariables(sql: string): Set<string> {
-  const vars = new Set<string>();
-
-  // 匹配 DECLARE 后到分号/语句结束之间的所有 @varname
+  const variables = new Set<string>();
   const declareBlockRegex = /\bDECLARE\b\s+([\s\S]*?)(?=\b(?:SELECT|INSERT|UPDATE|DELETE|EXEC|EXECUTE|IF|WHILE|BEGIN|PRINT|RETURN|SET)\b|;|$)/gi;
   let blockMatch: RegExpExecArray | null;
   while ((blockMatch = declareBlockRegex.exec(sql)) !== null) {
@@ -583,24 +697,22 @@ function extractDeclaredVariables(sql: string): Set<string> {
       continue;
     }
 
-    const varRegex = /@(\w+)/g;
-    let varMatch: RegExpExecArray | null;
-    while ((varMatch = varRegex.exec(body)) !== null) {
-      vars.add(`@${varMatch[1]!.toLowerCase()}`);
+    const variableRegex = /@(\w+)/g;
+    let variableMatch: RegExpExecArray | null;
+    while ((variableMatch = variableRegex.exec(body)) !== null) {
+      variables.add(`@${variableMatch[1]!.toLowerCase()}`);
     }
   }
 
-  // 也提取 SET @varname = ... 中的变量名（隐式声明）
   const setRegex = /\bSET\s+(@\w+)\s*=/gi;
   let setMatch: RegExpExecArray | null;
   while ((setMatch = setRegex.exec(sql)) !== null) {
     if (setMatch[1]) {
-      vars.add(setMatch[1].toLowerCase());
+      variables.add(setMatch[1].toLowerCase());
     }
   }
 
-  // 存储过程参数 @paramName
-  const procParamRegex = /\bCREATE\s+(?:PROC|PROCEDURE)\b\s+\S+\s+([\s\S]*?)\bAS\b/gi;
+  const procParamRegex = /\b(?:CREATE|ALTER)\s+(?:PROC|PROCEDURE)\b\s+\S+\s+([\s\S]*?)\bAS\b/gi;
   let procMatch: RegExpExecArray | null;
   while ((procMatch = procParamRegex.exec(sql)) !== null) {
     const paramBody = procMatch[1];
@@ -611,405 +723,492 @@ function extractDeclaredVariables(sql: string): Set<string> {
     const paramVarRegex = /@(\w+)/g;
     let paramVarMatch: RegExpExecArray | null;
     while ((paramVarMatch = paramVarRegex.exec(paramBody)) !== null) {
-      vars.add(`@${paramVarMatch[1]!.toLowerCase()}`);
+      variables.add(`@${paramVarMatch[1]!.toLowerCase()}`);
     }
   }
 
-  return vars;
+  return variables;
 }
 
-/**
- * 验证 SQL 中的 @variable 引用是否已声明，未声明的添加红色波浪线标记。
- * 优先使用 AST 分析结果，fallback 到正则表达式。
- * 仅对 SQL Server (sqlserver) provider 生效。
- */
-function validateVariableDeclarations(nextEditor: Ace.Editor): void {
-  const session = nextEditor.session;
+function collectMarkersByLineScan(currentModel: monaco.editor.ITextModel, declaredVariables: Set<string>): monaco.editor.IMarkerData[] {
+  const markers: monaco.editor.IMarkerData[] = [];
+  for (let lineNumber = 1; lineNumber <= currentModel.getLineCount(); lineNumber++) {
+    const line = currentModel.getLineContent(lineNumber);
+    const variableRegex = /(?<!@)@(?!@)\w+/g;
+    let match: RegExpExecArray | null;
+    while ((match = variableRegex.exec(line)) !== null) {
+      const fullVariable = match[0];
+      if (declaredVariables.has(fullVariable.toLowerCase())) {
+        continue;
+      }
 
-  // 清除旧标记
-  for (const markerId of activeVarMarkerIds) {
-    session.removeMarker(markerId);
+      markers.push({
+        severity: monaco.MarkerSeverity.Error,
+        message: `未声明的变量 ${fullVariable}`,
+        startLineNumber: lineNumber,
+        startColumn: match.index + 1,
+        endLineNumber: lineNumber,
+        endColumn: match.index + fullVariable.length + 1,
+      });
+    }
   }
 
-  activeVarMarkerIds = [];
+  return markers;
+}
 
-  // 仅 SQL Server 有 @variable 语法
-  if (props.provider !== 'sqlserver') {
+function collectGlobalVariableMarkers(currentModel: monaco.editor.ITextModel): monaco.editor.IMarkerData[] {
+  const markers: monaco.editor.IMarkerData[] = [];
+  for (let lineNumber = 1; lineNumber <= currentModel.getLineCount(); lineNumber++) {
+    const line = currentModel.getLineContent(lineNumber);
+    const globalVariableRegex = /@@\w+/g;
+    let match: RegExpExecArray | null;
+    while ((match = globalVariableRegex.exec(line)) !== null) {
+      const fullVariable = match[0].toLowerCase();
+      if (highlightGlobalVariables.includes(fullVariable)) {
+        continue;
+      }
+
+      markers.push({
+        severity: monaco.MarkerSeverity.Error,
+        message: `不存在的全局变量 ${match[0]}`,
+        startLineNumber: lineNumber,
+        startColumn: match.index + 1,
+        endLineNumber: lineNumber,
+        endColumn: match.index + match[0].length + 1,
+      });
+    }
+  }
+
+  return markers;
+}
+
+function applyValidationState(currentModel: monaco.editor.ITextModel, markers: monaco.editor.IMarkerData[]): void {
+  monaco.editor.setModelMarkers(currentModel, MONACO_OWNER, markers);
+
+  if (!editor) {
     return;
   }
 
-  const sql = session.getValue();
-  const Range = ace.require('ace/range').Range as new (
-    startRow: number, startCol: number, endRow: number, endCol: number,
-  ) => Ace.Range;
+  const invalidGlobalDecorations = markers
+    .filter((marker) => marker.message.startsWith('不存在的全局变量'))
+    .map((marker) => ({
+      range: new monaco.Range(marker.startLineNumber, marker.startColumn, marker.endLineNumber, marker.endColumn),
+      options: {
+        inlineClassName: 'dbv-invalid-global-variable',
+      },
+    }));
 
-  // 优先使用 AST 分析结果
-  if (cachedAstAnalysis && cachedAstAnalysis.declaredVariables.length >= 0) {
-    const declaredSet = new Set(cachedAstAnalysis.declaredVariables);
+  invalidGlobalDecorationIds = editor.deltaDecorations(invalidGlobalDecorationIds, invalidGlobalDecorations);
+}
 
-    // AST 有位置信息时，直接从引用列表中检查
-    if (cachedAstAnalysis.referencedVariables.length > 0) {
-      for (const ref of cachedAstAnalysis.referencedVariables) {
-        if (!declaredSet.has(ref.name) && !ref.name.startsWith('@@')) {
-          // AST 位置可能为 0（无位置信息），fallback 到行扫描
-          if (ref.line >= 0 && ref.column >= 0) {
-            const range = new Range(ref.line, ref.column, ref.line, ref.column + ref.name.length);
-            const markerId = session.addMarker(range, 'sql-var-undeclared', 'text', false);
-            activeVarMarkerIds.push(markerId);
-          }
+function validateVariableDeclarations(currentModel: monaco.editor.ITextModel): void {
+  const context = getModelContext(currentModel);
+  if (!context || context.provider !== 'sqlserver') {
+    applyValidationState(currentModel, []);
+    return;
+  }
+
+  if (context.astAnalysis && context.astAnalysis.declaredVariables.length >= 0) {
+    const declaredSet = new Set(context.astAnalysis.declaredVariables);
+    if (context.astAnalysis.referencedVariables.length > 0) {
+      const markers = context.astAnalysis.referencedVariables.flatMap((reference) => {
+        const lineNumber = reference.line + 1;
+        const lineContent = currentModel.getLineContent(lineNumber);
+        const zeroBasedColumn = Math.max(0, reference.column);
+        const hasGlobalPrefix = zeroBasedColumn > 0 && lineContent[zeroBasedColumn - 1] === '@';
+        const normalizedName = reference.name.toLowerCase();
+
+        if (hasGlobalPrefix) {
+          return [];
         }
-      }
 
+        if (declaredSet.has(normalizedName)) {
+          return [];
+        }
+
+        return [{
+          severity: monaco.MarkerSeverity.Error,
+          message: `未声明的变量 ${reference.name}`,
+          startLineNumber: lineNumber,
+          startColumn: reference.column + 1,
+          endLineNumber: lineNumber,
+          endColumn: reference.column + reference.name.length + 1,
+        } satisfies monaco.editor.IMarkerData];
+      });
+      applyValidationState(currentModel, [...markers, ...collectGlobalVariableMarkers(currentModel)]);
       return;
     }
 
-    // AST 无位置信息时，用 regex 扫描行并与声明集合比较
-    markUndeclaredByLineScan(session, declaredSet, Range);
+    applyValidationState(currentModel, [
+      ...collectMarkersByLineScan(currentModel, declaredSet),
+      ...collectGlobalVariableMarkers(currentModel),
+    ]);
     return;
   }
 
-  // Fallback: 纯 regex 分析
-  const declaredVars = extractDeclaredVariables(sql);
-  markUndeclaredByLineScan(session, declaredVars, Range);
+  applyValidationState(currentModel, [
+    ...collectMarkersByLineScan(currentModel, extractDeclaredVariables(currentModel.getValue())),
+    ...collectGlobalVariableMarkers(currentModel),
+  ]);
 }
 
-/** 逐行扫描 @variable 并标记未声明的 */
-function markUndeclaredByLineScan(
-  session: Ace.EditSession,
-  declaredVars: Set<string>,
-  Range: new (sr: number, sc: number, er: number, ec: number) => Ace.Range,
-): void {
-  const lines = session.getDocument().getAllLines();
-
-  for (let row = 0; row < lines.length; row++) {
-    const line = lines[row]!;
-    const varRegex = /(?<!@)@(?!@)\w+/g;
-    let match: RegExpExecArray | null;
-    while ((match = varRegex.exec(line)) !== null) {
-      const fullVar = match[0];
-      const col = match.index;
-
-      if (!declaredVars.has(fullVar.toLowerCase())) {
-        const range = new Range(row, col, row, col + fullVar.length);
-        const markerId = session.addMarker(range, 'sql-var-undeclared', 'text', false);
-        activeVarMarkerIds.push(markerId);
-      }
-    }
-  }
-}
-
-/** 防抖调度变量验证（300ms） */
-function scheduleVariableValidation(nextEditor: Ace.Editor): void {
-  if (varValidationTimer) {
-    clearTimeout(varValidationTimer);
+function scheduleVariableValidation(currentModel: monaco.editor.ITextModel): void {
+  if (validationTimer) {
+    clearTimeout(validationTimer);
   }
 
-  varValidationTimer = setTimeout(() => {
-    validateVariableDeclarations(nextEditor);
+  validationTimer = setTimeout(() => {
+    validateVariableDeclarations(currentModel);
   }, 300);
 }
 
-function configureEditor(nextEditor: Ace.Editor) {
-  // 注册并使用自定义 SQL 高亮模式
-  registerCustomSqlMode();
-  nextEditor.session.setMode(new (ace.require('ace/mode/custom_sql').Mode as new () => Ace.SyntaxMode)());
-  nextEditor.setTheme('ace/theme/textmate');
+function cutLineOrSelection(instance: monaco.editor.IStandaloneCodeEditor): void {
+  const currentModel = instance.getModel();
+  const selections = instance.getSelections();
+  if (!currentModel || !selections || selections.length === 0) {
+    return;
+  }
 
-  nextEditor.setShowPrintMargin(false);
-  nextEditor.setHighlightActiveLine(true);
-  nextEditor.setHighlightGutterLine(true);
-  nextEditor.setOption('fontSize', '12px');
-  nextEditor.setOption('fontFamily', "'Cascadia Code', 'JetBrains Mono', 'Cascadia Mono', 'Consolas', monospace");
-  nextEditor.setOption('wrap', false);
-  nextEditor.setOption('useSoftTabs', true);
-  nextEditor.setOption('tabSize', 2);
-  nextEditor.setOption('animatedScroll', false);
-  nextEditor.setOption('showLineNumbers', true);
-  nextEditor.setOption('showGutter', true);
-  nextEditor.setOption('displayIndentGuides', false);
-  nextEditor.setOption('scrollPastEnd', 0.08);
-  nextEditor.setOption('enableBasicAutocompletion', true);
-  nextEditor.setOption('enableLiveAutocompletion', true);
-  nextEditor.setOption('enableSnippets', false);
-  applyCompleters(nextEditor);
+  if (selections.some((selection: monaco.Selection) => !selection.isEmpty())) {
+    const selectedText = selections.map((selection: monaco.Selection) => currentModel.getValueInRange(selection)).join(currentModel.getEOL());
+    void navigator.clipboard.writeText(selectedText);
+    instance.executeEdits('dbv-cut-selection', selections.map((selection: monaco.Selection) => ({ range: selection, text: '' })));
+    return;
+  }
 
-  nextEditor.commands.addCommand({
-    name: 'executeSqlF5',
-    bindKey: { win: 'F5', mac: 'F5' },
-    exec: () => emit('execute'),
-  });
+  const position = instance.getPosition();
+  if (!position) {
+    return;
+  }
 
-  nextEditor.commands.addCommand({
-    name: 'executeSqlCtrlEnter',
-    bindKey: { win: 'Ctrl-Enter', mac: 'Command-Enter' },
-    exec: () => emit('execute'),
-  });
+  const lineNumber = position.lineNumber;
+  const lineText = currentModel.getLineContent(lineNumber);
+  const endLineNumber = lineNumber < currentModel.getLineCount() ? lineNumber + 1 : lineNumber;
+  const endColumn = lineNumber < currentModel.getLineCount() ? 1 : currentModel.getLineMaxColumn(lineNumber);
+  const textToCopy = lineText + (lineNumber < currentModel.getLineCount() ? currentModel.getEOL() : '');
 
-  nextEditor.commands.addCommand({
-    name: 'duplicateLikeVisualStudio',
-    bindKey: { win: 'Ctrl-D', mac: 'Command-D' },
-    exec: (instance) => {
-      duplicateSelectionOrLine(instance);
+  void navigator.clipboard.writeText(textToCopy);
+  instance.executeEdits('dbv-cut-line', [{
+    range: new monaco.Range(lineNumber, 1, endLineNumber, endColumn),
+    text: '',
+  }]);
+}
+
+function createModelContext(): ModelContext {
+  return {
+    provider: props.provider,
+    database: props.database,
+    databases: [...props.databases],
+    tables: [...props.tables],
+    routines: [...props.routines],
+    astAnalysis: null,
+    astSql: '',
+    astPending: false,
+  };
+}
+
+function syncModelContext(): void {
+  if (!model) {
+    return;
+  }
+
+  const currentContext = getModelContext(model) ?? createModelContext();
+  currentContext.provider = props.provider;
+  currentContext.database = props.database;
+  currentContext.databases = [...props.databases];
+  currentContext.tables = [...props.tables];
+  currentContext.routines = [...props.routines];
+  currentContext.astAnalysis = null;
+  currentContext.astSql = '';
+  modelContexts.set(model.uri.toString(), currentContext);
+}
+
+function createEditor(): void {
+  if (!hostRef.value) {
+    return;
+  }
+
+  editorReady.value = false;
+
+  ensureMonacoRegistration();
+  monaco.editor.setTheme(SQL_THEME_ID);
+
+  modelCounter += 1;
+  const uri = monaco.Uri.parse(`inmemory://database-viewer/sql-${modelCounter}.sql`);
+  model = monaco.editor.createModel(props.modelValue, SQL_LANGUAGE_ID, uri);
+  modelContexts.set(uri.toString(), createModelContext());
+
+  editor = monaco.editor.create(hostRef.value, {
+    model,
+    theme: SQL_THEME_ID,
+    automaticLayout: true,
+    fontFamily: "'Cascadia Code', 'JetBrains Mono', 'Cascadia Mono', 'Consolas', monospace",
+    fontSize: editorFontSize.value,
+    lineNumbers: 'on',
+    glyphMargin: false,
+    folding: false,
+    minimap: { enabled: false },
+    renderLineHighlight: 'line',
+    guides: { indentation: false },
+    wordWrap: 'off',
+    insertSpaces: true,
+    tabSize: 2,
+    scrollBeyondLastLine: false,
+    smoothScrolling: false,
+    contextmenu: true,
+    mouseWheelZoom: true,
+    dragAndDrop: true,
+    fixedOverflowWidgets: true,
+    hover: {
+      above: false,
     },
-    readOnly: false,
-  });
-
-  // Ctrl+X：无选区时剪切当前行，有选区时正常剪切
-  nextEditor.commands.addCommand({
-    name: 'cutLineOrSelection',
-    bindKey: { win: 'Ctrl-X', mac: 'Command-X' },
-    exec: (instance) => {
-      if (instance.selection.isEmpty()) {
-        const row = instance.getCursorPosition().row;
-        const line = instance.session.getLine(row);
-        const lineText = line + (row < instance.session.getLength() - 1 ? '\n' : '');
-        navigator.clipboard.writeText(lineText);
-        instance.session.remove({
-          start: { row, column: 0 },
-          end: { row: row + 1, column: 0 },
-        } as Ace.Range);
-      } else {
-        const selectedText = instance.getSelectedText();
-        navigator.clipboard.writeText(selectedText);
-        instance.session.remove(instance.getSelectionRange());
-      }
+    quickSuggestions: {
+      other: true,
+      comments: false,
+      strings: false,
     },
-    readOnly: false,
+    quickSuggestionsDelay: 0,
+    suggestOnTriggerCharacters: true,
+    acceptSuggestionOnEnter: 'on',
+    suggest: {
+      showWords: false,
+      showSnippets: false,
+      preview: false,
+      selectionMode: 'always',
+    },
+    scrollbar: {
+      verticalScrollbarSize: 10,
+      horizontalScrollbarSize: 10,
+    },
+    padding: {
+      top: 0,
+      bottom: 8,
+    },
   });
 
-  nextEditor.session.on('change', () => {
-    if (suppressModelSync) {
+  editor.addCommand(monaco.KeyCode.F5, () => emit('execute'));
+  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => emit('execute'));
+  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyD, () => {
+    void editor?.getAction('editor.action.copyLinesDownAction')?.run();
+  });
+  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyX, () => {
+    if (editor) {
+      cutLineOrSelection(editor);
+    }
+  });
+
+  editor.onDidChangeModelContent(() => {
+    if (!editor || !model || suppressModelSync) {
       return;
     }
 
-    emit('update:modelValue', nextEditor.getValue());
+    const value = model.getValue();
+    emit('update:modelValue', value);
 
-    // 延迟验证 @variable 声明
-    scheduleVariableValidation(nextEditor);
+    const currentContext = getModelContext(model);
+    if (currentContext) {
+      triggerAstAnalysis(currentContext, value, value);
+    }
+
+    scheduleVariableValidation(model);
   });
 
-  // 输入 . 或 @ 时自动触发补全列表
-  nextEditor.commands.on('afterExec', ((event: { command: { name: string } }) => {
-    if (event.command.name === 'insertstring') {
-      const cursor = nextEditor.getCursorPosition();
-      const line = nextEditor.session.getLine(cursor.row);
-      const charBefore = line[cursor.column - 1];
-
-      if (charBefore === '.' || charBefore === '@') {
-        nextEditor.execCommand('startAutocomplete');
-      }
-
-      // 每次击键后强制补全列表滚动到第一项（最高分项）
-      requestAnimationFrame(() => {
-        const comp = (nextEditor as unknown as Record<string, unknown>).completer as
-          { popup?: { isOpen?: boolean; setRow?: (row: number) => void } } | undefined;
-
-        if (comp?.popup?.isOpen) {
-          comp.popup.setRow?.(0);
-        }
-      });
+  editor.onDidChangeConfiguration((event: monaco.editor.ConfigurationChangedEvent) => {
+    if (event.hasChanged(monaco.editor.EditorOption.fontSize) && editor) {
+      editorFontSize.value = editor.getOption(monaco.editor.EditorOption.fontSize);
     }
-  }) as Parameters<typeof nextEditor.commands.on>[1]);
+  });
 
-  // 阻止编辑器区域滚轮事件关闭补全列表 + Ctrl+滚轮缩放编辑器字号
-  nextEditor.container.addEventListener('wheel', (event) => {
-    // Ctrl+滚轮：缩放编辑器字号（阻止页面缩放）
-    if (event.ctrlKey) {
-      event.preventDefault();
-      event.stopPropagation();
-      const currentSize = parseInt(nextEditor.getOption('fontSize') as string, 10) || 12;
-      const delta = event.deltaY < 0 ? 1 : -1;
-      const newSize = Math.max(8, Math.min(36, currentSize + delta));
-      nextEditor.setOption('fontSize', `${newSize}px`);
+  editor.onMouseDown((event) => {
+    if (!editor || !event.target.position) {
+      selectionClickState = null;
       return;
     }
 
-    const completer = (nextEditor as unknown as Record<string, unknown>).completer as
-      { popup?: { container?: HTMLElement } } | undefined;
-    const popupEl = completer?.popup?.container;
-    const isPopupVisible = popupEl != null && popupEl.style.display !== 'none';
-
-    if (isPopupVisible && popupEl.contains(event.target as Node)) {
-      return; // 滚轮在补全列表内，不阻止
+    const currentSelection = editor.getSelection();
+    if (!currentSelection || currentSelection.isEmpty() || !currentSelection.containsPosition(event.target.position)) {
+      selectionClickState = null;
+      return;
     }
 
-    if (isPopupVisible) {
-      event.stopPropagation(); // 阻止向上冒泡，防止 Ace 的 blurListener 关闭弹窗
+    selectionClickState = {
+      selection: currentSelection,
+      position: event.target.position,
+      moved: false,
+    };
+  });
+
+  editor.onMouseMove((event) => {
+    if (!selectionClickState || !event.target.position) {
+      return;
     }
-  }, { capture: true });
+
+    if (event.target.position.lineNumber !== selectionClickState.position.lineNumber
+      || event.target.position.column !== selectionClickState.position.column) {
+      selectionClickState.moved = true;
+    }
+  });
+
+  editor.onMouseUp((event) => {
+    if (!editor || !selectionClickState) {
+      return;
+    }
+
+    const clickState = selectionClickState;
+    selectionClickState = null;
+
+    const targetPosition = event.target.position ?? clickState.position;
+    const currentSelection = editor.getSelection();
+    if (!targetPosition || !currentSelection || currentSelection.isEmpty()) {
+      return;
+    }
+
+    if (clickState.moved || !currentSelection.equalsSelection(clickState.selection) || !currentSelection.containsPosition(targetPosition)) {
+      return;
+    }
+
+    editor.setPosition(targetPosition);
+    editor.setSelection(new monaco.Selection(targetPosition.lineNumber, targetPosition.column, targetPosition.lineNumber, targetPosition.column));
+    editor.focus();
+  });
+
+  syncModelContext();
+  validateVariableDeclarations(model);
+  editor.layout();
+
+  requestAnimationFrame(() => {
+    editorReady.value = true;
+  });
 }
 
 onMounted(() => {
-  if (!hostRef.value) {
-    return;
-  }
-
-  editor = ace.edit(hostRef.value);
-  configureEditor(editor);
-  suppressModelSync = true;
-  editor.setValue(props.modelValue, -1);
-  suppressModelSync = false;
-  hostRef.value.style.height = `${props.height}px`;
-  editor.resize();
+  requestAnimationFrame(() => {
+    createEditor();
+  });
 });
 
 watch(() => props.modelValue, (value) => {
-  if (!editor) {
+  if (!editor || !model) {
     return;
   }
 
-  const current = editor.getValue();
-  if (current === value) {
+  const currentValue = model.getValue();
+  if (currentValue === value) {
     return;
   }
 
-  const position = editor.getCursorPosition();
+  const selection = editor.getSelection();
   suppressModelSync = true;
-  editor.setValue(value, -1);
-  editor.moveCursorToPosition(position);
+  model.pushEditOperations([], [{ range: model.getFullModelRange(), text: value }], () => selection ? [selection] : null);
   suppressModelSync = false;
 });
 
-watch(() => props.height, (height) => {
-  if (!hostRef.value) {
-    return;
-  }
-
-  hostRef.value.style.height = `${height}px`;
-  editor?.resize();
+watch(() => props.height, () => {
+  editor?.layout();
 }, { immediate: true });
 
-watch(() => [props.provider, props.database, props.databases.join('|'), props.tables.map((table) => `${table.qualifiedName}:${table.columns.join(',')}`).join('|')] as const, () => {
-  if (!editor) {
-    return;
+watch(() => [
+  props.provider,
+  props.database,
+  props.databases.join('|'),
+  props.tables.map((table) => `${table.qualifiedName}:${table.columns.join(',')}`).join('|'),
+  props.routines.map((routine) => `${routine.schema ?? ''}.${routine.name}:${routine.parameters.map((param) => `${param.name}:${param.dataType}`).join(',')}`).join('|'),
+] as const, () => {
+  syncModelContext();
+  if (model) {
+    validateVariableDeclarations(model);
   }
-
-  // provider 或数据库变化时重置 AST 缓存
-  cachedAstAnalysis = null;
-  cachedAstSql = '';
-
-  // 重设 mode 并重新应用高亮规则
-  registerCustomSqlMode();
-  editor.session.setMode(new (ace.require('ace/mode/custom_sql').Mode as new () => Ace.SyntaxMode)());
-
-  applyCompleters(editor);
 });
 
 onBeforeUnmount(() => {
-  editor?.destroy();
+  if (validationTimer) {
+    clearTimeout(validationTimer);
+  }
+
+  if (model) {
+    monaco.editor.setModelMarkers(model, MONACO_OWNER, []);
+    modelContexts.delete(model.uri.toString());
+    model.dispose();
+    model = null;
+  }
+
+  if (editor) {
+    invalidGlobalDecorationIds = editor.deltaDecorations(invalidGlobalDecorationIds, []);
+  }
+
+  editor?.dispose();
   editor = null;
 });
 </script>
 
 <template>
-  <div ref="hostRef" class="sql-code-editor" />
+  <div
+    ref="hostRef"
+    class="sql-code-editor"
+    :class="{ 'sql-code-editor-ready': editorReady }"
+    :style="{ height: fill ? '100%' : `${height}px` }"
+  ></div>
 </template>
-
-<style scoped lang="scss">
-.sql-code-editor {
-  width: 100%;
-
-  // Ace editor 内部 token 高亮覆盖（SSMS 风格）
-  :deep(.ace_variable.ace_language) {
-    color: #ff00ff; // @@VERSION 等全局变量 — 紫色
-  }
-
-  :deep(.ace_support.ace_function) {
-    color: #ff00ff; // GETDATE / NEWID 等内置函数 — 紫色
-  }
-
-  :deep(.ace_invalid.ace_illegal) {
-    color: #dc2626; // @@abc 等无效全局变量 — 红色
-    text-decoration: wavy underline #dc2626;
-    text-underline-offset: 2px;
-  }
-
-  // 未声明的 @variable — 红色波浪下划线
-  :deep(.sql-var-undeclared) {
-    position: absolute;
-    border-bottom: 2px wavy #dc2626;
-  }
-}
-</style>
 
 <style scoped lang="scss">
 .sql-code-editor {
   width: 100%;
   min-height: 160px;
   border: 1px solid $color-border-light;
-  border-radius: $gap-2xl;
+  border-radius: 0;
   overflow: hidden;
   background: $color-surface-white;
+  opacity: 0;
 
-  :deep(.ace_editor) {
-    font-family: $font-family-mono-ext;
-    font-size: $font-size-md;
-    line-height: 1.55;
+  &-ready {
+    opacity: 1;
+  }
+
+  :deep(.monaco-editor),
+  :deep(.monaco-editor .margin),
+  :deep(.monaco-editor .monaco-editor-background) {
     background: $color-surface-white;
-    color: $color-text-primary;
   }
 
-  :deep(.ace_gutter) {
+  :deep(.monaco-editor .margin) {
     background: $color-surface-light;
+  }
+
+  :deep(.monaco-editor .line-numbers) {
     color: $color-text-secondary;
-    border-right: 1px solid rgba(148, 163, 184, 0.14);
   }
 
-  :deep(.ace_active-line),
-  :deep(.ace_gutter-active-line) {
-    background: rgba(219, 234, 254, 0.55);
+  :deep(.monaco-editor .current-line),
+  :deep(.monaco-editor .current-line-margin) {
+    border: none !important;
   }
 
-  :deep(.ace_cursor) {
-    color: $color-text-primary;
+  :deep(.monaco-editor .squiggly-error) {
+    border-bottom-width: 2px;
   }
 
-  :deep(.ace_marker-layer .ace_selection) {
-    background: rgba(191, 219, 254, 0.7);
+  :deep(.monaco-editor .dbv-invalid-global-variable) {
+    color: #dc2626 !important;
   }
 
-  :deep(.ace_keyword) {
-    color: $color-accent-blue-dark;
+  :deep(.monaco-editor .suggest-widget) {
+    border-radius: 0;
+    box-shadow: 0 20px 44px $shadow-medium;
+    overflow: hidden;
+  }
+
+  :deep(.monaco-editor .suggest-widget .monaco-list-row .contents) {
+    font-family: $font-family-mono-ext;
+  }
+
+  :deep(.monaco-editor .suggest-widget .monaco-highlighted-label .highlight) {
     font-weight: 700;
   }
 
-  :deep(.ace_string) {
-    color: #ff0000;
-  }
-
-  :deep(.ace_constant.ace_numeric) {
-    color: $color-accent-amber;
-  }
-
-  :deep(.ace_comment) {
-    color: $color-text-secondary;
-    font-style: italic;
-  }
-
-  :deep(.ace_identifier) {
-    color: $color-text-primary;
-  }
-
-  :deep(.ace_completion-meta) {
+  :deep(.monaco-editor .suggest-widget .details-label),
+  :deep(.monaco-editor .suggest-widget .label-description),
+  :deep(.monaco-editor .suggest-widget .label-detail) {
     color: $color-text-muted;
-  }
-
-  :deep(.ace_autocomplete) {
-    font-family: $font-family-mono-ext;
-    font-size: $font-size-md;
-    line-height: 1.5;
-    border: 1px solid rgba(148, 163, 184, 0.2);
-    border-radius: $gap-xl;
-    box-shadow: 0 20px 44px $shadow-medium;
-
-    .ace_line {
-      font-family: inherit;
-    }
-
-    .ace_completion-highlight {
-      color: $color-accent-blue;
-      font-weight: 700;
-    }
   }
 }
 </style>

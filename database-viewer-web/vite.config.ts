@@ -1,9 +1,21 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type PluginOption } from 'vite';
 import vue from '@vitejs/plugin-vue';
+import { visualizer } from 'rollup-plugin-visualizer';
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [
+    vue(),
+    // 按需启用包体分析：仅在显式设置 VISUALIZE=1 时生成可视化报告。
+    process.env.VISUALIZE === '1'
+      ? visualizer({
+          filename: 'vite-bundle-report.html',
+          gzipSize: true,
+          brotliSize: true,
+          open: false,
+        }) as PluginOption
+      : null,
+  ].filter((plugin): plugin is PluginOption => plugin !== null),
   server: {
     proxy: {
       '/api': {
@@ -34,7 +46,7 @@ export default defineConfig({
           'naive-ui': ['naive-ui'],
           'vue-vendor': ['vue', 'pinia'],
           'vue-flow': ['@vue-flow/core', '@vue-flow/background', '@vue-flow/minimap'],
-          'ace-editor': ['ace-builds'],
+          'monaco-editor': ['monaco-editor/esm/vs/editor/editor.api.js'],
         },
       },
     },

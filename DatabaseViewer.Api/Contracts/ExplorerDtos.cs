@@ -13,7 +13,10 @@ public sealed record ConnectionNodeDto(
     string? Error,
     IReadOnlyList<DatabaseNodeDto> Databases);
 
-public sealed record DatabaseNodeDto(string Name, IReadOnlyList<TableNodeDto> Tables);
+public sealed record DatabaseNodeDto(
+    string Name,
+    IReadOnlyList<TableNodeDto> Tables,
+    IReadOnlyList<RoutineNodeDto> Routines);
 
 public sealed record DatabaseGraphNodeDto(
     string TableKey,
@@ -48,6 +51,13 @@ public sealed record DatabaseGraphResponse(
     IReadOnlyList<DatabaseGraphEdgeDto> Edges);
 
 public sealed record TableNodeDto(string Key, string Database, string? Schema, string Name, string? Comment, int? RowCount);
+
+public sealed record RoutineNodeDto(string? Schema, string Name, string RoutineType, IReadOnlyList<RoutineParameterDto> Parameters);
+
+/// <summary>
+/// 存储过程或函数的参数。
+/// </summary>
+public sealed record RoutineParameterDto(string Name, string DataType, string Direction, string? DefaultValue);
 
 public sealed record ColumnDto(
     string Name,
@@ -128,6 +138,10 @@ public sealed record RecordResponse(
 public sealed record ForeignKeyTargetResponse(string TargetTableKey, string TargetRowKey, string SourceLabel);
 
 public sealed record SqlExecutionRequest(Guid ConnectionId, string Database, string Sql);
+
+public sealed record RoutineSourceRequest(Guid ConnectionId, string Database, string? Schema, string Name, string RoutineType);
+
+public sealed record RoutineSourceResponse(string? Source);
 
 public sealed record CreateConnectionRequest(
     string Name,

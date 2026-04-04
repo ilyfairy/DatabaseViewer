@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useLocalStorage } from '@vueuse/core';
-import { NAlert, NButton, NCard, NEmpty, NModal, NSelect, NSpin, NTag } from 'naive-ui';
+import { NButton, NCard, NEmpty, NModal, NSelect, NSpin, NTag } from 'naive-ui';
 import SqlCodeEditor from './SqlCodeEditor.vue';
 import { useExplorerStore } from '../stores/explorer';
 import type { SqlWorkspaceTab } from '../types/explorer';
@@ -10,6 +10,9 @@ const props = defineProps<{ tab: SqlWorkspaceTab }>();
 const store = useExplorerStore();
 const defaultEditorHeight = typeof window !== 'undefined' ? Math.round(window.innerHeight * 0.38) : 280;
 const editorHeight = useLocalStorage('dbv-sql-editor-height-v3', defaultEditorHeight);
+const resultsClosed = ref(false);
+const editorReady = ref(false);
+const sqlEditorRef = ref<{ focusAtStart: () => void } | null>(null);
 const panelBodyRef = ref<HTMLElement | null>(null);
 const controlsRef = ref<HTMLElement | null>(null);
 const availableEditorHeight = ref<number>(defaultEditorHeight);
@@ -54,6 +57,7 @@ const connectionInfo = computed(() => props.tab.connectionId ? store.getConnecti
 const sqlProvider = computed(() => connectionInfo.value?.provider ?? 'sqlserver');
 const sqlContext = computed(() => props.tab.connectionId && props.tab.database ? store.getSqlContext(props.tab.connectionId, props.tab.database) : null);
 const sqlDatabases = computed(() => props.tab.connectionId ? store.getConnectionDatabases(props.tab.connectionId).map((database) => database.name) : []);
+const sqlRoutines = computed(() => props.tab.connectionId && props.tab.database ? store.getRoutines(props.tab.connectionId, props.tab.database) : []);
 const editorText = ref(props.tab.sqlText);
 const lastLocalSqlText = ref(props.tab.sqlText);
 const sqlFileName = computed(() => props.tab.filePath ? props.tab.filePath.replace(/\\/g, '/').split('/').pop() ?? props.tab.filePath : null);
@@ -67,7 +71,7 @@ const selectedResultSet = computed(() => {
   return props.tab.result.resultSets[props.tab.selectedResultIndex] ?? props.tab.result.resultSets[0] ?? null;
 });
 
-const hasVisibleResults = computed(() => !!props.tab.result);
+const hasVisibleResults = computed(() => !!props.tab.result && !resultsClosed.value);
 
 const effectiveEditorHeight = computed(() => {
   if (!hasVisibleResults.value) {
@@ -108,12 +112,33 @@ function executeCurrentSql() {
   const sqlText = editorText.value;
   lastLocalSqlText.value = sqlText;
   store.updateSqlTabText(props.tab.id, sqlText);
+  resultsClosed.value = false;
   void store.executeSqlTab(props.tab.id, sqlText);
+}
+
+function focusEditorAtStart() {
+  void nextTick(() => {
+    requestAnimationFrame(() => {
+      sqlEditorRef.value?.focusAtStart();
+    });
+  });
+}
+
+/** 关闭结果面板 */
+function closeResults() {
+  resultsClosed.value = true;
 }
 
 function saveCurrentSql(saveAs = false) {
   lastLocalSqlText.value = editorText.value;
   store.updateSqlTabText(props.tab.id, editorText.value);
+
+  // 存储过程/函数源码：Ctrl+S 执行 ALTER 保存到数据库（静默模式）
+  if (props.tab.isRoutineSource && !saveAs) {
+    void store.executeSqlTab(props.tab.id, editorText.value, { silent: true });
+    return;
+  }
+
   void store.saveSqlTab(props.tab.id, saveAs);
 }
 
@@ -286,7 +311,7 @@ function beginEditorResize(event: MouseEvent) {
   const startHeight = editorHeight.value;
 
   const onMouseMove = (moveEvent: MouseEvent) => {
-    const nextHeight = Math.max(180, Math.min(Math.round(window.innerHeight * 0.75), startHeight + moveEvent.clientY - startY));
+    const nextHeight = Math.max(180, Math.min(Math.round(window.innerHeight * 0.88), startHeight + moveEvent.clientY - startY));
     editorHeight.value = nextHeight;
   };
 
@@ -332,7 +357,10 @@ onMounted(() => {
     resizeObserver.observe(controlsRef.value);
   }
 
-  measureAvailableEditorHeight();
+  requestAnimationFrame(() => {
+    measureAvailableEditorHeight();
+    editorReady.value = true;
+  });
 });
 
 watch(() => [props.tab.connectionId, props.tab.database] as const, ([connectionId, database]) => {
@@ -357,6 +385,15 @@ watch(() => props.tab.sqlText, (value) => {
 watch(() => hasVisibleResults.value, () => {
   measureAvailableEditorHeight();
 });
+
+watch(() => [props.tab.id, editorReady.value, store.pendingSqlEditorFocusTabId] as const, ([tabId, ready, pendingTabId]) => {
+  if (!ready || pendingTabId !== tabId) {
+    return;
+  }
+
+  focusEditorAtStart();
+  store.consumeSqlEditorFocus(tabId);
+}, { immediate: true });
 </script>
 
 <template>
@@ -366,7 +403,7 @@ watch(() => hasVisibleResults.value, () => {
         <div class="sql-panel-title-row">
           <h3>{{ store.getWorkspaceTabLabel(tab) }}</h3>
           <NTag v-if="sqlFileName" size="small" :bordered="false">{{ sqlFileName }}</NTag>
-          <NTag v-if="isDirty" size="small" :bordered="false" type="warning">未保存</NTag>
+          <span v-if="isDirty" class="sql-panel-status-chip sql-panel-status-chip-warning">未保存</span>
         </div>
         <div class="sql-panel-header-meta">
           <NTag v-if="tab.result" size="small" :bordered="false" type="info">{{ tab.result.elapsedMs }} ms</NTag>
@@ -376,7 +413,7 @@ watch(() => hasVisibleResults.value, () => {
     </template>
 
     <div ref="panelBodyRef" class="sql-panel-body">
-      <div ref="controlsRef" class="sql-panel-controls">
+      <div ref="controlsRef" class="sql-panel-controls" :class="{ 'sql-panel-controls-expanded': !hasVisibleResults }">
         <div class="sql-toolbar">
           <NSelect
             :value="tab.connectionId"
@@ -403,24 +440,24 @@ watch(() => hasVisibleResults.value, () => {
         </div>
 
         <SqlCodeEditor
+          v-if="editorReady"
+          ref="sqlEditorRef"
           :model-value="editorText"
           :provider="sqlProvider"
           :database="tab.database"
           :databases="sqlDatabases"
           :tables="sqlContext?.tables ?? []"
+          :routines="sqlRoutines"
+          :fill="!hasVisibleResults"
           class="sql-editor"
           :height="effectiveEditorHeight"
           @update:model-value="handleEditorTextUpdate"
           @execute="executeCurrentSql"
         />
         <div class="sql-editor-resize-handle" @mousedown="beginEditorResize" />
-
-        <NAlert v-if="tab.error" type="warning" :show-icon="false" class="panel-inline-alert">
-          {{ tab.error }}
-        </NAlert>
       </div>
 
-      <div class="sql-panel-results">
+      <div v-show="hasVisibleResults" class="sql-panel-results">
         <div
           v-if="tab.result && tab.result.resultSets.length > 1"
           class="sql-result-tabs"
@@ -436,6 +473,14 @@ watch(() => hasVisibleResults.value, () => {
           >
             {{ resultSet.name }}<span class="sql-result-tab-count">({{ resultSet.rowCount }}行)</span>
           </button>
+        </div>
+
+        <div class="sql-results-header">
+          <span v-if="selectedResultSet" class="sql-results-header-info">
+            {{ selectedResultSet.name }} · {{ selectedResultSet.rows.length }} 行
+          </span>
+          <span v-else />
+          <button type="button" class="sql-results-close-btn" title="关闭结果" @click="closeResults">✕</button>
         </div>
 
         <NSpin :show="tab.loading" class="sql-results-spin">
@@ -483,6 +528,16 @@ watch(() => hasVisibleResults.value, () => {
           <span v-if="selectedResultSet.truncated">结果已截断，最多展示 500 行</span>
         </div>
       </div>
+
+      <button
+        v-if="resultsClosed && tab.result"
+        type="button"
+        class="sql-results-expand-btn"
+        title="展开结果"
+        @click="resultsClosed = false"
+      >
+        ▲ 结果
+      </button>
     </div>
 
     <NModal
@@ -541,18 +596,46 @@ watch(() => hasVisibleResults.value, () => {
 }
 
 .sql-panel-title-row {
+  display: flex;
+  align-items: center;
+  gap: $gap-sm;
   min-width: 0;
+  min-height: 22px;
 
   h3 {
+    flex: 0 1 auto;
     min-width: 0;
     font-size: $font-size-lg;
+    line-height: 1.2;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 }
 
+.sql-panel-status-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  height: 16px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+
+  &-warning {
+    background: rgba(245, 158, 11, 0.14);
+    color: #b45309;
+  }
+}
+
 .sql-panel-header-meta {
+  display: flex;
+  align-items: center;
+  gap: $gap-sm;
   flex: 0 0 auto;
 }
 
@@ -560,6 +643,7 @@ watch(() => hasVisibleResults.value, () => {
   display: flex;
   flex-direction: column;
   gap: $gap-md;
+  position: relative;
   min-height: 0;
   height: 100%;
   padding: $gap-md $gap-lg $gap-lg;
@@ -570,6 +654,14 @@ watch(() => hasVisibleResults.value, () => {
   display: grid;
   gap: $gap-md;
   flex: 0 0 auto;
+  min-height: 0;
+  grid-template-rows: auto auto auto;
+
+  &-expanded {
+    flex: 1 1 auto;
+    min-height: 0;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
 }
 
 .sql-panel-results {
@@ -579,6 +671,61 @@ watch(() => hasVisibleResults.value, () => {
   min-height: 0;
   flex: 1 1 auto;
   overflow: hidden;
+}
+
+.sql-results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  padding: 0 $gap-sm;
+}
+
+.sql-results-header-info {
+  font-size: $font-size-sm;
+  color: $color-text-secondary;
+}
+
+.sql-results-close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: $color-text-secondary;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+
+  &:hover {
+    background: rgba(0, 0, 0, 0.06);
+    color: $color-text-primary;
+  }
+}
+
+.sql-results-expand-btn {
+  position: absolute;
+  right: 20px;
+  bottom: 20px;
+  padding: 4px 12px;
+  border: 1px solid $color-border-strong;
+  border-radius: var(--radius-md);
+  background: $color-surface-light;
+  color: $color-text-secondary;
+  font-size: $font-size-sm;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+  transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
+  z-index: 2;
+
+  &:hover {
+    background: rgba(219, 234, 254, 0.95);
+    color: #1d4ed8;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14);
+  }
 }
 
 .sql-toolbar {
@@ -592,6 +739,7 @@ watch(() => hasVisibleResults.value, () => {
 .sql-editor {
   min-height: 0;
   width: 100%;
+  height: 100%;
 }
 
 .sql-editor-resize-handle {

@@ -175,6 +175,8 @@ function handleTabDragEnd() {
   }
 
   &-label {
+    display: inline-flex;
+    align-items: center;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;

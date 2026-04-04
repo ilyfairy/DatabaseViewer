@@ -43,6 +43,21 @@ export interface TestConnectionRequest extends CreateConnectionRequest {
 export interface DatabaseInfo {
   name: string
   tables: TableSummary[]
+  routines: RoutineInfo[]
+}
+
+export interface RoutineInfo {
+  schema?: string | null
+  name: string
+  routineType: string // 'Procedure' | 'ScalarFunction' | 'TableFunction' | 'AggregateFunction'
+  parameters: RoutineParameter[]
+}
+
+export interface RoutineParameter {
+  name: string
+  dataType: string
+  direction: string // 'IN' | 'OUT' | 'INOUT'
+  defaultValue?: string | null
 }
 
 export interface DatabaseGraphNode {
@@ -239,9 +254,12 @@ export interface SqlWorkspaceTab {
   type: 'sql'
   connectionId: string | null
   database: string | null
+  displayName?: string | null
   sqlText: string
   savedSqlText: string
   filePath: string | null
+  /** 是否由存储过程/函数源码打开（Ctrl+S 时执行 ALTER 而非保存到文件） */
+  isRoutineSource?: boolean
   loading: boolean
   error: string | null
   result: SqlExecutionResponse | null

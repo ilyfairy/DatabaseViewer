@@ -40,9 +40,11 @@ type SortDirection = 'none' | 'asc' | 'desc'
 type OpenSqlTabOptions = {
   connectionId?: string | null
   database?: string | null
+  displayName?: string | null
   sqlText?: string
   savedSqlText?: string
   filePath?: string | null
+  isRoutineSource?: boolean
   execute?: boolean
 }
 type PendingSqlCloseState = {
@@ -193,6 +195,7 @@ export const useExplorerStore = defineStore('explorer', () => {
   const detailCache = ref<Record<string, RecordDetail>>({});
   const activeConnectionId = useLocalStorage<string | null>('dbv-active-connection', null);
   const activeTabId = useLocalStorage<string | null>('dbv-active-tab', null);
+  const pendingSqlEditorFocusTabId = ref<string | null>(null);
   const sidebarQuery = useLocalStorage('dbv-sidebar-query', '');
   const globalSearch = useLocalStorage('dbv-global-search', '');
   const searchColumns = useLocalStorage<string[]>('dbv-table-search-columns', []);
@@ -315,6 +318,16 @@ export const useExplorerStore = defineStore('explorer', () => {
     restorePanelsForActiveTableTab();
   }
 
+  function requestSqlEditorFocus(tabId: string) {
+    pendingSqlEditorFocusTabId.value = tabId;
+  }
+
+  function consumeSqlEditorFocus(tabId: string) {
+    if (pendingSqlEditorFocusTabId.value === tabId) {
+      pendingSqlEditorFocusTabId.value = null;
+    }
+  }
+
   function upsertWorkspaceTab(tab: WorkspaceTab) {
     const existingIndex = workspaceTabs.value.findIndex((entry) => entry.id === tab.id);
     if (existingIndex >= 0) {
@@ -354,7 +367,7 @@ export const useExplorerStore = defineStore('explorer', () => {
         return connections.value.some((connection) => connection.id === tab.connectionId);
       }
 
-      return !!tab.connectionId && connections.value.some((connection) => connection.id === tab.connectionId);
+      return true;
     }).map((tab) => {
       if (tab.type === 'table') {
         return {
@@ -372,10 +385,16 @@ export const useExplorerStore = defineStore('explorer', () => {
         return databaseStillExists ? tab : null;
       }
 
-      const databases = tab.connectionId ? getConnectionDatabases(tab.connectionId) : [];
-      const database = databases.some((entry) => entry.name === tab.database) ? tab.database : (databases[0]?.name ?? null);
+      const connectionId = tab.connectionId && connections.value.some((connection) => connection.id === tab.connectionId)
+        ? tab.connectionId
+        : (connections.value[0]?.id ?? null);
+      const databases = connectionId ? getConnectionDatabases(connectionId) : [];
+      const database = databases.some((entry) => entry.name === tab.database)
+        ? tab.database
+        : (tab.database ?? databases[0]?.name ?? null);
       return {
         ...tab,
+        connectionId,
         database,
         savedSqlText: tab.savedSqlText ?? tab.sqlText,
         filePath: tab.filePath ?? null,
@@ -500,6 +519,10 @@ export const useExplorerStore = defineStore('explorer', () => {
 
   function getTables(connectionId: string, database: string) {
     return getDatabases(connectionId).find((entry) => entry.name === database)?.tables ?? [];
+  }
+
+  function getRoutines(connectionId: string, database: string) {
+    return getDatabases(connectionId).find((entry) => entry.name === database)?.routines ?? [];
   }
 
   function getConnectionDatabases(connectionId: string) {
@@ -1371,6 +1394,13 @@ export const useExplorerStore = defineStore('explorer', () => {
 
     const connection = tab.connectionId ? connections.value.find((entry) => entry.id === tab.connectionId) : null;
     const connectionLabel = connection?.name ?? '未选连接';
+
+    if (tab.displayName) {
+      return tab.database
+        ? `${tab.displayName} · ${connectionLabel} / ${tab.database}`
+        : `${tab.displayName} · ${connectionLabel}`;
+    }
+
     if (tab.database) {
       return `SQL · ${connectionLabel} / ${tab.database}`;
     }
@@ -1390,15 +1420,18 @@ export const useExplorerStore = defineStore('explorer', () => {
       type: 'sql',
       connectionId: preferredConnectionId,
       database: preferredDatabase,
+      displayName: options.displayName ?? null,
       sqlText,
       savedSqlText,
       filePath: options.filePath ?? null,
+      isRoutineSource: options.isRoutineSource ?? false,
       loading: false,
       error: null,
       result: null,
       selectedResultIndex: 0,
     });
     setActiveTab(tabId);
+    requestSqlEditorFocus(tabId);
     if (preferredConnectionId && preferredDatabase) {
       await ensureSqlContextLoaded(preferredConnectionId, preferredDatabase);
     }
@@ -1410,6 +1443,46 @@ export const useExplorerStore = defineStore('explorer', () => {
 
   function openSqlTab() {
     void openSqlTabWithContext();
+  }
+
+  /**
+   * 打开存储过程或函数的源代码（在新 SQL 标签页中显示）。
+   */
+  async function openRoutineSource(connectionId: string, database: string, schema: string | null, name: string, routineType: string) {
+    const response = await requestJson<{ source: string | null }>('/api/explorer/routine-source', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ connectionId, database, schema, name, routineType }),
+    });
+    const source = response.source ?? `-- 无法获取 ${name} 的源代码`;
+    const displayName = schema ? `${schema}.${name}` : name;
+    const existingTab = workspaceTabs.value.find((tab) => tab.type === 'sql'
+      && tab.isRoutineSource
+      && tab.connectionId === connectionId
+      && tab.database === database
+      && (tab.displayName ?? null) === displayName);
+
+    if (existingTab?.type === 'sql') {
+      updateSqlTab(existingTab.id, (tab) => ({
+        ...tab,
+        displayName,
+        sqlText: source,
+        savedSqlText: source,
+        error: null,
+      }));
+      setActiveTab(existingTab.id);
+      requestSqlEditorFocus(existingTab.id);
+      return;
+    }
+
+    await openSqlTabWithContext({
+      connectionId,
+      database,
+      displayName,
+      sqlText: source,
+      savedSqlText: source,
+      isRoutineSource: true,
+    });
   }
 
   function updateSqlTabConnection(tabId: string, connectionId: string | null) {
@@ -1444,6 +1517,14 @@ export const useExplorerStore = defineStore('explorer', () => {
     updateSqlTab(tabId, (tab) => ({
       ...tab,
       sqlText,
+    }));
+  }
+
+  /** 清除 SQL 标签页的错误信息 */
+  function clearSqlTabError(tabId: string) {
+    updateSqlTab(tabId, (tab) => ({
+      ...tab,
+      error: null,
     }));
   }
 
@@ -1552,7 +1633,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     }));
   }
 
-  async function executeSqlTab(tabId: string, sqlTextOverride?: string) {
+  async function executeSqlTab(tabId: string, sqlTextOverride?: string, options?: { silent?: boolean }) {
     const tab = workspaceTabs.value.find((entry) => entry.id === tabId && entry.type === 'sql') as SqlWorkspaceTab | undefined;
     const sqlText = sqlTextOverride ?? tab?.sqlText ?? '';
     if (!tab?.connectionId || !tab.database || !sqlText.trim()) {
@@ -1579,14 +1660,26 @@ export const useExplorerStore = defineStore('explorer', () => {
         }),
       });
 
-      updateSqlTab(tabId, (current) => ({
-        ...current,
-        loading: false,
-        error: null,
-        result,
-        selectedResultIndex: 0,
-      }));
-      showNotice('success', 'SQL 执行完成');
+      if (options?.silent) {
+        // 静默模式：不显示结果面板，仅更新保存状态
+        updateSqlTab(tabId, (current) => ({
+          ...current,
+          loading: false,
+          error: null,
+          savedSqlText: sqlText,
+        }));
+        showNotice('success', '已保存到数据库');
+      }
+      else {
+        updateSqlTab(tabId, (current) => ({
+          ...current,
+          loading: false,
+          error: null,
+          result,
+          selectedResultIndex: 0,
+        }));
+        showNotice('success', 'SQL 执行完成');
+      }
     }
     catch (error) {
       updateSqlTab(tabId, (current) => ({
@@ -1935,6 +2028,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     connections,
     workspaceTabs,
     activeTabId,
+    pendingSqlEditorFocusTabId,
     activeTab,
     activeTableTab,
     activeDesignTab,
@@ -1965,6 +2059,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     getConnectionInfo,
     getSqlContext,
     getTables,
+    getRoutines,
     getWorkspaceTabLabel,
     getTable,
     getTableDesign,
@@ -1994,6 +2089,8 @@ export const useExplorerStore = defineStore('explorer', () => {
     getTableError,
     getRecordError,
     activateWorkspaceTab,
+    requestSqlEditorFocus,
+    consumeSqlEditorFocus,
     closeWorkspaceTab,
     moveWorkspaceTab,
     openTable,
@@ -2001,10 +2098,12 @@ export const useExplorerStore = defineStore('explorer', () => {
     openSqlTab,
     openSqlTabWithContext,
     openSqlFileTab,
+    openRoutineSource,
     pickSqliteDatabaseFile,
     updateSqlTabConnection,
     updateSqlTabDatabase,
     updateSqlTabText,
+    clearSqlTabError,
     markSqlTabSaved,
     isSqlTabDirty,
     saveSqlTab,
