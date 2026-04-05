@@ -28,6 +28,7 @@ import type {
   SqlExecutionResponse,
   SqlWorkspaceTab,
   TableDefinition,
+  TableMockWorkspaceTab,
   TableWorkspaceTab,
   TableSearchResponse,
   TableRow,
@@ -260,6 +261,7 @@ export const useExplorerStore = defineStore('explorer', () => {
   const activeDesignTab = computed(() => activeTab.value?.type === 'design' ? activeTab.value as TableDesignWorkspaceTab : undefined);
   const activeSqlTab = computed(() => activeTab.value?.type === 'sql' ? activeTab.value as SqlWorkspaceTab : undefined);
   const activeGraphTab = computed(() => activeTab.value?.type === 'graph' ? activeTab.value as GraphWorkspaceTab : undefined);
+  const activeMockTab = computed(() => activeTab.value?.type === 'mock' ? activeTab.value as TableMockWorkspaceTab : undefined);
   const gridPanel = computed(() => openPanels.value.find((panel) => panel.type === 'grid') as ExplorerGridPanel | undefined);
   const detailPanels = computed(() => openPanels.value.filter((panel) => panel.type === 'detail') as ExplorerDetailPanel[]);
   const activeTable = computed(() => (gridPanel.value ? getTable(gridPanel.value.tableKey) : undefined));
@@ -278,6 +280,10 @@ export const useExplorerStore = defineStore('explorer', () => {
 
   function buildSqlTabId() {
     return `sql:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function buildMockTabId(tableKey: string) {
+    return `mock:${tableKey}`;
   }
 
   function persistActiveTablePanels() {
@@ -363,6 +369,10 @@ export const useExplorerStore = defineStore('explorer', () => {
         return allTables.value.some((table) => table.key === tab.tableKey);
       }
 
+      if (tab.type === 'mock') {
+        return allTables.value.some((table) => table.key === tab.tableKey);
+      }
+
       if (tab.type === 'graph') {
         return connections.value.some((connection) => connection.id === tab.connectionId);
       }
@@ -378,6 +388,19 @@ export const useExplorerStore = defineStore('explorer', () => {
 
       if (tab.type === 'design') {
         return tab;
+      }
+
+      if (tab.type === 'mock') {
+        const table = getTable(tab.tableKey);
+        if (!table) {
+          return null;
+        }
+
+        return {
+          ...tab,
+          connectionId: tab.connectionId ?? table.key.split(':')[0] ?? tab.connectionId,
+          database: tab.database ?? table.database,
+        };
       }
 
       if (tab.type === 'graph') {
@@ -1170,13 +1193,23 @@ export const useExplorerStore = defineStore('explorer', () => {
 
   /** 通过主键删除一行记录 */
   async function deleteTableRow(tableKey: string, rowKey: string) {
-    try {
-      const url = '/api/explorer/table-row?' + new URLSearchParams({ tableKey, rowKey }).toString();
-      const response = await fetch(url, { method: 'DELETE' });
+    return await deleteTableRows(tableKey, [rowKey]);
+  }
 
-      if (!response.ok) {
-        const message = await response.text();
-        throw new Error(message || `${response.status} ${response.statusText}`);
+  async function deleteTableRows(tableKey: string, rowKeys: string[]) {
+    if (!rowKeys.length) {
+      return;
+    }
+
+    try {
+      for (const rowKey of rowKeys) {
+        const url = '/api/explorer/table-row?' + new URLSearchParams({ tableKey, rowKey }).toString();
+        const response = await fetch(url, { method: 'DELETE' });
+
+        if (!response.ok) {
+          const message = await response.text();
+          throw new Error(message || `${response.status} ${response.statusText}`);
+        }
       }
 
       await reloadLoadedTable(tableKey);
@@ -1184,7 +1217,7 @@ export const useExplorerStore = defineStore('explorer', () => {
         await reloadSearchResults(tableKey);
       }
       await reloadOpenDetailPanels(tableKey);
-      showNotice('success', '已删除一行');
+      showNotice('success', rowKeys.length > 1 ? `已删除 ${rowKeys.length} 行` : '已删除一行');
     }
     catch (error) {
       showNotice('warning', error instanceof Error ? error.message : '删除数据失败');
@@ -1384,6 +1417,12 @@ export const useExplorerStore = defineStore('explorer', () => {
       return table ? `${table.database} / ${label} 设计` : `${label} 设计`;
     }
 
+    if (tab.type === 'mock') {
+      const table = getTable(tab.tableKey);
+      const label = table ? (table.schema ? `${table.schema}.${table.name}` : table.name) : tab.tableKey;
+      return table ? `${table.database} / ${label} Mock` : `${label} Mock`;
+    }
+
     if (tab.type === 'graph') {
       return `${tab.database} 关系总览`;
     }
@@ -1443,6 +1482,26 @@ export const useExplorerStore = defineStore('explorer', () => {
 
   function openSqlTab() {
     void openSqlTabWithContext();
+  }
+
+  async function openTableMockTab(tableKey: string) {
+    const table = getTable(tableKey);
+    if (!table) {
+      showNotice('warning', '目标表不存在，无法打开 Mock 数据生成器');
+      return;
+    }
+
+    await ensureTableDesignLoaded(tableKey);
+
+    const tabId = buildMockTabId(tableKey);
+    upsertWorkspaceTab({
+      id: tabId,
+      type: 'mock',
+      connectionId: tableKey.split(':')[0] ?? '',
+      database: table.database,
+      tableKey,
+    });
+    setActiveTab(tabId);
   }
 
   /**
@@ -1578,6 +1637,15 @@ export const useExplorerStore = defineStore('explorer', () => {
       showNotice('warning', error instanceof Error ? error.message : 'SQL 保存失败');
       return false;
     }
+  }
+
+  async function saveTextFile(suggestedFileName: string, content: string) {
+    return await requestHost<{ filePath: string | null; suggestedFileName: string; content: string; saveAs: boolean }, { canceled: boolean; filePath: string | null }>('save-sql-file', {
+      filePath: null,
+      suggestedFileName,
+      content,
+      saveAs: true,
+    });
   }
 
   async function savePendingSqlClose(saveAs = false) {
@@ -1948,7 +2016,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     loadedTables.value = Object.fromEntries(Object.entries(loadedTables.value).filter(([tableKey]) => !tableKey.startsWith(connectionId)));
     detailCache.value = Object.fromEntries(Object.entries(detailCache.value).filter(([panelId]) => !panelId.includes(connectionId)));
     workspaceTabs.value = workspaceTabs.value.filter((tab) => {
-      if (tab.type === 'table' || tab.type === 'design') {
+      if (tab.type === 'table' || tab.type === 'design' || tab.type === 'mock') {
         return !tab.tableKey.startsWith(connectionId);
       }
 
@@ -2034,6 +2102,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     activeDesignTab,
     activeSqlTab,
     activeGraphTab,
+    activeMockTab,
     sidebarQuery,
     globalSearch,
     searchColumns,
@@ -2095,6 +2164,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     moveWorkspaceTab,
     openTable,
     openTableDesign,
+    openTableMockTab,
     openSqlTab,
     openSqlTabWithContext,
     openSqlFileTab,
@@ -2107,6 +2177,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     markSqlTabSaved,
     isSqlTabDirty,
     saveSqlTab,
+    saveTextFile,
     savePendingSqlClose,
     discardPendingSqlClose,
     cancelPendingSqlClose,
@@ -2137,6 +2208,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     updateTableCell,
     insertTableRow,
     deleteTableRow,
+    deleteTableRows,
     refreshActiveTableData,
     refreshDatabase,
     openDatabaseGraph,

@@ -8,7 +8,7 @@ import '@vue-flow/core/dist/style.css';
 import '@vue-flow/core/dist/theme-default.css';
 import '@vue-flow/controls/dist/style.css';
 import '@vue-flow/minimap/dist/style.css';
-import { NButton, NCheckbox, NInput, NSelect } from 'naive-ui';
+import { NButton, NCheckbox, NInput } from 'naive-ui';
 import { buildDatabaseOverviewLayout, type DatabaseOverviewEdgeData, type DatabaseOverviewLayoutOptions, type DatabaseOverviewNodeData } from '../lib/databaseOverviewLayout';
 import { useExplorerStore } from '../stores/explorer';
 import type { DatabaseGraph } from '../types/explorer';
@@ -16,6 +16,18 @@ import type { DatabaseGraph } from '../types/explorer';
 const props = defineProps<{
   graph: DatabaseGraph
 }>();
+
+type FlowViewport = {
+  x: number
+  y: number
+  zoom: number
+}
+
+type LayoutAnchorSnapshot = {
+  tableKey: string
+  x: number
+  y: number
+}
 
 type RenderNodeData = DatabaseOverviewNodeData & {
   isFocused: boolean
@@ -34,13 +46,15 @@ type OverviewContextMenuState = {
 }
 
 const store = useExplorerStore();
-const flowRef = ref<{ fitView?: (options?: unknown) => Promise<boolean> | boolean } | null>(null);
+const flowRef = ref<{
+  fitView?: (options?: unknown) => Promise<boolean> | boolean
+  getViewport?: () => FlowViewport
+  setViewport?: (viewport: FlowViewport, options?: unknown) => Promise<boolean> | boolean
+} | null>(null);
 const graphNodes = shallowRef<Node<DatabaseOverviewNodeData>[]>([]);
 const graphEdges = shallowRef<Edge<DatabaseOverviewEdgeData>[]>([]);
 const layoutPending = ref(false);
 const layoutError = ref<string | null>(null);
-const centerTableKey = ref<string | null>(null);
-const visibleDepth = ref<number>(2);
 const searchQuery = ref('');
 const focusedTableKey = ref<string | null>(null);
 const contextMenu = ref<OverviewContextMenuState | null>(null);
@@ -48,20 +62,8 @@ const expandAllFields = ref(false);
 const showNotNull = ref(false);
 const showTableIcons = ref(true);
 const expandedTableKeys = ref<string[]>([]);
+const pendingViewportAnchorTableKey = ref<string | null>(null);
 let layoutGeneration = 0;
-
-const tableOptions = computed(() => props.graph.nodes
-  .slice()
-  .sort((left, right) => left.title.localeCompare(right.title))
-  .map((node) => ({
-    label: node.title,
-    value: node.tableKey,
-  })));
-
-const depthOptions = [1, 2, 3, 4, 5].map((depth) => ({
-  label: `${depth} 层`,
-  value: depth,
-}));
 
 const overviewPalette = [
   { accent: '#4f8cc9', soft: '#eaf3ff', border: '#72a8de' },
@@ -95,59 +97,17 @@ const layoutOptions = computed<DatabaseOverviewLayoutOptions>(() => ({
   expandAllFields: expandAllFields.value,
   expandedTableKeys: expandedTableKeys.value,
 }));
+const scopedGraph = computed(() => props.graph);
 
-function buildScopedGraph(graph: DatabaseGraph, centerKey: string | null, depth: number): DatabaseGraph {
-  if (!centerKey) {
-    return graph;
-  }
-
-  const adjacency = new Map<string, Set<string>>();
-  graph.nodes.forEach((node) => adjacency.set(node.tableKey, new Set<string>()));
-  graph.edges.forEach((edge) => {
-    adjacency.get(edge.sourceTableKey)?.add(edge.targetTableKey);
-    adjacency.get(edge.targetTableKey)?.add(edge.sourceTableKey);
-  });
-
-  const visited = new Set<string>([centerKey]);
-  const queue: Array<{ key: string; level: number }> = [{ key: centerKey, level: 0 }];
-
-  while (queue.length) {
-    const current = queue.shift();
-    if (!current) {
-      continue;
-    }
-
-    if (current.level >= depth) {
-      continue;
-    }
-
-    for (const next of adjacency.get(current.key) ?? []) {
-      if (visited.has(next)) {
-        continue;
-      }
-
-      visited.add(next);
-      queue.push({ key: next, level: current.level + 1 });
-    }
-  }
-
-  return {
-    ...graph,
-    nodes: graph.nodes.filter((node) => visited.has(node.tableKey)),
-    edges: graph.edges.filter((edge) => visited.has(edge.sourceTableKey) && visited.has(edge.targetTableKey)),
-  };
-}
-
-const scopedGraph = computed(() => buildScopedGraph(props.graph, centerTableKey.value, visibleDepth.value));
-
-const graphSignature = computed(() => JSON.stringify({
+const graphStructureSignature = computed(() => JSON.stringify({
   database: scopedGraph.value.database,
-  center: centerTableKey.value,
-  depth: visibleDepth.value,
-  expandAllFields: expandAllFields.value,
-  expandedTableKeys: expandedTableKeys.value,
   nodes: scopedGraph.value.nodes.map((node) => node.tableKey),
   edges: scopedGraph.value.edges.map((edge) => `${edge.sourceTableKey}:${edge.targetTableKey}:${edge.relationType}:${edge.viaTableKey ?? ''}:${edge.sourceColumn}:${edge.targetColumn}`),
+}));
+
+const fieldVisibilitySignature = computed(() => JSON.stringify({
+  expandAllFields: expandAllFields.value,
+  expandedTableKeys: expandedTableKeys.value,
 }));
 
 const visibleNodeIds = computed(() => new Set(scopedGraph.value.nodes.map((node) => node.tableKey)));
@@ -245,12 +205,6 @@ async function focusNode(tableKey: string | null) {
   await flowRef.value?.fitView?.({ nodes: [targetNode], padding: 0.52, duration: 320, maxZoom: 1.35 });
 }
 
-function resetScope() {
-  centerTableKey.value = null;
-  focusedTableKey.value = null;
-  contextMenu.value = null;
-}
-
 function isExpanded(tableKey: string) {
   return expandAllFields.value || expandedTableKeys.value.includes(tableKey);
 }
@@ -260,6 +214,7 @@ function toggleNodeExpansion(tableKey: string) {
     return;
   }
 
+  pendingViewportAnchorTableKey.value = tableKey;
   expandedTableKeys.value = expandedTableKeys.value.includes(tableKey)
     ? expandedTableKeys.value.filter((entry) => entry !== tableKey)
     : [...expandedTableKeys.value, tableKey];
@@ -276,11 +231,6 @@ function visibleColumns(data: RenderNodeData | undefined) {
 async function locateTable(tableKey: string) {
   focusedTableKey.value = tableKey;
   contextMenu.value = null;
-  if (centerTableKey.value && !visibleNodeIds.value.has(tableKey)) {
-    centerTableKey.value = tableKey;
-    return;
-  }
-
   await focusNode(tableKey);
 }
 
@@ -293,10 +243,25 @@ async function locateFirstMatch() {
   await locateTable(firstMatch.tableKey);
 }
 
-async function rebuildLayout() {
+async function rebuildLayout(options?: { preserveViewport?: boolean; preserveAnchorTableKey?: string | null }) {
   const currentGeneration = ++layoutGeneration;
   layoutPending.value = true;
   layoutError.value = null;
+  const savedViewport = options?.preserveViewport ? flowRef.value?.getViewport?.() ?? null : null;
+  const anchorSnapshot: LayoutAnchorSnapshot | null = savedViewport && options?.preserveAnchorTableKey
+    ? (() => {
+        const anchorNode = graphNodes.value.find((node) => node.id === options.preserveAnchorTableKey);
+        if (!anchorNode) {
+          return null;
+        }
+
+        return {
+          tableKey: anchorNode.id,
+          x: anchorNode.position.x,
+          y: anchorNode.position.y,
+        };
+      })()
+    : null;
 
   try {
     const layout = await buildDatabaseOverviewLayout(scopedGraph.value, layoutOptions.value);
@@ -306,6 +271,22 @@ async function rebuildLayout() {
 
     graphNodes.value = layout.nodes;
     graphEdges.value = layout.edges;
+    if (savedViewport) {
+      await nextTick();
+      const anchorNode = anchorSnapshot
+        ? layout.nodes.find((node) => node.id === anchorSnapshot.tableKey)
+        : null;
+      const nextViewport = anchorNode
+        ? {
+            ...savedViewport,
+            x: savedViewport.x + ((anchorSnapshot?.x ?? anchorNode.position.x) - anchorNode.position.x) * savedViewport.zoom,
+            y: savedViewport.y + ((anchorSnapshot?.y ?? anchorNode.position.y) - anchorNode.position.y) * savedViewport.zoom,
+          }
+        : savedViewport;
+      await flowRef.value?.setViewport?.(nextViewport, { duration: 0 });
+      return;
+    }
+
     if (layout.nodes.length === 1) {
       await focusNode(layout.nodes[0]?.id ?? null);
     }
@@ -330,15 +311,21 @@ async function rebuildLayout() {
   }
 }
 
-watch(graphSignature, () => {
+watch(graphStructureSignature, () => {
   void rebuildLayout();
 }, { immediate: true });
 
-watch(() => props.graph.nodes.map((node) => node.tableKey).join('|'), () => {
-  if (centerTableKey.value && !props.graph.nodes.some((node) => node.tableKey === centerTableKey.value)) {
-    centerTableKey.value = null;
+watch(fieldVisibilitySignature, (_nextValue, previousValue) => {
+  if (previousValue === undefined) {
+    return;
   }
 
+  const anchorTableKey = pendingViewportAnchorTableKey.value;
+  pendingViewportAnchorTableKey.value = null;
+  void rebuildLayout({ preserveViewport: true, preserveAnchorTableKey: anchorTableKey });
+});
+
+watch(() => props.graph.nodes.map((node) => node.tableKey).join('|'), () => {
   if (focusedTableKey.value && !props.graph.nodes.some((node) => node.tableKey === focusedTableKey.value)) {
     focusedTableKey.value = null;
   }
@@ -370,17 +357,6 @@ function handleNodeContextMenu(event: NodeMouseEvent) {
   };
 }
 
-async function centerOnContextNode() {
-  const target = contextMenu.value;
-  if (!target) {
-    return;
-  }
-
-  centerTableKey.value = target.tableKey;
-  focusedTableKey.value = target.tableKey;
-  contextMenu.value = null;
-}
-
 function openContextTable() {
   const target = contextMenu.value;
   if (!target) {
@@ -388,6 +364,16 @@ function openContextTable() {
   }
 
   store.openTable(target.tableKey);
+  contextMenu.value = null;
+}
+
+function openContextTableDesign() {
+  const target = contextMenu.value;
+  if (!target) {
+    return;
+  }
+
+  void store.openTableDesign(target.tableKey);
   contextMenu.value = null;
 }
 
@@ -428,25 +414,6 @@ function edgePath(props: EdgeProps<DatabaseOverviewEdgeData>) {
 <template>
   <div class="database-overview-shell">
     <div class="database-overview-toolbar">
-      <div class="database-overview-toolbar-group database-overview-toolbar-group-wide">
-        <NSelect
-          v-model:value="centerTableKey"
-          clearable
-          filterable
-          size="small"
-          class="database-overview-center-select"
-          placeholder="中心表（留空 = 全库）"
-          :options="tableOptions"
-        />
-        <NSelect
-          v-model:value="visibleDepth"
-          size="small"
-          class="database-overview-depth-select"
-          :disabled="!centerTableKey"
-          :options="depthOptions"
-        />
-        <NButton size="small" tertiary :disabled="!centerTableKey" @click="resetScope">查看全库</NButton>
-      </div>
       <div class="database-overview-toolbar-group">
         <NInput
           v-model:value="searchQuery"
@@ -457,7 +424,7 @@ function edgePath(props: EdgeProps<DatabaseOverviewEdgeData>) {
           @keyup.enter="locateFirstMatch"
         />
         <NButton size="small" tertiary type="primary" :disabled="!searchMatches.length" @click="locateFirstMatch">定位</NButton>
-        <NButton size="small" tertiary :loading="layoutPending" @click="rebuildLayout">重新整理</NButton>
+        <NButton size="small" tertiary :loading="layoutPending" @click="() => rebuildLayout()">重新整理</NButton>
       </div>
     </div>
 
@@ -562,8 +529,8 @@ function edgePath(props: EdgeProps<DatabaseOverviewEdgeData>) {
         class="database-overview-context-menu"
         :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
       >
-        <button type="button" class="database-overview-context-menu-item" @click="centerOnContextNode">设为中心表</button>
         <button type="button" class="database-overview-context-menu-item" @click="openContextTable">查看主表数据</button>
+        <button type="button" class="database-overview-context-menu-item" @click="openContextTableDesign">表设计</button>
       </div>
     </div>
 
@@ -911,8 +878,8 @@ function edgePath(props: EdgeProps<DatabaseOverviewEdgeData>) {
 .database-overview-context-menu {
   position: fixed;
   z-index: 20;
-  min-width: 160px;
-  padding: $gap-md;
+  min-width: 148px;
+  padding: 4px;
   border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.98);
   border: 1px solid rgba(148, 163, 184, 0.2);
@@ -922,7 +889,7 @@ function edgePath(props: EdgeProps<DatabaseOverviewEdgeData>) {
 
   &-item {
     width: 100%;
-    padding: 7px $gap-xl;
+    padding: 6px 10px;
     border: 0;
     outline: 0;
     box-shadow: none;
@@ -931,6 +898,8 @@ function edgePath(props: EdgeProps<DatabaseOverviewEdgeData>) {
     text-align: left;
     color: $color-text-primary;
     background: transparent;
+    font-size: 12px;
+    line-height: 1.25;
     cursor: pointer;
 
     &:hover {

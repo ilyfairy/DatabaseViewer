@@ -79,6 +79,25 @@ const previewState = computed(() => {
     return { kind: 'binary' as const, mimeType: 'application/octet-stream', imageUrl: null, text: null, sizeBytes: 0 };
   }
 });
+const rowIdentityText = computed(() => {
+  if (!props.rowKey) {
+    return '-';
+  }
+
+  try {
+    const decodedText = atob(props.rowKey);
+    const parsed = JSON.parse(decodedText) as Record<string, unknown>;
+    const entries = Object.entries(parsed);
+    if (!entries.length) {
+      return props.rowKey;
+    }
+
+    return entries.map(([key, value]) => `${key}=${formatIdentityValue(value)}`).join(', ');
+  }
+  catch {
+    return props.rowKey;
+  }
+});
 const warningText = computed(() => {
   if (!props.column) {
     return null;
@@ -175,6 +194,22 @@ function decodeText(bytes: Uint8Array) {
   catch {
     return null;
   }
+}
+
+function formatIdentityValue(value: unknown): string {
+  if (value === null) {
+    return 'NULL';
+  }
+
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+
+  return JSON.stringify(value);
 }
 
 function close() {
@@ -280,7 +315,7 @@ function submit() {
 
       <div class="grid-cell-editor-row">
         <label class="grid-cell-editor-label">当前行</label>
-        <code class="grid-cell-editor-rowkey">{{ rowKey }}</code>
+        <code class="grid-cell-editor-rowkey">{{ rowIdentityText }}</code>
       </div>
 
       <div v-if="column.isNullable" class="grid-cell-editor-null-toggle">

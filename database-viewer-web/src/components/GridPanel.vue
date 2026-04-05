@@ -88,6 +88,9 @@ const activeEditorInputRef = ref<HTMLInputElement | null>(null);
 const activeEditorTextareaRef = ref<HTMLTextAreaElement | null>(null);
 const suppressWindowClickUntil = ref(0);
 const draftRowValues = ref<Record<string, DraftCellState>>({});
+const selectedRowKeys = ref<string[]>([]);
+const dragSelectionMode = ref<'select' | 'unselect' | null>(null);
+const dragSelectionLastRowKey = ref<string | null>(null);
 const binaryFileInputRef = ref<HTMLInputElement | null>(null);
 const contextBinaryFileInputRef = ref<HTMLInputElement | null>(null);
 const pendingBinaryReplaceTarget = ref<{ rowKey: string; column: VisibleColumn; draft: boolean } | null>(null);
@@ -205,10 +208,11 @@ function isMultilineTextColumn(column: VisibleColumn) {
     return false;
   }
 
-  return normalizedType.includes('char')
-    || normalizedType.includes('text')
+  return normalizedType.includes('text')
     || normalizedType.includes('json')
-    || normalizedType.includes('xml');
+    || normalizedType.includes('xml')
+    || ((normalizedType.includes('char') || normalizedType.includes('string'))
+      && ((column.maxLength ?? 0) < 0 || (column.maxLength ?? 0) > 255));
 }
 
 function isRowOpenCell(columnName: string, columnType: string | undefined, isPrimaryKey: boolean | undefined, columnIndex: number) {
@@ -245,6 +249,18 @@ const totalRowCount = computed(() => searchActive.value ? (searchState.value?.to
 const hasMoreRows = computed(() => searchActive.value ? !!searchState.value?.hasMoreRows : !!table.value?.hasMoreRows);
 const canEnableEditMode = computed(() => !!table.value && visibleColumns.value.some((column) => isEditableColumn(column) || isWritableOnInsert(column)));
 const draftRowHasValues = computed(() => Object.values(draftRowValues.value).some((item) => item.setNull || item.base64Value !== null || item.textValue.trim().length > 0));
+const selectedRowCount = computed(() => selectedRowKeys.value.length);
+const contextMenuDeleteRowCount = computed(() => {
+  const menu = contextMenu.value;
+  if (!menu || menu.draft) {
+    return 0;
+  }
+
+  return editMode.value && selectedRowKeys.value.length > 1 && selectedRowKeys.value.includes(menu.rowKey)
+    ? selectedRowKeys.value.length
+    : 1;
+});
+const contextMenuDeleteLabel = computed(() => contextMenuDeleteRowCount.value > 1 ? `删除所选 ${contextMenuDeleteRowCount.value} 行` : '删除行');
 
 // ── Filter / search ──
 const filterOpen = ref(false);
@@ -387,9 +403,95 @@ function resetActiveEditor() {
 function toggleEditMode() {
   editMode.value = !editMode.value;
   resetActiveEditor();
+  selectedRowKeys.value = [];
+  stopRowDragSelection();
   if (!editMode.value) {
     draftRowValues.value = {};
   }
+}
+
+function clearSelectedRows() {
+  selectedRowKeys.value = [];
+  stopRowDragSelection();
+}
+
+function stopRowDragSelection() {
+  dragSelectionMode.value = null;
+  dragSelectionLastRowKey.value = null;
+}
+
+function isRowSelected(rowKey: string) {
+  return selectedRowKeys.value.includes(rowKey);
+}
+
+function setRowSelected(rowKey: string, selected: boolean) {
+  if (selected) {
+    if (!selectedRowKeys.value.includes(rowKey)) {
+      selectedRowKeys.value = [...selectedRowKeys.value, rowKey];
+    }
+    return;
+  }
+
+  selectedRowKeys.value = selectedRowKeys.value.filter((key) => key !== rowKey);
+}
+
+function handleGridRowPointerDown(rowKey: string, event: MouseEvent) {
+  if (!editMode.value || event.button !== 0 || (!event.ctrlKey && !event.metaKey)) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  closeContextMenu();
+  const shouldSelect = !isRowSelected(rowKey);
+  setRowSelected(rowKey, shouldSelect);
+  dragSelectionMode.value = shouldSelect ? 'select' : 'unselect';
+  dragSelectionLastRowKey.value = rowKey;
+}
+
+function handleGridRowClick(event: MouseEvent) {
+  if (!editMode.value || event.ctrlKey || event.metaKey) {
+    return;
+  }
+
+  if (selectedRowKeys.value.length > 0) {
+    clearSelectedRows();
+  }
+}
+
+function applyRowSelectionRange(startRowKey: string, endRowKey: string, selected: boolean) {
+  const rowKeys = rows.value.map((row) => row.rowKey);
+  const startIndex = rowKeys.indexOf(startRowKey);
+  const endIndex = rowKeys.indexOf(endRowKey);
+  if (startIndex < 0 || endIndex < 0) {
+    return;
+  }
+
+  const [rangeStart, rangeEnd] = startIndex <= endIndex ? [startIndex, endIndex] : [endIndex, startIndex];
+  rowKeys.slice(rangeStart, rangeEnd + 1).forEach((rowKey) => {
+    setRowSelected(rowKey, selected);
+  });
+}
+
+function handleGridDragPointerMove(event: MouseEvent) {
+  if (!editMode.value || !dragSelectionMode.value || event.buttons !== 1) {
+    stopRowDragSelection();
+    return;
+  }
+
+  const hoveredRowElement = document.elementFromPoint(event.clientX, event.clientY)?.closest('tr[data-row-key]');
+  const hoveredRowKey = hoveredRowElement instanceof HTMLElement ? hoveredRowElement.dataset.rowKey ?? null : null;
+  if (!hoveredRowKey) {
+    return;
+  }
+
+  const startRowKey = dragSelectionLastRowKey.value ?? hoveredRowKey;
+  if (hoveredRowKey === startRowKey) {
+    return;
+  }
+
+  applyRowSelectionRange(startRowKey, hoveredRowKey, dragSelectionMode.value === 'select');
+  dragSelectionLastRowKey.value = hoveredRowKey;
 }
 
 function markActiveEditorDirty() {
@@ -840,6 +942,9 @@ function openCellContextMenu(event: MouseEvent, rowKey: string, column: VisibleC
   }
 
   closeContextMenu();
+  if (editMode.value && !draft && selectedRowKeys.value.length > 0 && !selectedRowKeys.value.includes(rowKey)) {
+    selectedRowKeys.value = [rowKey];
+  }
   contextMenu.value = {
     show: true,
     x: event.clientX,
@@ -1109,16 +1214,21 @@ function confirmDeleteRow() {
     return;
   }
 
+  const rowKeysToDelete = editMode.value && selectedRowKeys.value.length > 1 && selectedRowKeys.value.includes(menu.rowKey)
+    ? [...selectedRowKeys.value]
+    : [menu.rowKey];
+
   closeContextMenu();
 
   dialog.warning({
     title: '确认删除',
-    content: '确定要删除这一行数据吗？此操作不可撤销。',
+    content: rowKeysToDelete.length > 1 ? `确定要删除所选 ${rowKeysToDelete.length} 行数据吗？此操作不可撤销。` : '确定要删除这一行数据吗？此操作不可撤销。',
     positiveText: '删除',
     negativeText: '取消',
     onPositiveClick: async () => {
       try {
-        await store.deleteTableRow(props.tableKey, menu.rowKey);
+        await store.deleteTableRows(props.tableKey, rowKeysToDelete);
+        clearSelectedRows();
       }
       catch {
         // Store already surfaced the error.
@@ -1161,6 +1271,8 @@ onBeforeUnmount(() => {
 
 watch(() => props.tableKey, () => {
   editMode.value = false;
+  selectedRowKeys.value = [];
+  stopRowDragSelection();
   resetActiveEditor();
   closeContextMenu();
   dialogEditorState.value = {
@@ -1171,6 +1283,32 @@ watch(() => props.tableKey, () => {
     value: undefined,
     saving: false,
   };
+});
+
+watch(() => rows.value.map((row) => row.rowKey).join('|'), (rowKeySignature) => {
+  const rowKeySet = new Set(rowKeySignature ? rowKeySignature.split('|') : []);
+  selectedRowKeys.value = selectedRowKeys.value.filter((rowKey) => rowKeySet.has(rowKey));
+});
+
+watch(dragSelectionMode, (mode, _, onCleanup) => {
+  if (!mode) {
+    return;
+  }
+
+  const handlePointerMove = (event: MouseEvent) => {
+    handleGridDragPointerMove(event);
+  };
+
+  const handlePointerUp = () => {
+    stopRowDragSelection();
+  };
+
+  window.addEventListener('mousemove', handlePointerMove, true);
+  window.addEventListener('mouseup', handlePointerUp, true);
+  onCleanup(() => {
+    window.removeEventListener('mousemove', handlePointerMove, true);
+    window.removeEventListener('mouseup', handlePointerUp, true);
+  });
 });
 </script>
 
@@ -1227,6 +1365,13 @@ watch(() => props.tableKey, () => {
         {{ store.getTableSearchError(props.tableKey) }}
       </NAlert>
 
+      <div v-if="editMode" class="grid-selection-hint" :class="{ 'is-active': selectedRowCount > 0 }">
+        <span class="grid-selection-hint-title">Ctrl/⌘ + 左键可多选行，按住后拖拽可连续扫选，右键删除所选</span>
+        <NTag v-if="selectedRowCount > 0" size="small" :bordered="false" type="info">已选 {{ selectedRowCount }} 行</NTag>
+        <span class="panel-meta">默认双击编辑、右键菜单等行为保持不变</span>
+        <NButton v-if="selectedRowCount > 0" size="tiny" tertiary @click="clearSelectedRows">取消选择</NButton>
+      </div>
+
       <NSpin :show="store.isTableLoading(props.tableKey) || store.isSearchLoading(props.tableKey)" class="grid-panel-spin">
         <div v-if="table" class="grid-table-wrap">
           <template v-if="true">
@@ -1263,7 +1408,11 @@ watch(() => props.tableKey, () => {
                 <tr
                   v-for="row in rows"
                   :key="row.rowKey"
+                  :data-row-key="row.rowKey"
                   class="grid-row"
+                  :class="{ 'grid-row-selected': isRowSelected(row.rowKey) }"
+                  @mousedown.capture="handleGridRowPointerDown(row.rowKey, $event)"
+                  @click="handleGridRowClick($event)"
                 >
                   <td
                     v-for="(column, columnIndex) in visibleColumns"
@@ -1372,30 +1521,6 @@ watch(() => props.tableKey, () => {
       @mousedown.stop
     >
       <button
-        v-if="isEditableColumn(contextMenu.column)"
-        type="button"
-        class="grid-context-menu-item"
-        @click="openCellEditor(contextMenu.rowKey, contextMenu.column, contextMenu.value)"
-      >
-        编辑单元格...
-      </button>
-      <button
-        v-if="isEditableColumn(contextMenu.column) && !editMode"
-        type="button"
-        class="grid-context-menu-item"
-        @click="editMode = true; closeContextMenu()"
-      >
-        进入编辑模式
-      </button>
-      <button
-        v-if="contextMenu.column.isNullable && (contextMenu.draft ? isWritableOnInsert(contextMenu.column) : isEditableColumn(contextMenu.column))"
-        type="button"
-        class="grid-context-menu-item"
-        @click="setContextMenuValueNull"
-      >
-        设为 NULL
-      </button>
-      <button
         v-if="isBinaryColumn(contextMenu.column.name, contextMenu.column.type)"
         type="button"
         class="grid-context-menu-item"
@@ -1420,12 +1545,36 @@ watch(() => props.tableKey, () => {
         保存二进制到文件...
       </button>
       <button
+        v-if="isEditableColumn(contextMenu.column)"
+        type="button"
+        class="grid-context-menu-item"
+        @click="openCellEditor(contextMenu.rowKey, contextMenu.column, contextMenu.value)"
+      >
+        编辑单元格...
+      </button>
+      <button
+        v-if="isEditableColumn(contextMenu.column) && !editMode"
+        type="button"
+        class="grid-context-menu-item"
+        @click="editMode = true; closeContextMenu()"
+      >
+        进入编辑模式
+      </button>
+      <button
+        v-if="contextMenu.column.isNullable && (contextMenu.draft ? isWritableOnInsert(contextMenu.column) : isEditableColumn(contextMenu.column))"
+        type="button"
+        class="grid-context-menu-item"
+        @click="setContextMenuValueNull"
+      >
+        设为 NULL
+      </button>
+      <button
         v-if="!contextMenu.draft"
         type="button"
         class="grid-context-menu-item grid-context-menu-item-danger"
         @click="confirmDeleteRow"
       >
-        删除行
+        {{ contextMenuDeleteLabel }}
       </button>
     </div>
 
@@ -1569,6 +1718,35 @@ watch(() => props.tableKey, () => {
     min-height: 0;
     overflow: hidden;
   }
+}
+
+.grid-selection-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+  margin-bottom: 8px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.72);
+  overflow: hidden;
+}
+
+.grid-selection-hint.is-active {
+  border-color: rgba(37, 99, 235, 0.18);
+  background: rgba(239, 246, 255, 0.82);
+}
+
+.grid-selection-hint-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 800;
+  color: #334155;
 }
 
 .grid-panel-header-compact {
@@ -1750,10 +1928,19 @@ watch(() => props.tableKey, () => {
   width: 112px;
 }
 
+.grid-row-selected td {
+  background: rgba(191, 219, 254, 0.78);
+  box-shadow: inset 0 -1px 0 rgba(59, 130, 246, 0.18);
+}
+
 // ── Grid rows ──
 .grid-row {
   &:hover td {
     background: rgba(239, 246, 255, 0.56);
+  }
+
+  &.grid-row-selected:hover td {
+    background: rgba(191, 219, 254, 0.78);
   }
 }
 

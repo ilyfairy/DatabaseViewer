@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import type { Component } from 'vue';
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
-import { NAlert, NButton, NCheckbox, NEmpty, NInput, NModal, NSelect, NSpin, NText } from 'naive-ui';
+import { IconBolt, IconChevronDown, IconChevronRight, IconColumns3, IconDatabase, IconFunction, IconLink, IconListDetails, IconScript, IconServer, IconTable, IconTableColumn, IconVariable } from '@tabler/icons-vue';
+import { NAlert, NButton, NCheckbox, NEmpty, NIcon, NInput, NModal, NSelect, NSpin, NText } from 'naive-ui';
 import { useExplorerStore } from '../stores/explorer';
 import type { AuthenticationMode, ProviderType, RoutineInfo, TableColumn, TableSummary } from '../types/explorer';
 
@@ -136,15 +138,19 @@ function treeTriggers(tableKey: string) {
 }
 
 /** 切换存储过程/函数分组的展开状态 */
-function toggleRoutineGroup(connectionId: string, database: string, group: 'procedures' | 'functions') {
+function toggleRoutineGroup(connectionId: string, database: string, group: 'tables' | 'procedures' | 'functions') {
   const key = `${connectionId}:${database}:${group}`;
   expandedRoutineGroups.value = expandedRoutineGroups.value.includes(key)
     ? expandedRoutineGroups.value.filter((entry) => entry !== key)
     : [...expandedRoutineGroups.value, key];
 }
 
-function isRoutineGroupExpanded(connectionId: string, database: string, group: 'procedures' | 'functions') {
+function isRoutineGroupExpanded(connectionId: string, database: string, group: 'tables' | 'procedures' | 'functions') {
   return expandedRoutineGroups.value.includes(`${connectionId}:${database}:${group}`);
+}
+
+function treeTables(connectionId: string, database: string): TableSummary[] {
+  return store.getTables(connectionId, database);
 }
 
 /** 获取指定数据库下的存储过程列表 */
@@ -229,18 +235,29 @@ function formatTreeColumnType(column: TableColumn) {
   return column.type;
 }
 
-function providerTreeMark(provider: ProviderType) {
-  return provider === 'sqlserver'
-    ? 'SS'
-    : provider === 'postgresql'
-      ? 'PG'
-      : provider === 'sqlite'
-        ? 'SQ'
-        : 'MY';
+function providerTreeIcon(provider: ProviderType): Component {
+  void provider;
+  return IconServer;
 }
 
 function providerTreeClass(provider: ProviderType) {
   return `tree-icon-provider-${provider}`;
+}
+
+function treeToggleIcon(expanded: boolean): Component {
+  return expanded ? IconChevronDown : IconChevronRight;
+}
+
+function routineTreeIcon(routineType: RoutineInfo['routineType']): Component {
+  return routineType === 'Procedure' ? IconScript : IconFunction;
+}
+
+function getViewportSafeMenuPosition(event: MouseEvent, menuWidth: number, menuHeight: number) {
+  const viewportPadding = 12;
+  return {
+    x: Math.max(viewportPadding, Math.min(event.clientX, window.innerWidth - menuWidth - viewportPadding)),
+    y: Math.max(viewportPadding, Math.min(event.clientY, window.innerHeight - menuHeight - viewportPadding)),
+  };
 }
 
 function isTableFocused(tableKey: string) {
@@ -267,9 +284,10 @@ async function confirmDeleteConnection(connectionId: string) {
 function openConnectionContextMenu(event: MouseEvent, connectionId: string, connectionName: string) {
   closeDatabaseContextMenu();
   closeTableContextMenu();
+  const menuPosition = getViewportSafeMenuPosition(event, 220, 120);
   connectionContextMenu.value = {
-    x: event.clientX,
-    y: event.clientY,
+    x: menuPosition.x,
+    y: menuPosition.y,
     connectionId,
     connectionName,
   };
@@ -327,9 +345,10 @@ function closeDeleteConnectionConfirm() {
 function openDatabaseContextMenu(event: MouseEvent, connectionId: string, database: string) {
   closeConnectionContextMenu();
   closeTableContextMenu();
+  const menuPosition = getViewportSafeMenuPosition(event, 240, 180);
   databaseContextMenu.value = {
-    x: event.clientX,
-    y: event.clientY,
+    x: menuPosition.x,
+    y: menuPosition.y,
     connectionId,
     database,
   };
@@ -342,9 +361,10 @@ function closeDatabaseContextMenu() {
 function openTableContextMenu(event: MouseEvent, connectionId: string, database: string, table: TableSummary) {
   closeConnectionContextMenu();
   closeDatabaseContextMenu();
+  const menuPosition = getViewportSafeMenuPosition(event, 250, 220);
   tableContextMenu.value = {
-    x: event.clientX,
-    y: event.clientY,
+    x: menuPosition.x,
+    y: menuPosition.y,
     connectionId,
     database,
     table,
@@ -358,9 +378,10 @@ function closeTableContextMenu() {
 
 function openRoutineContextMenu(event: MouseEvent, connectionId: string, database: string, provider: ProviderType, routine: RoutineInfo) {
   closeAllContextMenus();
+  const menuPosition = getViewportSafeMenuPosition(event, 220, 150);
   routineContextMenu.value = {
-    x: event.clientX,
-    y: event.clientY,
+    x: menuPosition.x,
+    y: menuPosition.y,
     connectionId,
     database,
     provider,
@@ -741,6 +762,15 @@ function closeRenameTableDialog() {
   renameTableName.value = '';
 }
 
+function openTableMockDataDialog() {
+  if (!tableContextMenu.value) {
+    return;
+  }
+
+  void store.openTableMockTab(tableContextMenu.value.table.key);
+  closeTableContextMenu();
+}
+
 async function submitRenameTable() {
   if (!renameTableTarget.value) {
     return;
@@ -947,9 +977,11 @@ onBeforeUnmount(() => {
           :style="{ '--connection-accent': connection.accent }"
         >
           <div class="tree-row tree-row-connection" @contextmenu.prevent.stop="openConnectionContextMenu($event, connection.id, connection.name)">
-            <button class="tree-toggle" type="button" @click="toggleConnection(connection.id)">{{ expandedConnections.includes(connection.id) ? '▾' : '▸' }}</button>
+            <button class="tree-toggle" type="button" @click="toggleConnection(connection.id)">
+              <NIcon size="12"><component :is="treeToggleIcon(expandedConnections.includes(connection.id))" /></NIcon>
+            </button>
             <button class="tree-node-main tree-node-main-connection" type="button" @click="toggleConnection(connection.id)">
-              <span class="tree-icon tree-icon-provider" :class="providerTreeClass(connection.provider)">{{ providerTreeMark(connection.provider) }}</span>
+              <NIcon class="tree-icon tree-icon-provider" :class="providerTreeClass(connection.provider)" size="12"><component :is="providerTreeIcon(connection.provider)" /></NIcon>
               <span class="tree-label-stack">
                 <span class="tree-label-main">{{ connection.name }}</span>
                 <span class="tree-label-meta">{{ connection.host }}<template v-if="connection.port">:{{ connection.port }}</template></span>
@@ -968,13 +1000,15 @@ onBeforeUnmount(() => {
               class="tree-node"
             >
               <div class="tree-row tree-row-database" @contextmenu.prevent.stop="openDatabaseContextMenu($event, connection.id, database.name)">
-                <button class="tree-toggle" type="button" @click="toggleDatabase(`${connection.id}:${database.name}`)">{{ expandedDatabases.includes(`${connection.id}:${database.name}`) ? '▾' : '▸' }}</button>
+                <button class="tree-toggle" type="button" @click="toggleDatabase(`${connection.id}:${database.name}`)">
+                  <NIcon size="12"><component :is="treeToggleIcon(expandedDatabases.includes(`${connection.id}:${database.name}`))" /></NIcon>
+                </button>
                 <button
                   class="tree-node-main"
                   type="button"
                   @click="toggleDatabase(`${connection.id}:${database.name}`)"
                 >
-                  <span class="tree-icon tree-icon-database">DB</span>
+                  <NIcon class="tree-icon tree-icon-database" size="12"><IconDatabase /></NIcon>
                   <span class="tree-label-stack">
                     <span class="tree-label-main">{{ database.name }}</span>
                     <span class="tree-label-meta">{{ store.getTables(connection.id, database.name).length }} tables</span>
@@ -987,115 +1021,141 @@ onBeforeUnmount(() => {
                 class="tree-children tree-children-animated"
                 @contextmenu.prevent.stop
               >
-                <div
-                  v-for="table in store.getTables(connection.id, database.name)"
-                  :key="table.key"
-                  class="tree-node"
-                >
-                  <div class="tree-row tree-row-table" :class="{ 'tree-row-active': isTableFocused(table.key) }" @contextmenu.stop.prevent="openTableContextMenu($event, connection.id, database.name, table)">
-                    <button class="tree-toggle" type="button" @click="toggleTableNode(table.key)">{{ isTableExpanded(table.key) ? '▾' : '▸' }}</button>
-                    <button type="button" class="tree-node-main" @click="store.openTable(table.key)">
-                      <span class="tree-icon tree-icon-table">TB</span>
-                      <span class="tree-label-stack">
-                        <span class="tree-label-main">{{ table.schema ? `${table.schema}.${table.name}` : table.name }}</span>
-                        <span class="tree-label-meta">{{ store.tableRowCountLabel(table.key) ?? '未统计' }} rows</span>
-                      </span>
+                <div v-if="treeTables(connection.id, database.name).length > 0" class="tree-node">
+                  <div class="tree-row tree-row-group">
+                    <button class="tree-toggle" type="button" @click="toggleRoutineGroup(connection.id, database.name, 'tables')">
+                      <NIcon size="12"><component :is="treeToggleIcon(isRoutineGroupExpanded(connection.id, database.name, 'tables'))" /></NIcon>
+                    </button>
+                    <button type="button" class="tree-node-main" @click="toggleRoutineGroup(connection.id, database.name, 'tables')">
+                      <NIcon class="tree-icon tree-icon-table" size="12"><IconTable /></NIcon>
+                      <span class="tree-label-main">表</span>
+                      <span class="tree-row-count">{{ treeTables(connection.id, database.name).length }}</span>
                     </button>
                   </div>
-
-                  <div v-if="isTableExpanded(table.key)" class="tree-children tree-children-animated tree-children-table">
-                    <div v-if="tableDesignStatusForTree(table.key).loading" class="tree-loading-row">正在加载对象树...</div>
-                    <NAlert v-else-if="tableDesignStatusForTree(table.key).error" type="warning" :show-icon="false" class="tree-inline-alert">
-                      {{ tableDesignStatusForTree(table.key).error }}
-                    </NAlert>
-                    <template v-else-if="tableDesignForTree(table.key)">
-                      <div class="tree-node">
-                        <div class="tree-row tree-row-group">
-                          <button class="tree-toggle" type="button" @click="toggleTableGroup(table.key, 'columns')">{{ isTableGroupExpanded(table.key, 'columns') ? '▾' : '▸' }}</button>
-                          <button type="button" class="tree-node-main" @click="openDesignSection(table.key, 'columns')">
-                            <span class="tree-icon tree-icon-column">CL</span>
-                            <span class="tree-label-main">字段</span>
-                            <span class="tree-row-count">{{ treeColumns(table.key).length }}</span>
-                          </button>
-                        </div>
-                        <div v-if="isTableGroupExpanded(table.key, 'columns')" class="tree-children tree-children-animated">
-                          <button
-                            v-for="column in treeColumns(table.key)"
-                            :key="column.name"
-                            type="button"
-                            class="tree-leaf-row"
-                            @dblclick.stop.prevent="openDesignSection(table.key, 'columns', column.name)"
-                          >
-                            <span class="tree-icon tree-icon-leaf">F</span>
-                            <span class="tree-leaf-name">{{ column.name }}</span>
-                            <span class="tree-leaf-type">{{ formatTreeColumnType(column) }}</span>
-                          </button>
-                        </div>
+                  <div v-if="isRoutineGroupExpanded(connection.id, database.name, 'tables')" class="tree-children tree-children-animated">
+                    <div
+                      v-for="table in treeTables(connection.id, database.name)"
+                      :key="table.key"
+                      class="tree-node"
+                    >
+                      <div class="tree-row tree-row-table" :class="{ 'tree-row-active': isTableFocused(table.key) }" @contextmenu.stop.prevent="openTableContextMenu($event, connection.id, database.name, table)">
+                        <button class="tree-toggle" type="button" @click="toggleTableNode(table.key)">
+                          <NIcon size="12"><component :is="treeToggleIcon(isTableExpanded(table.key))" /></NIcon>
+                        </button>
+                        <button type="button" class="tree-node-main" @click="store.openTable(table.key)">
+                          <NIcon class="tree-icon tree-icon-table" size="12"><IconTable /></NIcon>
+                          <span class="tree-label-stack">
+                            <span class="tree-label-main">{{ table.schema ? `${table.schema}.${table.name}` : table.name }}</span>
+                            <span class="tree-label-meta">{{ store.tableRowCountLabel(table.key) ?? '未统计' }} rows</span>
+                          </span>
+                        </button>
                       </div>
 
-                      <div class="tree-node">
-                        <div class="tree-row tree-row-group">
-                          <button class="tree-toggle" type="button" @click="toggleTableGroup(table.key, 'indexes')">{{ isTableGroupExpanded(table.key, 'indexes') ? '▾' : '▸' }}</button>
-                          <button type="button" class="tree-node-main" @click="openDesignSection(table.key, 'indexes')">
-                            <span class="tree-icon tree-icon-index">IX</span>
-                            <span class="tree-label-main">索引</span>
-                            <span class="tree-row-count">{{ treeIndexes(table.key).length }}</span>
-                          </button>
-                        </div>
-                        <div v-if="isTableGroupExpanded(table.key, 'indexes')" class="tree-children tree-children-animated">
-                          <button v-for="index in treeIndexes(table.key)" :key="index.name" type="button" class="tree-leaf-row" @dblclick.stop.prevent="openDesignSection(table.key, 'indexes', index.name)">
-                            <span class="tree-icon tree-icon-leaf">I</span>
-                            <span class="tree-leaf-name">{{ index.name }}</span>
-                            <span class="tree-leaf-type">{{ index.columns.join(', ') }}</span>
-                          </button>
-                        </div>
-                      </div>
+                      <div v-if="isTableExpanded(table.key)" class="tree-children tree-children-animated tree-children-table">
+                        <div v-if="tableDesignStatusForTree(table.key).loading" class="tree-loading-row">正在加载对象树...</div>
+                        <NAlert v-else-if="tableDesignStatusForTree(table.key).error" type="warning" :show-icon="false" class="tree-inline-alert">
+                          {{ tableDesignStatusForTree(table.key).error }}
+                        </NAlert>
+                        <template v-else-if="tableDesignForTree(table.key)">
+                          <div class="tree-node">
+                            <div class="tree-row tree-row-group">
+                              <button class="tree-toggle" type="button" @click="toggleTableGroup(table.key, 'columns')">
+                                <NIcon size="12"><component :is="treeToggleIcon(isTableGroupExpanded(table.key, 'columns'))" /></NIcon>
+                              </button>
+                              <button type="button" class="tree-node-main" @click="openDesignSection(table.key, 'columns')">
+                                <NIcon class="tree-icon tree-icon-column" size="12"><IconColumns3 /></NIcon>
+                                <span class="tree-label-main">字段</span>
+                                <span class="tree-row-count">{{ treeColumns(table.key).length }}</span>
+                              </button>
+                            </div>
+                            <div v-if="isTableGroupExpanded(table.key, 'columns')" class="tree-children tree-children-animated">
+                              <button
+                                v-for="column in treeColumns(table.key)"
+                                :key="column.name"
+                                type="button"
+                                class="tree-leaf-row"
+                                @dblclick.stop.prevent="openDesignSection(table.key, 'columns', column.name)"
+                              >
+                                <NIcon class="tree-icon tree-icon-leaf" size="12"><IconTableColumn /></NIcon>
+                                <span class="tree-leaf-name">{{ column.name }}</span>
+                                <span class="tree-leaf-type">{{ formatTreeColumnType(column) }}</span>
+                              </button>
+                            </div>
+                          </div>
 
-                      <div class="tree-node">
-                        <div class="tree-row tree-row-group">
-                          <button class="tree-toggle" type="button" @click="toggleTableGroup(table.key, 'foreignKeys')">{{ isTableGroupExpanded(table.key, 'foreignKeys') ? '▾' : '▸' }}</button>
-                          <button type="button" class="tree-node-main" @click="openDesignSection(table.key, 'foreignKeys')">
-                            <span class="tree-icon tree-icon-foreign-key">FK</span>
-                            <span class="tree-label-main">外键</span>
-                            <span class="tree-row-count">{{ treeForeignKeys(table.key).length }}</span>
-                          </button>
-                        </div>
-                        <div v-if="isTableGroupExpanded(table.key, 'foreignKeys')" class="tree-children tree-children-animated">
-                          <button v-for="foreignKey in treeForeignKeys(table.key)" :key="`${foreignKey.sourceColumn}:${foreignKey.targetColumn}`" type="button" class="tree-leaf-row" @dblclick.stop.prevent="openDesignSection(table.key, 'foreignKeys', foreignKey.sourceColumn)">
-                            <span class="tree-icon tree-icon-leaf">R</span>
-                            <span class="tree-leaf-name">{{ foreignKey.sourceColumn }}</span>
-                            <span class="tree-leaf-type">{{ foreignKey.targetColumn }}</span>
-                          </button>
-                        </div>
-                      </div>
+                          <div class="tree-node">
+                            <div class="tree-row tree-row-group">
+                              <button class="tree-toggle" type="button" @click="toggleTableGroup(table.key, 'indexes')">
+                                <NIcon size="12"><component :is="treeToggleIcon(isTableGroupExpanded(table.key, 'indexes'))" /></NIcon>
+                              </button>
+                              <button type="button" class="tree-node-main" @click="openDesignSection(table.key, 'indexes')">
+                                <NIcon class="tree-icon tree-icon-index" size="12"><IconListDetails /></NIcon>
+                                <span class="tree-label-main">索引</span>
+                                <span class="tree-row-count">{{ treeIndexes(table.key).length }}</span>
+                              </button>
+                            </div>
+                            <div v-if="isTableGroupExpanded(table.key, 'indexes')" class="tree-children tree-children-animated">
+                              <button v-for="index in treeIndexes(table.key)" :key="index.name" type="button" class="tree-leaf-row" @dblclick.stop.prevent="openDesignSection(table.key, 'indexes', index.name)">
+                                <NIcon class="tree-icon tree-icon-leaf" size="12"><IconListDetails /></NIcon>
+                                <span class="tree-leaf-name">{{ index.name }}</span>
+                                <span class="tree-leaf-type">{{ index.columns.join(', ') }}</span>
+                              </button>
+                            </div>
+                          </div>
 
-                      <div class="tree-node">
-                        <div class="tree-row tree-row-group">
-                          <button class="tree-toggle" type="button" @click="toggleTableGroup(table.key, 'triggers')">{{ isTableGroupExpanded(table.key, 'triggers') ? '▾' : '▸' }}</button>
-                          <button type="button" class="tree-node-main" @click="openDesignSection(table.key, 'triggers')">
-                            <span class="tree-icon tree-icon-trigger">TR</span>
-                            <span class="tree-label-main">触发器</span>
-                            <span class="tree-row-count">{{ treeTriggers(table.key).length }}</span>
-                          </button>
-                        </div>
-                        <div v-if="isTableGroupExpanded(table.key, 'triggers')" class="tree-children tree-children-animated">
-                          <button v-for="trigger in treeTriggers(table.key)" :key="trigger.name" type="button" class="tree-leaf-row" @dblclick.stop.prevent="openDesignSection(table.key, 'triggers', trigger.name)">
-                            <span class="tree-icon tree-icon-leaf">T</span>
-                            <span class="tree-leaf-name">{{ trigger.name }}</span>
-                            <span class="tree-leaf-type">{{ trigger.event || trigger.timing || '-' }}</span>
-                          </button>
-                        </div>
+                          <div class="tree-node">
+                            <div class="tree-row tree-row-group">
+                              <button class="tree-toggle" type="button" @click="toggleTableGroup(table.key, 'foreignKeys')">
+                                <NIcon size="12"><component :is="treeToggleIcon(isTableGroupExpanded(table.key, 'foreignKeys'))" /></NIcon>
+                              </button>
+                              <button type="button" class="tree-node-main" @click="openDesignSection(table.key, 'foreignKeys')">
+                                <NIcon class="tree-icon tree-icon-foreign-key" size="12"><IconLink /></NIcon>
+                                <span class="tree-label-main">外键</span>
+                                <span class="tree-row-count">{{ treeForeignKeys(table.key).length }}</span>
+                              </button>
+                            </div>
+                            <div v-if="isTableGroupExpanded(table.key, 'foreignKeys')" class="tree-children tree-children-animated">
+                              <button v-for="foreignKey in treeForeignKeys(table.key)" :key="`${foreignKey.sourceColumn}:${foreignKey.targetColumn}`" type="button" class="tree-leaf-row" @dblclick.stop.prevent="openDesignSection(table.key, 'foreignKeys', foreignKey.sourceColumn)">
+                                <NIcon class="tree-icon tree-icon-leaf" size="12"><IconLink /></NIcon>
+                                <span class="tree-leaf-name">{{ foreignKey.sourceColumn }}</span>
+                                <span class="tree-leaf-type">{{ foreignKey.targetColumn }}</span>
+                              </button>
+                            </div>
+                          </div>
+
+                          <div class="tree-node">
+                            <div class="tree-row tree-row-group">
+                              <button class="tree-toggle" type="button" @click="toggleTableGroup(table.key, 'triggers')">
+                                <NIcon size="12"><component :is="treeToggleIcon(isTableGroupExpanded(table.key, 'triggers'))" /></NIcon>
+                              </button>
+                              <button type="button" class="tree-node-main" @click="openDesignSection(table.key, 'triggers')">
+                                <NIcon class="tree-icon tree-icon-trigger" size="12"><IconBolt /></NIcon>
+                                <span class="tree-label-main">触发器</span>
+                                <span class="tree-row-count">{{ treeTriggers(table.key).length }}</span>
+                              </button>
+                            </div>
+                            <div v-if="isTableGroupExpanded(table.key, 'triggers')" class="tree-children tree-children-animated">
+                              <button v-for="trigger in treeTriggers(table.key)" :key="trigger.name" type="button" class="tree-leaf-row" @dblclick.stop.prevent="openDesignSection(table.key, 'triggers', trigger.name)">
+                                <NIcon class="tree-icon tree-icon-leaf" size="12"><IconBolt /></NIcon>
+                                <span class="tree-leaf-name">{{ trigger.name }}</span>
+                                <span class="tree-leaf-type">{{ trigger.event || trigger.timing || '-' }}</span>
+                              </button>
+                            </div>
+                          </div>
+                        </template>
                       </div>
-                    </template>
+                    </div>
                   </div>
                 </div>
 
                 <!-- 存储过程分组 -->
                 <div v-if="treeProcedures(connection.id, database.name).length > 0" class="tree-node">
                   <div class="tree-row tree-row-group">
-                    <button class="tree-toggle" type="button" @click="toggleRoutineGroup(connection.id, database.name, 'procedures')">{{ isRoutineGroupExpanded(connection.id, database.name, 'procedures') ? '▾' : '▸' }}</button>
+                    <button class="tree-toggle" type="button" @click="toggleRoutineGroup(connection.id, database.name, 'procedures')">
+                      <NIcon size="12"><component :is="treeToggleIcon(isRoutineGroupExpanded(connection.id, database.name, 'procedures'))" /></NIcon>
+                    </button>
                     <button type="button" class="tree-node-main" @click="toggleRoutineGroup(connection.id, database.name, 'procedures')">
-                      <span class="tree-icon tree-icon-procedure">SP</span>
+                      <NIcon class="tree-icon tree-icon-procedure" size="12"><IconScript /></NIcon>
                       <span class="tree-label-main">存储过程</span>
                       <span class="tree-row-count">{{ treeProcedures(connection.id, database.name).length }}</span>
                     </button>
@@ -1103,25 +1163,29 @@ onBeforeUnmount(() => {
                   <div v-if="isRoutineGroupExpanded(connection.id, database.name, 'procedures')" class="tree-children tree-children-animated">
                     <div v-for="routine in treeProcedures(connection.id, database.name)" :key="routine.name" class="tree-node">
                       <div class="tree-row">
-                        <button class="tree-toggle" type="button" @click="toggleRoutine(connection.id, database.name, routine)">{{ isRoutineExpanded(connection.id, database.name, routine) ? '▾' : '▸' }}</button>
+                        <button class="tree-toggle" type="button" @click="toggleRoutine(connection.id, database.name, routine)">
+                          <NIcon size="12"><component :is="treeToggleIcon(isRoutineExpanded(connection.id, database.name, routine))" /></NIcon>
+                        </button>
                         <button type="button" class="tree-node-main" @dblclick.stop.prevent="store.openRoutineSource(connection.id, database.name, routine.schema ?? null, routine.name, routine.routineType)" @contextmenu.stop.prevent="openRoutineContextMenu($event, connection.id, database.name, connection.provider, routine)">
-                          <span class="tree-icon tree-icon-leaf">P</span>
+                          <NIcon class="tree-icon tree-icon-leaf" size="12"><component :is="routineTreeIcon(routine.routineType)" /></NIcon>
                           <span class="tree-leaf-name">{{ formatRoutineName(connection.provider, routine) }}</span>
                         </button>
                       </div>
                       <div v-if="isRoutineExpanded(connection.id, database.name, routine)" class="tree-children tree-children-animated">
                         <div class="tree-node">
                           <div class="tree-row tree-row-group">
-                            <button class="tree-toggle" type="button" @click="toggleRoutineParamGroup(connection.id, database.name, routine)">{{ isRoutineParamGroupExpanded(connection.id, database.name, routine) ? '▾' : '▸' }}</button>
+                            <button class="tree-toggle" type="button" @click="toggleRoutineParamGroup(connection.id, database.name, routine)">
+                              <NIcon size="12"><component :is="treeToggleIcon(isRoutineParamGroupExpanded(connection.id, database.name, routine))" /></NIcon>
+                            </button>
                             <button type="button" class="tree-node-main" @click="toggleRoutineParamGroup(connection.id, database.name, routine)">
-                              <span class="tree-icon tree-icon-leaf">@</span>
+                              <NIcon class="tree-icon tree-icon-leaf" size="12"><IconVariable /></NIcon>
                               <span class="tree-label-main">参数</span>
                               <span class="tree-row-count">{{ routine.parameters.length }}</span>
                             </button>
                           </div>
                           <div v-if="isRoutineParamGroupExpanded(connection.id, database.name, routine)" class="tree-children tree-children-animated">
                             <button v-for="param in routine.parameters" :key="param.name" type="button" class="tree-leaf-row">
-                              <span class="tree-icon tree-icon-leaf">@</span>
+                              <NIcon class="tree-icon tree-icon-leaf" size="12"><IconVariable /></NIcon>
                               <span class="tree-leaf-name">{{ param.name }}</span>
                               <span class="tree-leaf-type">{{ param.dataType }}</span>
                               <span v-if="param.direction !== 'IN'" class="tree-leaf-type tree-param-direction">{{ formatParamDirection(param.direction) }}</span>
@@ -1136,9 +1200,11 @@ onBeforeUnmount(() => {
                 <!-- 函数分组 -->
                 <div v-if="treeFunctions(connection.id, database.name).length > 0" class="tree-node">
                   <div class="tree-row tree-row-group">
-                    <button class="tree-toggle" type="button" @click="toggleRoutineGroup(connection.id, database.name, 'functions')">{{ isRoutineGroupExpanded(connection.id, database.name, 'functions') ? '▾' : '▸' }}</button>
+                    <button class="tree-toggle" type="button" @click="toggleRoutineGroup(connection.id, database.name, 'functions')">
+                      <NIcon size="12"><component :is="treeToggleIcon(isRoutineGroupExpanded(connection.id, database.name, 'functions'))" /></NIcon>
+                    </button>
                     <button type="button" class="tree-node-main" @click="toggleRoutineGroup(connection.id, database.name, 'functions')">
-                      <span class="tree-icon tree-icon-function">FN</span>
+                      <NIcon class="tree-icon tree-icon-function" size="12"><IconFunction /></NIcon>
                       <span class="tree-label-main">函数</span>
                       <span class="tree-row-count">{{ treeFunctions(connection.id, database.name).length }}</span>
                     </button>
@@ -1146,9 +1212,11 @@ onBeforeUnmount(() => {
                   <div v-if="isRoutineGroupExpanded(connection.id, database.name, 'functions')" class="tree-children tree-children-animated">
                     <div v-for="routine in treeFunctions(connection.id, database.name)" :key="routine.name" class="tree-node">
                       <div class="tree-row">
-                        <button class="tree-toggle" type="button" @click="toggleRoutine(connection.id, database.name, routine)">{{ isRoutineExpanded(connection.id, database.name, routine) ? '▾' : '▸' }}</button>
+                        <button class="tree-toggle" type="button" @click="toggleRoutine(connection.id, database.name, routine)">
+                          <NIcon size="12"><component :is="treeToggleIcon(isRoutineExpanded(connection.id, database.name, routine))" /></NIcon>
+                        </button>
                         <button type="button" class="tree-node-main" @dblclick.stop.prevent="store.openRoutineSource(connection.id, database.name, routine.schema ?? null, routine.name, routine.routineType)" @contextmenu.stop.prevent="openRoutineContextMenu($event, connection.id, database.name, connection.provider, routine)">
-                          <span class="tree-icon tree-icon-leaf">F</span>
+                          <NIcon class="tree-icon tree-icon-leaf" size="12"><component :is="routineTreeIcon(routine.routineType)" /></NIcon>
                           <span class="tree-leaf-name">{{ formatRoutineName(connection.provider, routine) }}</span>
                           <span v-if="routineSubType(routine)" class="tree-leaf-type">{{ routineSubType(routine) }}</span>
                         </button>
@@ -1156,16 +1224,18 @@ onBeforeUnmount(() => {
                       <div v-if="isRoutineExpanded(connection.id, database.name, routine)" class="tree-children tree-children-animated">
                         <div class="tree-node">
                           <div class="tree-row tree-row-group">
-                            <button class="tree-toggle" type="button" @click="toggleRoutineParamGroup(connection.id, database.name, routine)">{{ isRoutineParamGroupExpanded(connection.id, database.name, routine) ? '▾' : '▸' }}</button>
+                            <button class="tree-toggle" type="button" @click="toggleRoutineParamGroup(connection.id, database.name, routine)">
+                              <NIcon size="12"><component :is="treeToggleIcon(isRoutineParamGroupExpanded(connection.id, database.name, routine))" /></NIcon>
+                            </button>
                             <button type="button" class="tree-node-main" @click="toggleRoutineParamGroup(connection.id, database.name, routine)">
-                              <span class="tree-icon tree-icon-leaf">@</span>
+                              <NIcon class="tree-icon tree-icon-leaf" size="12"><IconVariable /></NIcon>
                               <span class="tree-label-main">参数</span>
                               <span class="tree-row-count">{{ routine.parameters.length }}</span>
                             </button>
                           </div>
                           <div v-if="isRoutineParamGroupExpanded(connection.id, database.name, routine)" class="tree-children tree-children-animated">
                             <button v-for="param in routine.parameters" :key="param.name" type="button" class="tree-leaf-row">
-                              <span class="tree-icon tree-icon-leaf">@</span>
+                              <NIcon class="tree-icon tree-icon-leaf" size="12"><IconVariable /></NIcon>
                               <span class="tree-leaf-name">{{ param.name }}</span>
                               <span class="tree-leaf-type">{{ param.dataType }}</span>
                               <span v-if="param.direction !== 'IN'" class="tree-leaf-type tree-param-direction">{{ formatParamDirection(param.direction) }}</span>
@@ -1231,6 +1301,7 @@ onBeforeUnmount(() => {
       @mouseleave="setTableScriptSubmenu(false)"
     >
       <button type="button" class="database-context-menu-item" @click="store.openTableDesign(tableContextMenu.table.key); closeTableContextMenu()">表设计...</button>
+      <button type="button" class="database-context-menu-item" @click="openTableMockDataDialog">生成 Mock 数据...</button>
       <button type="button" class="database-context-menu-item" @click="openRenameTableQuery">重命名表...</button>
       <div class="database-context-submenu-anchor" @mouseenter="setTableScriptSubmenu(true)" @mouseleave="setTableScriptSubmenu(false)">
         <button
@@ -1238,7 +1309,8 @@ onBeforeUnmount(() => {
           class="database-context-menu-item database-context-menu-item-arrow"
           @click="setTableScriptSubmenu(!tableContextMenu.showScriptSubmenu)"
         >
-          编写脚本为
+          <span>编写脚本为</span>
+          <NIcon size="12" class="database-context-menu-item-arrow-icon"><IconChevronRight /></NIcon>
         </button>
 
         <div v-if="tableContextMenu.showScriptSubmenu" class="database-context-menu database-context-submenu">
@@ -1519,6 +1591,9 @@ onBeforeUnmount(() => {
 }
 
 .tree-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 14px;
   height: 14px;
   padding: 0;
@@ -1565,6 +1640,11 @@ onBeforeUnmount(() => {
 
 // ── Tree icons ──
 .tree-icon {
+  :deep(svg) {
+    width: 12px;
+    height: 12px;
+  }
+
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1732,8 +1812,8 @@ onBeforeUnmount(() => {
 .database-context-menu {
   position: fixed;
   z-index: 90;
-  min-width: 180px;
-  padding: $gap-sm;
+  min-width: 156px;
+  padding: 4px;
   border: 1px solid $color-border-strong;
   border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.98);
@@ -1748,11 +1828,13 @@ onBeforeUnmount(() => {
 
 .database-context-menu-item {
   width: 100%;
-  padding: $gap-lg $gap-xl;
+  padding: 6px 10px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   text-align: left;
+  font-size: 12px;
+  line-height: 1.25;
   cursor: pointer;
 
   &:hover {
@@ -1764,10 +1846,8 @@ onBeforeUnmount(() => {
     align-items: center;
     justify-content: space-between;
 
-    &::after {
-      content: '›';
+    .database-context-menu-item-arrow-icon {
       color: #64748b;
-      font-size: 14px;
     }
   }
 }
@@ -1777,7 +1857,7 @@ onBeforeUnmount(() => {
 }
 
 .database-context-submenu {
-  min-width: 150px;
+  min-width: 138px;
   position: absolute;
   top: -4px;
   left: calc(100% + 6px);

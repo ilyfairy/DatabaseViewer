@@ -276,7 +276,15 @@ export interface GraphWorkspaceTab {
   graph: DatabaseGraph | null
 }
 
-export type WorkspaceTab = TableWorkspaceTab | TableDesignWorkspaceTab | SqlWorkspaceTab | GraphWorkspaceTab
+export interface TableMockWorkspaceTab {
+  id: string
+  type: 'mock'
+  connectionId: string
+  database: string
+  tableKey: string
+}
+
+export type WorkspaceTab = TableWorkspaceTab | TableDesignWorkspaceTab | SqlWorkspaceTab | GraphWorkspaceTab | TableMockWorkspaceTab
 
 export interface ReverseReferenceRow {
   rowKey: string

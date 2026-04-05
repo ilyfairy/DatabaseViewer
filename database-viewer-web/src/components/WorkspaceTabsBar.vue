@@ -1,7 +1,11 @@
 <script setup lang="ts">
+import type { Component } from 'vue';
 import { computed, ref } from 'vue';
-import { NButton } from 'naive-ui';
+import { IconFlask2, IconSchema, IconSql, IconTable, IconTableOptions } from '@tabler/icons-vue';
+import { Close } from '@vicons/carbon';
+import { NButton, NIcon } from 'naive-ui';
 import { useExplorerStore } from '../stores/explorer';
+import type { WorkspaceTab } from '../types/explorer';
 
 const store = useExplorerStore();
 const tabs = computed(() => store.workspaceTabs);
@@ -25,6 +29,22 @@ function tabTitle(tab: typeof tabs.value[number]) {
   return tab.type === 'sql' && tab.filePath
     ? tab.filePath
     : store.getWorkspaceTabLabel(tab);
+}
+
+function tabKindIcon(tab: WorkspaceTab): Component {
+  switch (tab.type) {
+    case 'table':
+      return IconTable;
+    case 'design':
+      return IconTableOptions;
+    case 'graph':
+      return IconSchema;
+    case 'mock':
+      return IconFlask2;
+    case 'sql':
+    default:
+      return IconSql;
+  }
 }
 
 /** 鼠标中键关闭 tab（兼容 auxclick 和 mouseup） */
@@ -79,11 +99,11 @@ function handleTabDragEnd() {
         @drop.prevent="handleTabDrop(tab.id)"
         @dragend="handleTabDragEnd"
       >
-        <span class="workspace-tab-chip-kind">{{ tab.type === 'table' ? '表' : tab.type === 'design' ? '设计' : tab.type === 'graph' ? '图' : 'SQL' }}</span>
+        <span class="workspace-tab-chip-kind"><NIcon size="14"><component :is="tabKindIcon(tab)" /></NIcon></span>
         <span v-if="tab.type === 'sql' && store.isSqlTabDirty(tab.id)" class="workspace-tab-chip-dirty" title="未保存">●</span>
         <span class="workspace-tab-chip-label">{{ store.getWorkspaceTabLabel(tab) }}</span>
         <span class="workspace-tab-chip-close" @click.stop="store.closeWorkspaceTab(tab.id)">
-          <span class="workspace-tab-chip-close-glyph">✕</span>
+          <NIcon size="12"><Close /></NIcon>
         </span>
       </button>
       <div v-if="!tabs.length" class="workspace-tabs-empty">打开表或新建 SQL 标签页开始工作</div>
@@ -100,7 +120,7 @@ function handleTabDragEnd() {
   align-items: center;
   justify-content: space-between;
   gap: $gap-xs;
-  padding: $gap-xs $gap-md;
+  padding: 1px 2px;
   background: $color-bg-panel;
   border: 1px solid $color-border-subtle;
   border-radius: var(--radius-lg);
@@ -108,7 +128,7 @@ function handleTabDragEnd() {
 
 .workspace-tabs-list {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: $gap-sm;
   min-width: 0;
   flex: 1;
@@ -132,9 +152,10 @@ function handleTabDragEnd() {
   gap: 0;
   flex: 0 0 auto;
   max-width: 220px;
+  min-height: 28px;
   padding: 0;
   border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: var(--radius-lg);
+  border-radius: calc(var(--radius-lg) - 3px);
   background: $color-bg-subtle;
   color: $color-text-heading;
   cursor: pointer;
@@ -164,14 +185,19 @@ function handleTabDragEnd() {
     flex: 0 0 auto;
     min-width: 20px;
     align-self: stretch;
-    padding: 0 $gap-sm;
-    border-radius: calc(var(--radius-lg) - 1px) 0 0 calc(var(--radius-lg) - 1px);
+    padding: 0 4px;
+    border-radius: calc(var(--radius-lg) - 4px) 0 0 calc(var(--radius-lg) - 4px);
     background: rgba(14, 165, 233, 0.12);
     color: $color-accent-sky;
     font-size: $font-size-xs;
     font-weight: 800;
     line-height: 1;
     white-space: nowrap;
+
+    :deep(svg) {
+      width: 13px;
+      height: 13px;
+    }
   }
 
   &-label {
@@ -181,7 +207,7 @@ function handleTabDragEnd() {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    padding: $gap-xs $gap-sm;
+    padding: 0 $gap-sm;
     font-size: $font-size-sm;
     font-weight: 700;
   }

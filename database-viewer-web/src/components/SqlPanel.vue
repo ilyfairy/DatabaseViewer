@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { Close } from '@vicons/carbon';
 import { useLocalStorage } from '@vueuse/core';
-import { NButton, NCard, NEmpty, NModal, NSelect, NSpin, NTag } from 'naive-ui';
+import { NButton, NCard, NEmpty, NIcon, NModal, NSelect, NSpin, NTag } from 'naive-ui';
 import SqlCodeEditor from './SqlCodeEditor.vue';
 import { useExplorerStore } from '../stores/explorer';
 import type { SqlWorkspaceTab } from '../types/explorer';
@@ -480,7 +481,7 @@ watch(() => [props.tab.id, editorReady.value, store.pendingSqlEditorFocusTabId] 
             {{ selectedResultSet.name }} · {{ selectedResultSet.rows.length }} 行
           </span>
           <span v-else />
-          <button type="button" class="sql-results-close-btn" title="关闭结果" @click="closeResults">✕</button>
+          <button type="button" class="sql-results-close-btn" title="关闭结果" @click="closeResults"><NIcon size="14"><Close /></NIcon></button>
         </div>
 
         <NSpin :show="tab.loading" class="sql-results-spin">
