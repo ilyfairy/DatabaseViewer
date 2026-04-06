@@ -2,7 +2,7 @@ export type ProviderType = 'sqlserver' | 'mysql' | 'postgresql' | 'sqlite'
 export type AuthenticationMode = 'windows' | 'password'
 export type CellValue = string | number | boolean | null
 export type DatabaseObjectType = 'table' | 'view'
-export type CatalogObjectType = 'synonym' | 'sequence' | 'rule' | 'default' | 'user-defined-type'
+export type CatalogObjectType = 'synonym' | 'sequence' | 'rule' | 'default' | 'user-defined-type' | 'database-trigger' | 'xml-schema-collection'
 
 export interface ConnectionInfo {
   id: string
@@ -51,6 +51,8 @@ export interface DatabaseInfo {
   rules: RuleInfo[]
   defaults: DefaultInfo[]
   userDefinedTypes: UserDefinedTypeInfo[]
+  databaseTriggers: DatabaseTriggerInfo[]
+  xmlSchemaCollections: XmlSchemaCollectionInfo[]
   routines: RoutineInfo[]
 }
 
@@ -90,6 +92,21 @@ export interface UserDefinedTypeInfo {
   name: string
   baseTypeName: string
   isTableType: boolean
+}
+
+export interface DatabaseTriggerInfo {
+  database: string
+  schema?: string | null
+  name: string
+  timing?: string | null
+  event?: string | null
+}
+
+export interface XmlSchemaCollectionInfo {
+  database: string
+  schema?: string | null
+  name: string
+  xmlNamespaceCount: number
 }
 
 export interface CatalogObjectProperty {

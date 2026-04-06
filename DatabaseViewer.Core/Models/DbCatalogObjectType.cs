@@ -7,4 +7,6 @@ public enum DbCatalogObjectType
     Rule = 2,
     Default = 3,
     UserDefinedType = 4,
+    DatabaseTrigger = 5,
+    XmlSchemaCollection = 6,
 }

@@ -347,6 +347,73 @@ public sealed class DatabaseMetadataService
         }).ToArray();
     }
 
+    public async Task<IReadOnlyList<DbDatabaseTriggerInfo>> GetDatabaseTriggersAsync(ConnectionDefinition connection, string databaseName)
+    {
+        if (connection.ProviderType != DatabaseProviderType.SqlServer)
+        {
+            return Array.Empty<DbDatabaseTriggerInfo>();
+        }
+
+        await using var db = DbConnectionFactory.Create(connection, databaseName);
+        await db.OpenAsync();
+
+        var rows = await db.QueryAsync(@"
+            SELECT
+                s.name AS SchemaName,
+                tr.name AS TriggerName,
+                CASE WHEN tr.is_instead_of_trigger = 1 THEN 'INSTEAD OF' ELSE 'AFTER' END AS TriggerTiming,
+                STUFF((
+                    SELECT DISTINCT ', ' + te.type_desc
+                    FROM sys.trigger_events te
+                    WHERE te.object_id = tr.object_id
+                    FOR XML PATH(''), TYPE
+                ).value('.', 'nvarchar(max)'), 1, 2, '') AS TriggerEvent
+            FROM sys.triggers tr
+            INNER JOIN sys.objects o ON o.object_id = tr.object_id
+            INNER JOIN sys.schemas s ON s.schema_id = o.schema_id
+            WHERE tr.parent_class = 0
+            ORDER BY s.name, tr.name;");
+
+        return rows.Select(row => new DbDatabaseTriggerInfo
+        {
+            DatabaseName = databaseName,
+            SchemaName = row.SchemaName,
+            TriggerName = row.TriggerName,
+            TriggerTiming = row.TriggerTiming,
+            TriggerEvent = row.TriggerEvent,
+        }).ToArray();
+    }
+
+    public async Task<IReadOnlyList<DbXmlSchemaCollectionInfo>> GetXmlSchemaCollectionsAsync(ConnectionDefinition connection, string databaseName)
+    {
+        if (connection.ProviderType != DatabaseProviderType.SqlServer)
+        {
+            return Array.Empty<DbXmlSchemaCollectionInfo>();
+        }
+
+        await using var db = DbConnectionFactory.Create(connection, databaseName);
+        await db.OpenAsync();
+
+        var rows = await db.QueryAsync(@"
+            SELECT
+                s.name AS SchemaName,
+                xsc.name AS CollectionName,
+                COUNT(xc.xml_collection_id) AS XmlNamespaceCount
+            FROM sys.xml_schema_collections xsc
+            INNER JOIN sys.schemas s ON s.schema_id = xsc.schema_id
+            LEFT JOIN sys.xml_schema_components xc ON xc.xml_collection_id = xsc.xml_collection_id
+            GROUP BY s.name, xsc.name
+            ORDER BY s.name, xsc.name;");
+
+        return rows.Select(row => new DbXmlSchemaCollectionInfo
+        {
+            DatabaseName = databaseName,
+            SchemaName = row.SchemaName,
+            CollectionName = row.CollectionName,
+            XmlNamespaceCount = row.XmlNamespaceCount,
+        }).ToArray();
+    }
+
     public async Task<DbCatalogObjectDetailInfo?> GetCatalogObjectDetailAsync(ConnectionDefinition connection, string databaseName, DbCatalogObjectType objectType, string? schemaName, string objectName)
     {
         if (connection.ProviderType != DatabaseProviderType.SqlServer)
@@ -366,6 +433,8 @@ public sealed class DatabaseMetadataService
             DbCatalogObjectType.Rule => await GetRuleDetailAsync(db, databaseName, resolvedSchema, objectName),
             DbCatalogObjectType.Default => await GetDefaultDetailAsync(db, databaseName, resolvedSchema, objectName),
             DbCatalogObjectType.UserDefinedType => await GetUserDefinedTypeDetailAsync(db, databaseName, resolvedSchema, objectName),
+            DbCatalogObjectType.DatabaseTrigger => await GetDatabaseTriggerDetailAsync(db, databaseName, resolvedSchema, objectName),
+            DbCatalogObjectType.XmlSchemaCollection => await GetXmlSchemaCollectionDetailAsync(db, databaseName, resolvedSchema, objectName),
             _ => null,
         };
     }
@@ -585,8 +654,121 @@ public sealed class DatabaseMetadataService
         };
     }
 
+    private static async Task<DbCatalogObjectDetailInfo?> GetDatabaseTriggerDetailAsync(DbConnection db, string databaseName, string schemaName, string objectName)
+    {
+        var row = await db.QuerySingleOrDefaultAsync(@"
+            SELECT
+                s.name AS SchemaName,
+                tr.name AS TriggerName,
+                CASE WHEN tr.is_instead_of_trigger = 1 THEN 'INSTEAD OF' ELSE 'AFTER' END AS TriggerTiming,
+                STUFF((
+                    SELECT DISTINCT ', ' + te.type_desc
+                    FROM sys.trigger_events te
+                    WHERE te.object_id = tr.object_id
+                    FOR XML PATH(''), TYPE
+                ).value('.', 'nvarchar(max)'), 1, 2, '') AS TriggerEvent,
+                OBJECT_DEFINITION(tr.object_id) AS Definition
+            FROM sys.triggers tr
+            INNER JOIN sys.objects o ON o.object_id = tr.object_id
+            INNER JOIN sys.schemas s ON s.schema_id = o.schema_id
+            WHERE tr.parent_class = 0
+              AND s.name = @schemaName
+              AND tr.name = @objectName;",
+            new { schemaName, objectName });
+
+        if (row is null)
+        {
+            return null;
+        }
+
+        return new DbCatalogObjectDetailInfo
+        {
+            DatabaseName = databaseName,
+            SchemaName = row.SchemaName,
+            ObjectName = row.TriggerName,
+            ObjectType = DbCatalogObjectType.DatabaseTrigger,
+            Title = $"{row.SchemaName}.{row.TriggerName}",
+            Summary = row.TriggerEvent,
+            Definition = row.Definition,
+            Properties =
+            [
+                new DbCatalogObjectProperty { Label = "触发器名称", Value = row.TriggerName },
+                new DbCatalogObjectProperty { Label = "架构", Value = row.SchemaName },
+                new DbCatalogObjectProperty { Label = "触发时机", Value = row.TriggerTiming },
+                new DbCatalogObjectProperty { Label = "触发事件", Value = row.TriggerEvent },
+            ],
+        };
+    }
+
+    private static async Task<DbCatalogObjectDetailInfo?> GetXmlSchemaCollectionDetailAsync(DbConnection db, string databaseName, string schemaName, string objectName)
+    {
+        var row = await db.QuerySingleOrDefaultAsync(@"
+            SELECT
+                s.name AS SchemaName,
+                xsc.name AS CollectionName,
+                xsc.xml_collection_id AS CollectionId,
+                COUNT(xc.xml_collection_id) AS XmlNamespaceCount
+            FROM sys.xml_schema_collections xsc
+            INNER JOIN sys.schemas s ON s.schema_id = xsc.schema_id
+            LEFT JOIN sys.xml_schema_components xc ON xc.xml_collection_id = xsc.xml_collection_id
+            WHERE s.name = @schemaName
+              AND xsc.name = @objectName
+            GROUP BY s.name, xsc.name, xsc.xml_collection_id;",
+            new { schemaName, objectName });
+
+        if (row is null)
+        {
+            return null;
+        }
+
+        return new DbCatalogObjectDetailInfo
+        {
+            DatabaseName = databaseName,
+            SchemaName = row.SchemaName,
+            ObjectName = row.CollectionName,
+            ObjectType = DbCatalogObjectType.XmlSchemaCollection,
+            Title = $"{row.SchemaName}.{row.CollectionName}",
+            Summary = $"{row.XmlNamespaceCount} namespaces",
+            Properties =
+            [
+                new DbCatalogObjectProperty { Label = "集合名称", Value = row.CollectionName },
+                new DbCatalogObjectProperty { Label = "架构", Value = row.SchemaName },
+                new DbCatalogObjectProperty { Label = "集合 ID", Value = Convert.ToString(row.CollectionId) },
+                new DbCatalogObjectProperty { Label = "命名空间数量", Value = Convert.ToString(row.XmlNamespaceCount) },
+            ],
+        };
+    }
+
     public async Task<IReadOnlyList<TableIndexInfo>> GetObjectIndexesAsync(ConnectionDefinition connection, DbTableInfo table)
     {
+        if (connection.ProviderType == DatabaseProviderType.Sqlite)
+        {
+            await using var sqliteDb = DbConnectionFactory.Create(connection, table.DatabaseName);
+            await sqliteDb.OpenAsync();
+
+            static string SqliteLiteral(string value) => $"'{value.Replace("'", "''")}'";
+
+            var indexRows = await sqliteDb.QueryAsync($"PRAGMA index_list({SqliteLiteral(table.TableName)});");
+            var results = new List<TableIndexInfo>();
+            foreach (var row in indexRows)
+            {
+                var indexName = (string)row.name;
+                var columnRows = await sqliteDb.QueryAsync($"PRAGMA index_info({SqliteLiteral(indexName)});");
+                results.Add(new TableIndexInfo
+                {
+                    Name = indexName,
+                    IsPrimaryKey = string.Equals((string?)row.origin, "pk", StringComparison.OrdinalIgnoreCase),
+                    IsUnique = Convert.ToInt32(row.unique) == 1,
+                    Columns = columnRows
+                        .OrderBy(item => Convert.ToInt32(item.seqno))
+                        .Select(item => (string)item.name)
+                        .ToArray(),
+                });
+            }
+
+            return results;
+        }
+
         if (connection.ProviderType != DatabaseProviderType.SqlServer)
         {
             return Array.Empty<TableIndexInfo>();

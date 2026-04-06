@@ -19,6 +19,8 @@ const objectTypeLabel = computed(() => {
     case 'rule': return '规则';
     case 'default': return '默认值';
     case 'user-defined-type': return '类型';
+    case 'database-trigger': return '数据库触发器';
+    case 'xml-schema-collection': return 'XML 架构集合';
     default: return '对象';
   }
 });

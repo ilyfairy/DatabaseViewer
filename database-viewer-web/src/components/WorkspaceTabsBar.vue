@@ -122,7 +122,6 @@ function handleTabDragEnd() {
   align-items: center;
   justify-content: space-between;
   gap: $gap-xs;
-  padding: 1px 2px;
   background: $color-bg-panel;
   border: 1px solid $color-border-subtle;
   border-radius: var(--radius-lg);

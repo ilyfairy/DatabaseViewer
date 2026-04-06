@@ -18,6 +18,7 @@ const connectionContextMenu = ref<{ x: number; y: number; connectionId: string; 
 const databaseContextMenu = ref<{ x: number; y: number; connectionId: string; database: string } | null>(null);
 const tableContextMenu = ref<{ x: number; y: number; connectionId: string; database: string; table: TableSummary; showScriptSubmenu: boolean } | null>(null);
 const routineContextMenu = ref<{ x: number; y: number; connectionId: string; database: string; provider: ProviderType; routine: RoutineInfo } | null>(null);
+const designEntryContextMenu = ref<{ x: number; y: number; tableKey: string; kind: 'column' | 'index'; name: string } | null>(null);
 const deleteConnectionConfirm = ref<{ connectionId: string; connectionName: string } | null>(null);
 const deleteRoutineConfirm = ref<{ connectionId: string; database: string; provider: ProviderType; routine: RoutineInfo } | null>(null);
 const renameTableTarget = ref<{ connectionId: string; database: string; table: TableSummary } | null>(null);
@@ -50,6 +51,7 @@ const closeAllContextMenus = () => {
   closeDatabaseContextMenu();
   closeTableContextMenu();
   closeRoutineContextMenu();
+  closeDesignEntryContextMenu();
 };
 
 const visibleConnections = computed(() => store.visibleConnections);
@@ -142,14 +144,14 @@ function treeStatistics(tableKey: string) {
 }
 
 /** 切换存储过程/函数分组的展开状态 */
-function toggleRoutineGroup(connectionId: string, database: string, group: 'tables' | 'views' | 'synonyms' | 'sequences' | 'rules' | 'defaults' | 'types' | 'procedures' | 'functions') {
+function toggleRoutineGroup(connectionId: string, database: string, group: 'tables' | 'views' | 'synonyms' | 'sequences' | 'rules' | 'defaults' | 'types' | 'table-types' | 'database-triggers' | 'xml-schema-collections' | 'procedures' | 'functions') {
   const key = `${connectionId}:${database}:${group}`;
   expandedRoutineGroups.value = expandedRoutineGroups.value.includes(key)
     ? expandedRoutineGroups.value.filter((entry) => entry !== key)
     : [...expandedRoutineGroups.value, key];
 }
 
-function isRoutineGroupExpanded(connectionId: string, database: string, group: 'tables' | 'views' | 'synonyms' | 'sequences' | 'rules' | 'defaults' | 'types' | 'procedures' | 'functions') {
+function isRoutineGroupExpanded(connectionId: string, database: string, group: 'tables' | 'views' | 'synonyms' | 'sequences' | 'rules' | 'defaults' | 'types' | 'table-types' | 'database-triggers' | 'xml-schema-collections' | 'procedures' | 'functions') {
   return expandedRoutineGroups.value.includes(`${connectionId}:${database}:${group}`);
 }
 
@@ -179,6 +181,22 @@ function treeDefaults(connectionId: string, database: string) {
 
 function treeUserDefinedTypes(connectionId: string, database: string) {
   return store.getUserDefinedTypes(connectionId, database);
+}
+
+function treeScalarTypes(connectionId: string, database: string) {
+  return treeUserDefinedTypes(connectionId, database).filter((item) => !item.isTableType);
+}
+
+function treeTableTypes(connectionId: string, database: string) {
+  return treeUserDefinedTypes(connectionId, database).filter((item) => item.isTableType);
+}
+
+function treeDatabaseTriggers(connectionId: string, database: string) {
+  return store.getDatabaseTriggers(connectionId, database);
+}
+
+function treeXmlSchemaCollections(connectionId: string, database: string) {
+  return store.getXmlSchemaCollections(connectionId, database);
 }
 
 /** 获取指定数据库下的存储过程列表 */
@@ -297,7 +315,48 @@ async function openDesignSection(tableKey: string, section: TableDesignSection, 
   store.updateDesignTabSelection(`design:${tableKey}`, section, entry);
 }
 
+function openDesignEntryContextMenu(event: MouseEvent, kind: 'column' | 'index', tableKey: string, name: string) {
+  event.preventDefault();
+  event.stopPropagation();
+  closeAllContextMenus();
+  designEntryContextMenu.value = {
+    x: Math.max(8, Math.min(event.clientX, window.innerWidth - 168)),
+    y: Math.max(8, Math.min(event.clientY, window.innerHeight - 72)),
+    tableKey,
+    kind,
+    name,
+  };
+}
+
+function closeDesignEntryContextMenu() {
+  designEntryContextMenu.value = null;
+}
+
+async function deleteDesignEntryFromSidebar() {
+  const target = designEntryContextMenu.value;
+  if (!target) {
+    return;
+  }
+
+  closeDesignEntryContextMenu();
+  try {
+    if (target.kind === 'column') {
+      await store.deleteDesignColumn(target.tableKey, target.name);
+      return;
+    }
+
+    await store.deleteDesignIndex(target.tableKey, target.name);
+  }
+  catch (error) {
+    store.showNotice('warning', error instanceof Error ? error.message : target.kind === 'column' ? '字段删除失败' : '索引删除失败');
+  }
+}
+
 function openCatalogObject(connectionId: string, database: string, objectType: 'synonym' | 'sequence' | 'rule' | 'default' | 'user-defined-type', schema: string | null | undefined, name: string) {
+  void store.openCatalogObject(connectionId, database, objectType, schema ?? null, name);
+}
+
+function openExtendedCatalogObject(connectionId: string, database: string, objectType: 'synonym' | 'sequence' | 'rule' | 'default' | 'user-defined-type' | 'database-trigger' | 'xml-schema-collection', schema: string | null | undefined, name: string) {
   void store.openCatalogObject(connectionId, database, objectType, schema ?? null, name);
 }
 
@@ -318,6 +377,8 @@ function databaseObjectSummary(connectionId: string, database: string) {
   const ruleCount = treeRules(connectionId, database).length;
   const defaultCount = treeDefaults(connectionId, database).length;
   const typeCount = treeUserDefinedTypes(connectionId, database).length;
+  const triggerCount = treeDatabaseTriggers(connectionId, database).length;
+  const xmlSchemaCount = treeXmlSchemaCollections(connectionId, database).length;
   const parts = [`${tableCount} 表`];
   if (viewCount > 0) {
     parts.push(`${viewCount} 视图`);
@@ -336,6 +397,12 @@ function databaseObjectSummary(connectionId: string, database: string) {
   }
   if (typeCount > 0) {
     parts.push(`${typeCount} 类型`);
+  }
+  if (triggerCount > 0) {
+    parts.push(`${triggerCount} 数据库触发器`);
+  }
+  if (xmlSchemaCount > 0) {
+    parts.push(`${xmlSchemaCount} XML 架构`);
   }
 
   return parts.join(' · ');
@@ -1161,6 +1228,7 @@ onBeforeUnmount(() => {
                                 type="button"
                                 class="tree-leaf-row"
                                 @dblclick.stop.prevent="openDesignSection(table.key, 'columns', column.name)"
+                                @contextmenu.stop.prevent="openDesignEntryContextMenu($event, 'column', table.key, column.name)"
                               >
                                 <NIcon class="tree-icon tree-icon-leaf" size="12"><IconTableColumn /></NIcon>
                                 <span class="tree-leaf-name">{{ column.name }}</span>
@@ -1181,7 +1249,7 @@ onBeforeUnmount(() => {
                               </button>
                             </div>
                             <div v-if="isTableGroupExpanded(table.key, 'indexes')" class="tree-children tree-children-animated">
-                              <button v-for="index in treeIndexes(table.key)" :key="index.name" type="button" class="tree-leaf-row" @dblclick.stop.prevent="openDesignSection(table.key, 'indexes', index.name)">
+                              <button v-for="index in treeIndexes(table.key)" :key="index.name" type="button" class="tree-leaf-row" @dblclick.stop.prevent="openDesignSection(table.key, 'indexes', index.name)" @contextmenu.stop.prevent="openDesignEntryContextMenu($event, 'index', table.key, index.name)">
                                 <NIcon class="tree-icon tree-icon-leaf" size="12"><IconListDetails /></NIcon>
                                 <span class="tree-leaf-name">{{ index.name }}</span>
                                 <span class="tree-leaf-type">{{ index.columns.join(', ') }}</span>
@@ -1393,10 +1461,12 @@ onBeforeUnmount(() => {
                     </button>
                   </div>
                   <div v-if="isRoutineGroupExpanded(connection.id, database.name, 'synonyms')" class="tree-children tree-children-animated">
-                    <button v-for="synonym in treeSynonyms(connection.id, database.name)" :key="`${synonym.schema ?? ''}.${synonym.name}`" type="button" class="tree-leaf-row" :title="catalogObjectTitle(synonym.schema, synonym.name, synonym.baseObjectName)" @dblclick.stop.prevent="openCatalogObject(connection.id, database.name, 'synonym', synonym.schema, synonym.name)">
+                    <button v-for="synonym in treeSynonyms(connection.id, database.name)" :key="`${synonym.schema ?? ''}.${synonym.name}`" type="button" class="tree-leaf-row tree-leaf-row-catalog" :title="catalogObjectTitle(synonym.schema, synonym.name, synonym.baseObjectName)" @dblclick.stop.prevent="openCatalogObject(connection.id, database.name, 'synonym', synonym.schema, synonym.name)">
                       <NIcon class="tree-icon tree-icon-leaf" size="12"><IconLink /></NIcon>
-                      <span class="tree-leaf-name">{{ synonym.schema ? `${synonym.schema}.${synonym.name}` : synonym.name }}</span>
-                      <span class="tree-leaf-type">{{ synonym.baseObjectName }}</span>
+                      <span class="tree-leaf-stack">
+                        <span class="tree-leaf-name">{{ synonym.schema ? `${synonym.schema}.${synonym.name}` : synonym.name }}</span>
+                        <span class="tree-leaf-type">{{ synonym.baseObjectName }}</span>
+                      </span>
                     </button>
                   </div>
                 </div>
@@ -1413,10 +1483,12 @@ onBeforeUnmount(() => {
                     </button>
                   </div>
                   <div v-if="isRoutineGroupExpanded(connection.id, database.name, 'sequences')" class="tree-children tree-children-animated">
-                    <button v-for="sequence in treeSequences(connection.id, database.name)" :key="`${sequence.schema ?? ''}.${sequence.name}`" type="button" class="tree-leaf-row" :title="catalogObjectTitle(sequence.schema, sequence.name, `${sequence.dataType} · ${sequence.incrementValue}`)" @dblclick.stop.prevent="openCatalogObject(connection.id, database.name, 'sequence', sequence.schema, sequence.name)">
+                    <button v-for="sequence in treeSequences(connection.id, database.name)" :key="`${sequence.schema ?? ''}.${sequence.name}`" type="button" class="tree-leaf-row tree-leaf-row-catalog" :title="catalogObjectTitle(sequence.schema, sequence.name, `${sequence.dataType} · ${sequence.incrementValue}`)" @dblclick.stop.prevent="openCatalogObject(connection.id, database.name, 'sequence', sequence.schema, sequence.name)">
                       <NIcon class="tree-icon tree-icon-leaf" size="12"><IconVariable /></NIcon>
-                      <span class="tree-leaf-name">{{ sequence.schema ? `${sequence.schema}.${sequence.name}` : sequence.name }}</span>
-                      <span class="tree-leaf-type">{{ `${sequence.dataType} · ${sequence.incrementValue}` }}</span>
+                      <span class="tree-leaf-stack">
+                        <span class="tree-leaf-name">{{ sequence.schema ? `${sequence.schema}.${sequence.name}` : sequence.name }}</span>
+                        <span class="tree-leaf-type">{{ `${sequence.dataType} · ${sequence.incrementValue}` }}</span>
+                      </span>
                     </button>
                   </div>
                 </div>
@@ -1433,10 +1505,12 @@ onBeforeUnmount(() => {
                     </button>
                   </div>
                   <div v-if="isRoutineGroupExpanded(connection.id, database.name, 'rules')" class="tree-children tree-children-animated">
-                    <button v-for="rule in treeRules(connection.id, database.name)" :key="`${rule.schema ?? ''}.${rule.name}`" type="button" class="tree-leaf-row" :title="catalogObjectTitle(rule.schema, rule.name, rule.definition || '规则')" @dblclick.stop.prevent="openCatalogObject(connection.id, database.name, 'rule', rule.schema, rule.name)">
+                    <button v-for="rule in treeRules(connection.id, database.name)" :key="`${rule.schema ?? ''}.${rule.name}`" type="button" class="tree-leaf-row tree-leaf-row-catalog" :title="catalogObjectTitle(rule.schema, rule.name, rule.definition || '规则')" @dblclick.stop.prevent="openCatalogObject(connection.id, database.name, 'rule', rule.schema, rule.name)">
                       <NIcon class="tree-icon tree-icon-leaf" size="12"><IconListDetails /></NIcon>
-                      <span class="tree-leaf-name">{{ rule.schema ? `${rule.schema}.${rule.name}` : rule.name }}</span>
-                      <span class="tree-leaf-type">{{ rule.definition || '规则' }}</span>
+                      <span class="tree-leaf-stack">
+                        <span class="tree-leaf-name">{{ rule.schema ? `${rule.schema}.${rule.name}` : rule.name }}</span>
+                        <span class="tree-leaf-type">{{ rule.definition || '规则' }}</span>
+                      </span>
                     </button>
                   </div>
                 </div>
@@ -1453,15 +1527,17 @@ onBeforeUnmount(() => {
                     </button>
                   </div>
                   <div v-if="isRoutineGroupExpanded(connection.id, database.name, 'defaults')" class="tree-children tree-children-animated">
-                    <button v-for="item in treeDefaults(connection.id, database.name)" :key="`${item.schema ?? ''}.${item.name}`" type="button" class="tree-leaf-row" :title="catalogObjectTitle(item.schema, item.name, item.definition || '默认值')" @dblclick.stop.prevent="openCatalogObject(connection.id, database.name, 'default', item.schema, item.name)">
+                    <button v-for="item in treeDefaults(connection.id, database.name)" :key="`${item.schema ?? ''}.${item.name}`" type="button" class="tree-leaf-row tree-leaf-row-catalog" :title="catalogObjectTitle(item.schema, item.name, item.definition || '默认值')" @dblclick.stop.prevent="openCatalogObject(connection.id, database.name, 'default', item.schema, item.name)">
                       <NIcon class="tree-icon tree-icon-leaf" size="12"><IconListDetails /></NIcon>
-                      <span class="tree-leaf-name">{{ item.schema ? `${item.schema}.${item.name}` : item.name }}</span>
-                      <span class="tree-leaf-type">{{ item.definition || '默认值' }}</span>
+                      <span class="tree-leaf-stack">
+                        <span class="tree-leaf-name">{{ item.schema ? `${item.schema}.${item.name}` : item.name }}</span>
+                        <span class="tree-leaf-type">{{ item.definition || '默认值' }}</span>
+                      </span>
                     </button>
                   </div>
                 </div>
 
-                <div v-if="treeUserDefinedTypes(connection.id, database.name).length > 0" class="tree-node">
+                <div v-if="treeScalarTypes(connection.id, database.name).length > 0" class="tree-node">
                   <div class="tree-row tree-row-group">
                     <button class="tree-toggle" type="button" @click="toggleRoutineGroup(connection.id, database.name, 'types')">
                       <NIcon size="12"><component :is="treeToggleIcon(isRoutineGroupExpanded(connection.id, database.name, 'types'))" /></NIcon>
@@ -1473,10 +1549,78 @@ onBeforeUnmount(() => {
                     </button>
                   </div>
                   <div v-if="isRoutineGroupExpanded(connection.id, database.name, 'types')" class="tree-children tree-children-animated">
-                    <button v-for="item in treeUserDefinedTypes(connection.id, database.name)" :key="`${item.schema ?? ''}.${item.name}`" type="button" class="tree-leaf-row" :title="catalogObjectTitle(item.schema, item.name, item.isTableType ? 'table type' : item.baseTypeName)" @dblclick.stop.prevent="openCatalogObject(connection.id, database.name, 'user-defined-type', item.schema, item.name)">
+                    <button v-for="item in treeScalarTypes(connection.id, database.name)" :key="`${item.schema ?? ''}.${item.name}`" type="button" class="tree-leaf-row tree-leaf-row-catalog" :title="catalogObjectTitle(item.schema, item.name, item.baseTypeName)" @dblclick.stop.prevent="openCatalogObject(connection.id, database.name, 'user-defined-type', item.schema, item.name)">
                       <NIcon class="tree-icon tree-icon-leaf" size="12"><IconTableColumn /></NIcon>
-                      <span class="tree-leaf-name">{{ item.schema ? `${item.schema}.${item.name}` : item.name }}</span>
-                      <span class="tree-leaf-type">{{ item.isTableType ? 'table type' : item.baseTypeName }}</span>
+                      <span class="tree-leaf-stack">
+                        <span class="tree-leaf-name">{{ item.schema ? `${item.schema}.${item.name}` : item.name }}</span>
+                        <span class="tree-leaf-type">{{ item.baseTypeName }}</span>
+                      </span>
+                    </button>
+                  </div>
+                </div>
+
+                <div v-if="treeTableTypes(connection.id, database.name).length > 0" class="tree-node">
+                  <div class="tree-row tree-row-group">
+                    <button class="tree-toggle" type="button" @click="toggleRoutineGroup(connection.id, database.name, 'table-types')">
+                      <NIcon size="12"><component :is="treeToggleIcon(isRoutineGroupExpanded(connection.id, database.name, 'table-types'))" /></NIcon>
+                    </button>
+                    <button type="button" class="tree-node-main" @click="toggleRoutineGroup(connection.id, database.name, 'table-types')">
+                      <NIcon class="tree-icon tree-icon-function" size="12"><IconTable /></NIcon>
+                      <span class="tree-label-main">表类型</span>
+                      <span class="tree-row-count">{{ treeTableTypes(connection.id, database.name).length }}</span>
+                    </button>
+                  </div>
+                  <div v-if="isRoutineGroupExpanded(connection.id, database.name, 'table-types')" class="tree-children tree-children-animated">
+                    <button v-for="item in treeTableTypes(connection.id, database.name)" :key="`${item.schema ?? ''}.${item.name}`" type="button" class="tree-leaf-row tree-leaf-row-catalog" :title="catalogObjectTitle(item.schema, item.name, 'table type')" @dblclick.stop.prevent="openCatalogObject(connection.id, database.name, 'user-defined-type', item.schema, item.name)">
+                      <NIcon class="tree-icon tree-icon-leaf" size="12"><IconTable /></NIcon>
+                      <span class="tree-leaf-stack">
+                        <span class="tree-leaf-name">{{ item.schema ? `${item.schema}.${item.name}` : item.name }}</span>
+                        <span class="tree-leaf-type">table type</span>
+                      </span>
+                    </button>
+                  </div>
+                </div>
+
+                <div v-if="treeDatabaseTriggers(connection.id, database.name).length > 0" class="tree-node">
+                  <div class="tree-row tree-row-group">
+                    <button class="tree-toggle" type="button" @click="toggleRoutineGroup(connection.id, database.name, 'database-triggers')">
+                      <NIcon size="12"><component :is="treeToggleIcon(isRoutineGroupExpanded(connection.id, database.name, 'database-triggers'))" /></NIcon>
+                    </button>
+                    <button type="button" class="tree-node-main" @click="toggleRoutineGroup(connection.id, database.name, 'database-triggers')">
+                      <NIcon class="tree-icon tree-icon-trigger" size="12"><IconBolt /></NIcon>
+                      <span class="tree-label-main">数据库触发器</span>
+                      <span class="tree-row-count">{{ treeDatabaseTriggers(connection.id, database.name).length }}</span>
+                    </button>
+                  </div>
+                  <div v-if="isRoutineGroupExpanded(connection.id, database.name, 'database-triggers')" class="tree-children tree-children-animated">
+                    <button v-for="item in treeDatabaseTriggers(connection.id, database.name)" :key="`${item.schema ?? ''}.${item.name}`" type="button" class="tree-leaf-row tree-leaf-row-catalog" :title="catalogObjectTitle(item.schema, item.name, item.event || item.timing || '数据库触发器')" @dblclick.stop.prevent="openExtendedCatalogObject(connection.id, database.name, 'database-trigger', item.schema, item.name)">
+                      <NIcon class="tree-icon tree-icon-leaf" size="12"><IconBolt /></NIcon>
+                      <span class="tree-leaf-stack">
+                        <span class="tree-leaf-name">{{ item.schema ? `${item.schema}.${item.name}` : item.name }}</span>
+                        <span class="tree-leaf-type">{{ item.event || item.timing || '数据库触发器' }}</span>
+                      </span>
+                    </button>
+                  </div>
+                </div>
+
+                <div v-if="treeXmlSchemaCollections(connection.id, database.name).length > 0" class="tree-node">
+                  <div class="tree-row tree-row-group">
+                    <button class="tree-toggle" type="button" @click="toggleRoutineGroup(connection.id, database.name, 'xml-schema-collections')">
+                      <NIcon size="12"><component :is="treeToggleIcon(isRoutineGroupExpanded(connection.id, database.name, 'xml-schema-collections'))" /></NIcon>
+                    </button>
+                    <button type="button" class="tree-node-main" @click="toggleRoutineGroup(connection.id, database.name, 'xml-schema-collections')">
+                      <NIcon class="tree-icon tree-icon-function" size="12"><IconListDetails /></NIcon>
+                      <span class="tree-label-main">XML 架构集合</span>
+                      <span class="tree-row-count">{{ treeXmlSchemaCollections(connection.id, database.name).length }}</span>
+                    </button>
+                  </div>
+                  <div v-if="isRoutineGroupExpanded(connection.id, database.name, 'xml-schema-collections')" class="tree-children tree-children-animated">
+                    <button v-for="item in treeXmlSchemaCollections(connection.id, database.name)" :key="`${item.schema ?? ''}.${item.name}`" type="button" class="tree-leaf-row tree-leaf-row-catalog" :title="catalogObjectTitle(item.schema, item.name, `${item.xmlNamespaceCount} namespaces`)" @dblclick.stop.prevent="openExtendedCatalogObject(connection.id, database.name, 'xml-schema-collection', item.schema, item.name)">
+                      <NIcon class="tree-icon tree-icon-leaf" size="12"><IconListDetails /></NIcon>
+                      <span class="tree-leaf-stack">
+                        <span class="tree-leaf-name">{{ item.schema ? `${item.schema}.${item.name}` : item.name }}</span>
+                        <span class="tree-leaf-type">{{ `${item.xmlNamespaceCount} namespaces` }}</span>
+                      </span>
                     </button>
                   </div>
                 </div>
@@ -1726,6 +1870,18 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
+    <div
+      v-if="designEntryContextMenu"
+      class="database-context-menu"
+      :style="{ left: `${designEntryContextMenu.x}px`, top: `${designEntryContextMenu.y}px` }"
+      @click.stop
+      @mousedown.stop
+    >
+      <button type="button" class="database-context-menu-item database-context-menu-item-danger" @click.stop="deleteDesignEntryFromSidebar()">
+        {{ designEntryContextMenu.kind === 'column' ? '删除字段' : '删除索引' }}
+      </button>
+    </div>
+
     <!-- delete routine confirm -->
     <NModal
       :show="!!deleteRoutineConfirm"
@@ -1794,7 +1950,7 @@ onBeforeUnmount(() => {
 .sidebar-list {
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 0 4px 0 0;
+  padding: 0 1px 0 0;
   flex: 1;
 }
 
@@ -2072,6 +2228,13 @@ onBeforeUnmount(() => {
   flex: 1 1 auto;
 }
 
+.tree-leaf-stack {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 .tree-label-main {
   min-width: 0;
   overflow: hidden;
@@ -2113,6 +2276,20 @@ onBeforeUnmount(() => {
   &:hover .tree-leaf-type {
     color: #64748b !important;
   }
+}
+
+.tree-leaf-row-catalog {
+  align-items: flex-start;
+}
+
+.tree-leaf-row-catalog .tree-leaf-name,
+.tree-leaf-row-catalog .tree-leaf-type {
+  text-align: left;
+}
+
+.tree-leaf-row-catalog .tree-leaf-type {
+  flex: 0 0 auto;
+  max-width: none;
 }
 
 .tree-leaf-name {

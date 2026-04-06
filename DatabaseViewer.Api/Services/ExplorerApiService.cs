@@ -108,6 +108,24 @@ public sealed class ExplorerApiService
                     {
                     }
 
+                    IReadOnlyList<DbDatabaseTriggerInfo> databaseTriggers = Array.Empty<DbDatabaseTriggerInfo>();
+                    try
+                    {
+                        databaseTriggers = await _metadataService.GetDatabaseTriggersAsync(connection, database);
+                    }
+                    catch
+                    {
+                    }
+
+                    IReadOnlyList<DbXmlSchemaCollectionInfo> xmlSchemaCollections = Array.Empty<DbXmlSchemaCollectionInfo>();
+                    try
+                    {
+                        xmlSchemaCollections = await _metadataService.GetXmlSchemaCollectionsAsync(connection, database);
+                    }
+                    catch
+                    {
+                    }
+
                     var routines = Array.Empty<RoutineNodeDto>();
                     try
                     {
@@ -170,6 +188,17 @@ public sealed class ExplorerApiService
                             item.TypeName,
                             item.BaseTypeName,
                             item.IsTableType)).ToArray(),
+                        databaseTriggers.Select(item => new DatabaseTriggerNodeDto(
+                            item.DatabaseName,
+                            item.SchemaName,
+                            item.TriggerName,
+                            item.TriggerTiming,
+                            item.TriggerEvent)).ToArray(),
+                        xmlSchemaCollections.Select(item => new XmlSchemaCollectionNodeDto(
+                            item.DatabaseName,
+                            item.SchemaName,
+                            item.CollectionName,
+                            item.XmlNamespaceCount)).ToArray(),
                         routines));
                 }
 
@@ -1467,6 +1496,8 @@ public sealed class ExplorerApiService
         "default" => DbCatalogObjectType.Default,
         "user-defined-type" => DbCatalogObjectType.UserDefinedType,
         "type" => DbCatalogObjectType.UserDefinedType,
+        "database-trigger" => DbCatalogObjectType.DatabaseTrigger,
+        "xml-schema-collection" => DbCatalogObjectType.XmlSchemaCollection,
         _ => throw new InvalidOperationException("Unsupported catalog object type."),
     };
 
@@ -1477,6 +1508,8 @@ public sealed class ExplorerApiService
         DbCatalogObjectType.Rule => "rule",
         DbCatalogObjectType.Default => "default",
         DbCatalogObjectType.UserDefinedType => "user-defined-type",
+        DbCatalogObjectType.DatabaseTrigger => "database-trigger",
+        DbCatalogObjectType.XmlSchemaCollection => "xml-schema-collection",
         _ => "synonym",
     };
 

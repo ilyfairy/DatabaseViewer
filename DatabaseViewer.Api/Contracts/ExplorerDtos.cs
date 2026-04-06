@@ -22,6 +22,8 @@ public sealed record DatabaseNodeDto(
     IReadOnlyList<RuleNodeDto> Rules,
     IReadOnlyList<DefaultNodeDto> Defaults,
     IReadOnlyList<UserDefinedTypeNodeDto> UserDefinedTypes,
+    IReadOnlyList<DatabaseTriggerNodeDto> DatabaseTriggers,
+    IReadOnlyList<XmlSchemaCollectionNodeDto> XmlSchemaCollections,
     IReadOnlyList<RoutineNodeDto> Routines);
 
 public sealed record DatabaseGraphNodeDto(
@@ -67,6 +69,10 @@ public sealed record RuleNodeDto(string Database, string? Schema, string Name, s
 public sealed record DefaultNodeDto(string Database, string? Schema, string Name, string? Definition);
 
 public sealed record UserDefinedTypeNodeDto(string Database, string? Schema, string Name, string BaseTypeName, bool IsTableType);
+
+public sealed record DatabaseTriggerNodeDto(string Database, string? Schema, string Name, string? Timing, string? Event);
+
+public sealed record XmlSchemaCollectionNodeDto(string Database, string? Schema, string Name, int XmlNamespaceCount);
 
 public sealed record RoutineNodeDto(string? Schema, string Name, string RoutineType, IReadOnlyList<RoutineParameterDto> Parameters);
 

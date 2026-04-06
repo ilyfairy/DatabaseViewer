@@ -11,6 +11,7 @@ import type {
   ConnectionInfo,
   CreateConnectionRequest,
   GraphWorkspaceTab,
+  ProviderType,
   ExplorerDetailPanel,
   ExplorerGridPanel,
   ExplorerPanel,
@@ -155,6 +156,24 @@ function getSqlTabFileName(filePath: string | null) {
 
 function normalizeCellValue(value: CellValue | undefined): CellValue {
   return value ?? null;
+}
+
+function quoteSqlIdentifier(provider: ProviderType, value: string) {
+  if (provider === 'mysql') {
+    return `\`${value.replace(/`/g, '``')}\``;
+  }
+
+  if (provider === 'postgresql' || provider === 'sqlite') {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+
+  return `[${value.replace(/\]/g, ']]')}]`;
+}
+
+function qualifiedSqlObject(provider: ProviderType, schema: string | null | undefined, objectName: string) {
+  return schema
+    ? `${quoteSqlIdentifier(provider, schema)}.${quoteSqlIdentifier(provider, objectName)}`
+    : quoteSqlIdentifier(provider, objectName);
 }
 
 function isBinaryColumn(columnName: string, columnType?: string) {
@@ -465,8 +484,10 @@ export const useExplorerStore = defineStore('explorer', () => {
             rules: database.rules.filter((rule) => `${database.name} ${rule.name} ${rule.definition ?? ''}`.toLowerCase().includes(query)),
             defaults: database.defaults.filter((item) => `${database.name} ${item.name} ${item.definition ?? ''}`.toLowerCase().includes(query)),
             userDefinedTypes: database.userDefinedTypes.filter((item) => `${database.name} ${item.name} ${item.baseTypeName}`.toLowerCase().includes(query)),
+            databaseTriggers: database.databaseTriggers.filter((item) => `${database.name} ${item.name} ${item.event ?? ''}`.toLowerCase().includes(query)),
+            xmlSchemaCollections: database.xmlSchemaCollections.filter((item) => `${database.name} ${item.name}`.toLowerCase().includes(query)),
           }))
-          .filter((database) => database.tables.length > 0 || database.views.length > 0 || database.synonyms.length > 0 || database.sequences.length > 0 || database.rules.length > 0 || database.defaults.length > 0 || database.userDefinedTypes.length > 0 || database.name.toLowerCase().includes(query)),
+          .filter((database) => database.tables.length > 0 || database.views.length > 0 || database.synonyms.length > 0 || database.sequences.length > 0 || database.rules.length > 0 || database.defaults.length > 0 || database.userDefinedTypes.length > 0 || database.databaseTriggers.length > 0 || database.xmlSchemaCollections.length > 0 || database.name.toLowerCase().includes(query)),
       }))
       .filter((connection) => connection.name.toLowerCase().includes(query) || connection.host.toLowerCase().includes(query) || connection.databases.length > 0);
   });
@@ -591,6 +612,14 @@ export const useExplorerStore = defineStore('explorer', () => {
 
   function getUserDefinedTypes(connectionId: string, database: string) {
     return getDatabases(connectionId).find((entry) => entry.name === database)?.userDefinedTypes ?? [];
+  }
+
+  function getDatabaseTriggers(connectionId: string, database: string) {
+    return getDatabases(connectionId).find((entry) => entry.name === database)?.databaseTriggers ?? [];
+  }
+
+  function getXmlSchemaCollections(connectionId: string, database: string) {
+    return getDatabases(connectionId).find((entry) => entry.name === database)?.xmlSchemaCollections ?? [];
   }
 
   function getRoutines(connectionId: string, database: string) {
@@ -1161,6 +1190,54 @@ export const useExplorerStore = defineStore('explorer', () => {
     await ensureTableLoaded(tableKey, true);
     await ensureTableDesignLoaded(tableKey, true);
     showNotice('success', successMessage);
+  }
+
+  async function deleteDesignColumn(tableKey: string, columnName: string) {
+    await ensureTableDesignLoaded(tableKey);
+    const design = getTableDesign(tableKey);
+    if (!design) {
+      throw new Error('表设计尚未加载完成。');
+    }
+
+    if (design.objectType === 'view') {
+      throw new Error('视图当前不支持删除字段。');
+    }
+
+    const column = design.columns.find((entry) => entry.name === columnName);
+    if (!column) {
+      throw new Error('字段不存在。');
+    }
+
+    if (column.isPrimaryKey) {
+      throw new Error(`字段 ${columnName} 是主键，无法删除。`);
+    }
+
+    const sql = `ALTER TABLE ${qualifiedSqlObject(design.provider, design.schema, design.name)} DROP COLUMN ${quoteSqlIdentifier(design.provider, columnName)}`;
+    await executeTableDesignSql(tableKey, sql, '字段已删除');
+  }
+
+  async function deleteDesignIndex(tableKey: string, indexName: string) {
+    await ensureTableDesignLoaded(tableKey);
+    const design = getTableDesign(tableKey);
+    if (!design) {
+      throw new Error('表设计尚未加载完成。');
+    }
+
+    const index = design.indexes.find((entry) => entry.name === indexName);
+    if (!index) {
+      throw new Error('索引不存在。');
+    }
+
+    if (index.isPrimaryKey) {
+      throw new Error('主键索引不能直接删除。');
+    }
+
+    const sql = design.provider === 'sqlserver' || design.provider === 'mysql'
+      ? `DROP INDEX ${quoteSqlIdentifier(design.provider, indexName)} ON ${qualifiedSqlObject(design.provider, design.schema, design.name)}`
+      : design.provider === 'postgresql'
+        ? `DROP INDEX IF EXISTS ${design.schema ? `${quoteSqlIdentifier(design.provider, design.schema)}.` : ''}${quoteSqlIdentifier(design.provider, indexName)}`
+        : `DROP INDEX IF EXISTS ${quoteSqlIdentifier(design.provider, indexName)}`;
+    await executeTableDesignSql(tableKey, sql, '索引已删除');
   }
 
   async function reloadSearchResults(tableKey: string) {
@@ -2280,6 +2357,8 @@ export const useExplorerStore = defineStore('explorer', () => {
     getRules,
     getDefaults,
     getUserDefinedTypes,
+    getDatabaseTriggers,
+    getXmlSchemaCollections,
     getRoutines,
     getWorkspaceTabLabel,
     getTable,
@@ -2341,6 +2420,8 @@ export const useExplorerStore = defineStore('explorer', () => {
     executeSqlTab,
     updateDesignTabSelection,
     executeTableDesignSql,
+    deleteDesignColumn,
+    deleteDesignIndex,
     ensureSqlContextLoaded,
     applyActiveTableSearch,
     clearActiveTableSearch,
