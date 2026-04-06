@@ -326,6 +326,56 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (string.Equals(request.Command, "pick-ssh-private-key", StringComparison.Ordinal))
+        {
+            try
+            {
+                var payload = request.Payload.Deserialize<PickSshPrivateKeyPayload>(JsonOptions)
+                    ?? throw new InvalidOperationException("无效的 SSH 私钥文件选择请求。");
+
+                var dialog = new OpenFileDialog
+                {
+                    Filter = "私钥文件 (*.*)|*.*",
+                    CheckFileExists = true,
+                    Multiselect = false,
+                };
+
+                if (!string.IsNullOrWhiteSpace(payload.FilePath))
+                {
+                    var initialDirectory = Path.GetDirectoryName(payload.FilePath);
+                    if (!string.IsNullOrWhiteSpace(initialDirectory) && Directory.Exists(initialDirectory))
+                    {
+                        dialog.InitialDirectory = initialDirectory;
+                    }
+
+                    dialog.FileName = Path.GetFileName(payload.FilePath);
+                }
+                else
+                {
+                    var defaultSshDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ssh");
+                    if (Directory.Exists(defaultSshDirectory))
+                    {
+                        dialog.InitialDirectory = defaultSshDirectory;
+                    }
+                }
+
+                var accepted = dialog.ShowDialog(this) == true;
+                if (!accepted)
+                {
+                    PostHostResponse(new HostResponse(request.Id, true, new { canceled = true, filePath = payload.FilePath }, null));
+                    return;
+                }
+
+                PostHostResponse(new HostResponse(request.Id, true, new { canceled = false, filePath = dialog.FileName }, null));
+            }
+            catch (Exception ex)
+            {
+                PostHostResponse(new HostResponse(request.Id, false, null, ex.Message));
+            }
+
+            return;
+        }
+
         if (!string.Equals(request.Command, "save-sql-file", StringComparison.Ordinal))
         {
             return;
@@ -520,6 +570,8 @@ public partial class MainWindow : Window
     private sealed record SaveSqlFilePayload(string? FilePath, string SuggestedFileName, string? Content, bool SaveAs);
 
     private sealed record PickSqliteDatabasePayload(string? FilePath, string SuggestedFileName);
+
+    private sealed record PickSshPrivateKeyPayload(string? FilePath);
 
     private sealed record CloseAppResponsePayload(string Result);
 }

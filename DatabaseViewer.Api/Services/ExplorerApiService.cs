@@ -306,7 +306,14 @@ public sealed class ExplorerApiService
             connection.Host,
             connection.Port > 0 ? connection.Port : null,
             string.IsNullOrWhiteSpace(connection.Username) ? null : connection.Username,
-            connection.TrustServerCertificate);
+            connection.TrustServerCertificate,
+            new SshTunnelConfigResponse(
+                connection.SshTunnel.Enabled,
+                ToSshAuthenticationKey(connection.SshTunnel.AuthenticationMode),
+                string.IsNullOrWhiteSpace(connection.SshTunnel.Host) ? null : connection.SshTunnel.Host,
+                connection.SshTunnel.Port > 0 ? connection.SshTunnel.Port : null,
+                string.IsNullOrWhiteSpace(connection.SshTunnel.Username) ? null : connection.SshTunnel.Username,
+                string.IsNullOrWhiteSpace(connection.SshTunnel.PrivateKeyPath) ? null : connection.SshTunnel.PrivateKeyPath));
     }
 
     public async Task TestConnectionAsync(TestConnectionRequest request)
@@ -322,7 +329,8 @@ public sealed class ExplorerApiService
             request.Port,
             request.Username,
             request.Password,
-            request.TrustServerCertificate), existing);
+            request.TrustServerCertificate,
+            request.SshTunnel), existing);
 
         var canConnect = await _queryService.TestConnectionAsync(definition);
         if (!canConnect)
@@ -887,6 +895,7 @@ public sealed class ExplorerApiService
     {
         var remaining = (await _connectionStore.LoadAsync()).Where(connection => connection.Id != connectionId).ToArray();
         await _connectionStore.SaveAsync(remaining);
+        SshTunnelManager.Release(connectionId);
     }
 
     private static ConnectionDefinition MapConnectionRequest(CreateConnectionRequest request, ConnectionDefinition? existing = null)
@@ -928,6 +937,55 @@ public sealed class ExplorerApiService
             ? string.Empty
             : request.Password ?? existing?.Password ?? string.Empty;
 
+        var sshTunnel = request.SshTunnel ?? new SshTunnelRequest(false, "password", null, null, null, null, null, null);
+        var sshAuthenticationMode = ParseSshAuthenticationMode(sshTunnel.Authentication);
+
+        if (sshTunnel.Enabled && providerType == DatabaseProviderType.Sqlite)
+        {
+            throw new InvalidOperationException("SQLite 不支持 SSH 隧道。");
+        }
+
+        if (sshTunnel.Enabled && authenticationMode == AuthenticationMode.WindowsIntegrated)
+        {
+            throw new InvalidOperationException("SSH 隧道下暂不支持 SQL Server 的 Windows 身份验证，请改用账号密码连接。");
+        }
+
+        if (sshTunnel.Enabled && providerType == DatabaseProviderType.SqlServer && LooksLikeNamedInstance(request.Host))
+        {
+            throw new InvalidOperationException("SSH 隧道下的 SQL Server 需要填写显式 TCP 主机和端口，不支持命名实例地址。");
+        }
+
+        var resolvedSshHost = sshTunnel.Enabled
+            ? !string.IsNullOrWhiteSpace(sshTunnel.Host)
+                ? sshTunnel.Host.Trim()
+                : existing?.SshTunnel.Host ?? throw new InvalidOperationException("SSH 主机不能为空。")
+            : string.Empty;
+
+        var resolvedSshUsername = sshTunnel.Enabled
+            ? !string.IsNullOrWhiteSpace(sshTunnel.Username)
+                ? sshTunnel.Username.Trim()
+                : existing?.SshTunnel.Username ?? throw new InvalidOperationException("SSH 用户名不能为空。")
+            : string.Empty;
+
+        var resolvedSshPassword = sshTunnel.Enabled
+            ? sshTunnel.Password ?? existing?.SshTunnel.Password ?? string.Empty
+            : string.Empty;
+
+        if (sshTunnel.Enabled && sshAuthenticationMode == SshAuthenticationMode.Password && string.IsNullOrWhiteSpace(resolvedSshPassword))
+        {
+            throw new InvalidOperationException("SSH 密码不能为空。");
+        }
+
+        var resolvedPrivateKeyPath = sshTunnel.Enabled && sshAuthenticationMode == SshAuthenticationMode.PublicKey
+            ? !string.IsNullOrWhiteSpace(sshTunnel.PrivateKeyPath)
+                ? sshTunnel.PrivateKeyPath.Trim()
+                : existing?.SshTunnel.PrivateKeyPath ?? string.Empty
+            : string.Empty;
+
+        var resolvedPassphrase = sshTunnel.Enabled && sshAuthenticationMode == SshAuthenticationMode.PublicKey
+            ? sshTunnel.Passphrase ?? existing?.SshTunnel.Passphrase ?? string.Empty
+            : string.Empty;
+
         return new ConnectionDefinition
         {
             Id = existing?.Id ?? Guid.NewGuid(),
@@ -939,7 +997,40 @@ public sealed class ExplorerApiService
             Username = resolvedUsername,
             Password = resolvedPassword,
             TrustServerCertificate = request.TrustServerCertificate,
+            SshTunnel = new SshTunnelOptions
+            {
+                Enabled = sshTunnel.Enabled,
+                AuthenticationMode = sshAuthenticationMode,
+                Host = resolvedSshHost,
+                Port = sshTunnel.Enabled ? sshTunnel.Port ?? 22 : 22,
+                Username = resolvedSshUsername,
+                Password = resolvedSshPassword,
+                PrivateKeyPath = resolvedPrivateKeyPath,
+                Passphrase = resolvedPassphrase,
+            },
         };
+    }
+
+    private static bool LooksLikeNamedInstance(string host)
+    {
+        return host.Contains('\\', StringComparison.Ordinal)
+            || host.Contains("(local)", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(host, ".", StringComparison.Ordinal);
+    }
+
+    private static SshAuthenticationMode ParseSshAuthenticationMode(string? value)
+    {
+        return value?.ToLowerInvariant() switch
+        {
+            "publickey" => SshAuthenticationMode.PublicKey,
+            "public-key" => SshAuthenticationMode.PublicKey,
+            _ => SshAuthenticationMode.Password,
+        };
+    }
+
+    private static string ToSshAuthenticationKey(SshAuthenticationMode value)
+    {
+        return value == SshAuthenticationMode.PublicKey ? "publicKey" : "password";
     }
 
     private static InvalidOperationException BuildConnectionFailureException(ConnectionDefinition definition)

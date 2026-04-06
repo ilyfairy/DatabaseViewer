@@ -25,6 +25,27 @@ export interface CreateConnectionRequest {
   username?: string | null
   password?: string | null
   trustServerCertificate: boolean
+  sshTunnel: SshTunnelRequest
+}
+
+export interface SshTunnelRequest {
+  enabled: boolean
+  authentication: 'password' | 'publicKey'
+  host?: string | null
+  port?: number | null
+  username?: string | null
+  password?: string | null
+  privateKeyPath?: string | null
+  passphrase?: string | null
+}
+
+export interface SshTunnelConfig {
+  enabled: boolean
+  authentication: 'password' | 'publicKey'
+  host?: string | null
+  port?: number | null
+  username?: string | null
+  privateKeyPath?: string | null
 }
 
 export interface ConnectionConfig {
@@ -36,6 +57,7 @@ export interface ConnectionConfig {
   port?: number | null
   username?: string | null
   trustServerCertificate: boolean
+  sshTunnel: SshTunnelConfig
 }
 
 export interface TestConnectionRequest extends CreateConnectionRequest {

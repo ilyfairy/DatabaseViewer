@@ -43,6 +43,17 @@ public sealed class ConnectionStore
             Username = item.Username,
             Password = _protector.Unprotect(item.EncryptedPassword),
             TrustServerCertificate = item.TrustServerCertificate,
+            SshTunnel = new SshTunnelOptions
+            {
+                Enabled = item.SshEnabled,
+                AuthenticationMode = item.SshAuthenticationMode,
+                Host = item.SshHost,
+                Port = item.SshPort > 0 ? item.SshPort : 22,
+                Username = item.SshUsername,
+                Password = string.IsNullOrWhiteSpace(item.EncryptedSshPassword) ? string.Empty : _protector.Unprotect(item.EncryptedSshPassword),
+                PrivateKeyPath = item.SshPrivateKeyPath,
+                Passphrase = string.IsNullOrWhiteSpace(item.EncryptedSshPassphrase) ? string.Empty : _protector.Unprotect(item.EncryptedSshPassphrase),
+            },
         }).ToArray();
     }
 
@@ -59,6 +70,14 @@ public sealed class ConnectionStore
             Username = item.Username,
             EncryptedPassword = _protector.Protect(item.Password),
             TrustServerCertificate = item.TrustServerCertificate,
+            SshEnabled = item.SshTunnel.Enabled,
+            SshAuthenticationMode = item.SshTunnel.AuthenticationMode,
+            SshHost = item.SshTunnel.Host,
+            SshPort = item.SshTunnel.Port,
+            SshUsername = item.SshTunnel.Username,
+            EncryptedSshPassword = string.IsNullOrWhiteSpace(item.SshTunnel.Password) ? string.Empty : _protector.Protect(item.SshTunnel.Password),
+            SshPrivateKeyPath = item.SshTunnel.PrivateKeyPath,
+            EncryptedSshPassphrase = string.IsNullOrWhiteSpace(item.SshTunnel.Passphrase) ? string.Empty : _protector.Protect(item.SshTunnel.Passphrase),
         }).ToArray();
 
         await using var stream = File.Create(_filePath);

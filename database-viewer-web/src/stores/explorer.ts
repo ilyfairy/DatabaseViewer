@@ -1916,6 +1916,14 @@ export const useExplorerStore = defineStore('explorer', () => {
     return result.canceled ? null : result.filePath;
   }
 
+  async function pickSshPrivateKeyFile(filePath: string | null) {
+    const result = await requestHost<{ filePath: string | null }, HostFilePickerResult>('pick-ssh-private-key', {
+      filePath,
+    });
+
+    return result.canceled ? null : result.filePath;
+  }
+
   function selectSqlResultSet(tabId: string, selectedResultIndex: number) {
     updateSqlTab(tabId, (tab) => ({
       ...tab,
@@ -2405,6 +2413,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     openSqlFileTab,
     openRoutineSource,
     pickSqliteDatabaseFile,
+    pickSshPrivateKeyFile,
     updateSqlTabConnection,
     updateSqlTabDatabase,
     updateSqlTabText,

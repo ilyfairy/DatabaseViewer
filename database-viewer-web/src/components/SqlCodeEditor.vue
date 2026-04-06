@@ -50,6 +50,7 @@ let selectionClickState: {
   selection: monaco.Selection
   position: monaco.Position
   moved: boolean
+  clickCount: number
 } | null = null;
 
 function focusAtStart(): void {
@@ -1035,6 +1036,7 @@ function createEditor(): void {
       selection: currentSelection,
       position: event.target.position,
       moved: false,
+      clickCount: event.event.detail,
     };
   });
 
@@ -1056,6 +1058,10 @@ function createEditor(): void {
 
     const clickState = selectionClickState;
     selectionClickState = null;
+
+    if (clickState.clickCount > 1 || event.event.detail > 1) {
+      return;
+    }
 
     const targetPosition = event.target.position ?? clickState.position;
     const currentSelection = editor.getSelection();

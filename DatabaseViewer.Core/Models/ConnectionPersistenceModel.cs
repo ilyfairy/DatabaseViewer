@@ -19,4 +19,20 @@ public sealed class ConnectionPersistenceModel
     public string EncryptedPassword { get; set; } = string.Empty;
 
     public bool TrustServerCertificate { get; set; }
+
+    public bool SshEnabled { get; set; }
+
+    public SshAuthenticationMode SshAuthenticationMode { get; set; }
+
+    public string SshHost { get; set; } = string.Empty;
+
+    public int SshPort { get; set; } = 22;
+
+    public string SshUsername { get; set; } = string.Empty;
+
+    public string EncryptedSshPassword { get; set; } = string.Empty;
+
+    public string SshPrivateKeyPath { get; set; } = string.Empty;
+
+    public string EncryptedSshPassphrase { get; set; } = string.Empty;
 }

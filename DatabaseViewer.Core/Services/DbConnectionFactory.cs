@@ -23,10 +23,11 @@ public static class DbConnectionFactory
 
     private static DbConnection CreateSqlServer(ConnectionDefinition definition, string? databaseName)
     {
+        var endpoint = SshTunnelManager.ResolveEndpoint(definition);
         var dataSource = BuildSqlServerDataSource(definition);
         var builder = new SqlConnectionStringBuilder
         {
-            DataSource = dataSource,
+            DataSource = definition.SshTunnel.Enabled ? $"{endpoint.Host},{endpoint.Port}" : dataSource,
             InitialCatalog = string.IsNullOrWhiteSpace(databaseName) ? "master" : databaseName,
             TrustServerCertificate = definition.TrustServerCertificate,
             Encrypt = true,
@@ -70,10 +71,11 @@ public static class DbConnectionFactory
 
     private static DbConnection CreateMySql(ConnectionDefinition definition, string? databaseName)
     {
+        var endpoint = SshTunnelManager.ResolveEndpoint(definition);
         var builder = new MySqlConnectionStringBuilder
         {
-            Server = definition.Host,
-            Port = (uint)definition.Port,
+            Server = definition.SshTunnel.Enabled ? endpoint.Host : definition.Host,
+            Port = (uint)(definition.SshTunnel.Enabled ? endpoint.Port : definition.Port),
             UserID = definition.Username,
             Password = definition.Password,
             Database = databaseName ?? string.Empty,
@@ -85,10 +87,11 @@ public static class DbConnectionFactory
 
     private static DbConnection CreatePostgreSql(ConnectionDefinition definition, string? databaseName)
     {
+        var endpoint = SshTunnelManager.ResolveEndpoint(definition);
         var builder = new NpgsqlConnectionStringBuilder
         {
-            Host = definition.Host,
-            Port = definition.Port > 0 ? definition.Port : 5432,
+            Host = definition.SshTunnel.Enabled ? endpoint.Host : definition.Host,
+            Port = definition.SshTunnel.Enabled ? endpoint.Port : definition.Port > 0 ? definition.Port : 5432,
             Database = string.IsNullOrWhiteSpace(databaseName) ? "postgres" : databaseName,
             Username = definition.Username,
             Password = definition.Password,

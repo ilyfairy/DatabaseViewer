@@ -2,7 +2,7 @@
 import type { Component } from 'vue';
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { IconBolt, IconChevronDown, IconChevronRight, IconColumns3, IconDatabase, IconEye, IconFunction, IconLink, IconListDetails, IconScript, IconServer, IconTable, IconTableColumn, IconVariable } from '@tabler/icons-vue';
-import { NAlert, NButton, NCheckbox, NEmpty, NIcon, NInput, NModal, NSelect, NSpin, NText } from 'naive-ui';
+import { NAlert, NButton, NCheckbox, NEmpty, NIcon, NInput, NModal, NSelect, NSpin, NTabPane, NTabs, NText } from 'naive-ui';
 import { useExplorerStore } from '../stores/explorer';
 import type { AuthenticationMode, ProviderType, RoutineInfo, SynonymInfo, TableColumn, TableDesignSection, TableSummary } from '../types/explorer';
 
@@ -36,6 +36,7 @@ const createConnectionVisible = ref(false);
 const createConnectionLoading = ref(false);
 const testConnectionLoading = ref(false);
 const createConnectionError = ref<string | null>(null);
+const activeConnectionSettingsTab = ref<'general' | 'ssh'>('general');
 const createConnectionForm = reactive({
   name: '',
   provider: 'sqlserver' as ProviderType,
@@ -45,6 +46,14 @@ const createConnectionForm = reactive({
   username: '',
   password: '',
   trustServerCertificate: true,
+  sshEnabled: false,
+  sshAuthentication: 'password' as 'password' | 'publicKey',
+  sshHost: '',
+  sshPort: '22',
+  sshUsername: '',
+  sshPassword: '',
+  sshPrivateKeyPath: '',
+  sshPassphrase: '',
 });
 const closeAllContextMenus = () => {
   closeConnectionContextMenu();
@@ -60,6 +69,10 @@ const providerOptions = [
   { label: 'MySQL', value: 'mysql' },
   { label: 'PostgreSQL', value: 'postgresql' },
   { label: 'SQLite', value: 'sqlite' },
+];
+const sshAuthenticationOptions = [
+  { label: '密码', value: 'password' },
+  { label: '公钥', value: 'publicKey' },
 ];
 const authenticationOptions = computed(() => createConnectionForm.provider === 'sqlserver'
   ? [
@@ -480,6 +493,15 @@ async function openEditConnectionDialog() {
     createConnectionForm.username = config.username ?? '';
     createConnectionForm.password = '';
     createConnectionForm.trustServerCertificate = config.trustServerCertificate;
+    createConnectionForm.sshEnabled = config.sshTunnel.enabled;
+    createConnectionForm.sshAuthentication = config.sshTunnel.authentication;
+    createConnectionForm.sshHost = config.sshTunnel.host ?? '';
+    createConnectionForm.sshPort = config.sshTunnel.port ? String(config.sshTunnel.port) : '22';
+    createConnectionForm.sshUsername = config.sshTunnel.username ?? '';
+    createConnectionForm.sshPassword = '';
+    createConnectionForm.sshPrivateKeyPath = config.sshTunnel.privateKeyPath ?? '';
+    createConnectionForm.sshPassphrase = '';
+    activeConnectionSettingsTab.value = 'general';
     createConnectionVisible.value = true;
   }
   catch (error) {
@@ -991,6 +1013,15 @@ function resetCreateConnectionForm() {
   createConnectionForm.username = '';
   createConnectionForm.password = '';
   createConnectionForm.trustServerCertificate = true;
+  createConnectionForm.sshEnabled = false;
+  createConnectionForm.sshAuthentication = 'password';
+  createConnectionForm.sshHost = '';
+  createConnectionForm.sshPort = '22';
+  createConnectionForm.sshUsername = '';
+  createConnectionForm.sshPassword = '';
+  createConnectionForm.sshPrivateKeyPath = '';
+  createConnectionForm.sshPassphrase = '';
+  activeConnectionSettingsTab.value = 'general';
   createConnectionError.value = null;
 }
 
@@ -1015,6 +1046,22 @@ function handleProviderChange(provider: ProviderType) {
     createConnectionForm.authentication = 'password';
     createConnectionForm.username = '';
     createConnectionForm.password = '';
+    createConnectionForm.sshEnabled = false;
+    activeConnectionSettingsTab.value = 'general';
+  }
+}
+
+async function browseSshPrivateKeyFile() {
+  createConnectionError.value = null;
+
+  try {
+    const filePath = await store.pickSshPrivateKeyFile(createConnectionForm.sshPrivateKeyPath || null);
+    if (filePath) {
+      createConnectionForm.sshPrivateKeyPath = filePath;
+    }
+  }
+  catch (error) {
+    createConnectionError.value = error instanceof Error ? error.message : 'SSH 私钥选择失败';
   }
 }
 
@@ -1048,6 +1095,16 @@ async function submitCreateConnection() {
       username: createConnectionForm.provider === 'sqlite' || createConnectionForm.authentication === 'windows' ? null : createConnectionForm.username,
       password: createConnectionForm.provider === 'sqlite' || createConnectionForm.authentication === 'windows' ? null : createConnectionForm.password,
       trustServerCertificate: createConnectionForm.trustServerCertificate,
+      sshTunnel: {
+        enabled: createConnectionForm.provider !== 'sqlite' && createConnectionForm.sshEnabled,
+        authentication: createConnectionForm.sshAuthentication,
+        host: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled ? null : createConnectionForm.sshHost,
+        port: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled || !Number.isFinite(Number(createConnectionForm.sshPort)) ? null : Number(createConnectionForm.sshPort),
+        username: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled ? null : createConnectionForm.sshUsername,
+        password: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled || createConnectionForm.sshAuthentication === 'publicKey' ? null : createConnectionForm.sshPassword,
+        privateKeyPath: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled || createConnectionForm.sshAuthentication !== 'publicKey' ? null : (createConnectionForm.sshPrivateKeyPath || null),
+        passphrase: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled || createConnectionForm.sshAuthentication !== 'publicKey' ? null : (createConnectionForm.sshPassphrase || null),
+      },
     };
 
     if (editingConnectionId.value) {
@@ -1080,6 +1137,16 @@ async function testCurrentConnection() {
       username: createConnectionForm.provider === 'sqlite' || createConnectionForm.authentication === 'windows' ? null : createConnectionForm.username,
       password: createConnectionForm.provider === 'sqlite' || createConnectionForm.authentication === 'windows' ? null : (createConnectionForm.password || null),
       trustServerCertificate: createConnectionForm.trustServerCertificate,
+      sshTunnel: {
+        enabled: createConnectionForm.provider !== 'sqlite' && createConnectionForm.sshEnabled,
+        authentication: createConnectionForm.sshAuthentication,
+        host: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled ? null : createConnectionForm.sshHost,
+        port: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled || !Number.isFinite(Number(createConnectionForm.sshPort)) ? null : Number(createConnectionForm.sshPort),
+        username: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled ? null : createConnectionForm.sshUsername,
+        password: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled || createConnectionForm.sshAuthentication === 'publicKey' ? null : (createConnectionForm.sshPassword || null),
+        privateKeyPath: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled || createConnectionForm.sshAuthentication !== 'publicKey' ? null : (createConnectionForm.sshPrivateKeyPath || null),
+        passphrase: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled || createConnectionForm.sshAuthentication !== 'publicKey' ? null : (createConnectionForm.sshPassphrase || null),
+      },
     });
   }
   catch (error) {
@@ -1803,16 +1870,43 @@ onBeforeUnmount(() => {
 
     <NModal v-model:show="createConnectionVisible" preset="card" style="width: min(460px, 92vw)" :title="editingConnectionId ? '编辑连接' : '新建连接'">
       <div class="connection-dialog-form">
-        <NInput v-model:value="createConnectionForm.name" placeholder="连接名称" />
-        <NSelect :value="createConnectionForm.provider" :options="providerOptions" @update:value="handleProviderChange($event)" />
-        <NSelect v-if="createConnectionForm.provider !== 'sqlite'" v-model:value="createConnectionForm.authentication" :options="authenticationOptions" />
-        <NInput v-model:value="createConnectionForm.host" :placeholder="createConnectionForm.provider === 'sqlite' ? '数据库文件路径，例如 C:\\data\\app.db' : '主机，例如 .\\SQLEXPRESS 或 localhost'" />
-        <NButton v-if="createConnectionForm.provider === 'sqlite'" tertiary type="primary" @click="browseSqliteDatabaseFile">选择或新建 SQLite 文件</NButton>
-        <NText v-if="createConnectionForm.provider === 'sqlite'" depth="3">SQLite 会把这里当作数据库文件路径；如果文件不存在，会在首次连接时自动创建。</NText>
-        <NInput v-if="createConnectionForm.provider !== 'sqlite'" v-model:value="createConnectionForm.port" placeholder="端口" inputmode="numeric" />
-        <NInput v-if="createConnectionForm.provider !== 'sqlite' && createConnectionForm.authentication !== 'windows'" v-model:value="createConnectionForm.username" placeholder="用户名" />
-        <NInput v-if="createConnectionForm.provider !== 'sqlite' && createConnectionForm.authentication !== 'windows'" v-model:value="createConnectionForm.password" type="password" show-password-on="click" :placeholder="editingConnectionId ? '密码，留空则保持不变' : '密码'" />
-        <NCheckbox v-if="createConnectionForm.provider === 'sqlserver'" v-model:checked="createConnectionForm.trustServerCertificate">信任服务器证书</NCheckbox>
+        <NTabs v-model:value="activeConnectionSettingsTab" type="line" animated>
+          <NTabPane name="general" tab="常规">
+            <div class="connection-dialog-form connection-dialog-form-section">
+              <NInput v-model:value="createConnectionForm.name" placeholder="连接名称" />
+              <NSelect :value="createConnectionForm.provider" :options="providerOptions" @update:value="handleProviderChange($event)" />
+              <NSelect v-if="createConnectionForm.provider !== 'sqlite'" v-model:value="createConnectionForm.authentication" :options="authenticationOptions" />
+              <NInput v-model:value="createConnectionForm.host" :placeholder="createConnectionForm.provider === 'sqlite' ? '数据库文件路径，例如 C:\\data\\app.db' : '主机，例如 db.internal 或 127.0.0.1'" />
+              <NButton v-if="createConnectionForm.provider === 'sqlite'" tertiary type="primary" @click="browseSqliteDatabaseFile">选择或新建 SQLite 文件</NButton>
+              <NText v-if="createConnectionForm.provider === 'sqlite'" depth="3">SQLite 会把这里当作数据库文件路径；如果文件不存在，会在首次连接时自动创建。</NText>
+              <NInput v-if="createConnectionForm.provider !== 'sqlite'" v-model:value="createConnectionForm.port" placeholder="端口" inputmode="numeric" />
+              <NInput v-if="createConnectionForm.provider !== 'sqlite' && createConnectionForm.authentication !== 'windows'" v-model:value="createConnectionForm.username" placeholder="用户名" />
+              <NInput v-if="createConnectionForm.provider !== 'sqlite' && createConnectionForm.authentication !== 'windows'" v-model:value="createConnectionForm.password" type="password" show-password-on="click" :placeholder="editingConnectionId ? '密码，留空则保持不变' : '密码'" />
+              <NCheckbox v-if="createConnectionForm.provider === 'sqlserver'" v-model:checked="createConnectionForm.trustServerCertificate">信任服务器证书</NCheckbox>
+            </div>
+          </NTabPane>
+          <NTabPane v-if="createConnectionForm.provider !== 'sqlite'" name="ssh" tab="SSH">
+            <div class="connection-dialog-form connection-dialog-form-section">
+              <NCheckbox v-model:checked="createConnectionForm.sshEnabled">使用 SSH 隧道</NCheckbox>
+              <template v-if="createConnectionForm.sshEnabled">
+                <NInput v-model:value="createConnectionForm.sshHost" placeholder="SSH 主机，例如 jump.example.com" />
+                <NInput v-model:value="createConnectionForm.sshPort" placeholder="SSH 端口，默认 22" inputmode="numeric" />
+                <NInput v-model:value="createConnectionForm.sshUsername" placeholder="SSH 用户名" />
+                <NSelect v-model:value="createConnectionForm.sshAuthentication" :options="sshAuthenticationOptions" />
+                <NInput v-if="createConnectionForm.sshAuthentication === 'password'" v-model:value="createConnectionForm.sshPassword" type="password" show-password-on="click" :placeholder="editingConnectionId ? 'SSH 密码，留空则保持不变' : 'SSH 密码'" />
+                <template v-else>
+                  <div class="connection-dialog-inline-row">
+                    <NInput v-model:value="createConnectionForm.sshPrivateKeyPath" placeholder="私钥路径，留空自动尝试 ~/.ssh" />
+                    <NButton tertiary @click="browseSshPrivateKeyFile">选择...</NButton>
+                  </div>
+                  <NInput v-model:value="createConnectionForm.sshPassphrase" type="password" show-password-on="click" :placeholder="editingConnectionId ? '通行短语，留空则保持不变' : '通行短语，可选'" />
+                  <NText depth="3">若私钥路径留空，程序会自动尝试读取用户目录 `.ssh` 下的 `id_ed25519`、`id_rsa`、`id_ecdsa`、`id_dsa`。</NText>
+                </template>
+                <NText depth="3">数据库主机和端口会作为 SSH 目标地址使用。例如数据库主机填 127.0.0.1，就表示 SSH 服务器上的 127.0.0.1。</NText>
+              </template>
+            </div>
+          </NTabPane>
+        </NTabs>
         <NAlert v-if="createConnectionError" type="warning" :show-icon="false">{{ createConnectionError }}</NAlert>
         <div class="connection-dialog-actions">
           <NButton tertiary @click="createConnectionVisible = false">取消</NButton>
@@ -2380,5 +2474,16 @@ onBeforeUnmount(() => {
   position: absolute;
   top: -4px;
   left: calc(100% + 6px);
+}
+
+.connection-dialog-form-section {
+  padding-top: 8px;
+}
+
+.connection-dialog-inline-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
 }
 </style>

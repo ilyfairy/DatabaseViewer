@@ -20,5 +20,7 @@ public sealed class ConnectionDefinition
 
     public bool TrustServerCertificate { get; set; } = true;
 
+    public SshTunnelOptions SshTunnel { get; set; } = new();
+
     public string DisplayLabel => $"{Name} ({ProviderType})";
 }

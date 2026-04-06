@@ -189,6 +189,24 @@ public sealed record RoutineSourceRequest(Guid ConnectionId, string Database, st
 
 public sealed record RoutineSourceResponse(string? Source);
 
+public sealed record SshTunnelRequest(
+    bool Enabled,
+    string Authentication,
+    string? Host,
+    int? Port,
+    string? Username,
+    string? Password,
+    string? PrivateKeyPath,
+    string? Passphrase);
+
+public sealed record SshTunnelConfigResponse(
+    bool Enabled,
+    string Authentication,
+    string? Host,
+    int? Port,
+    string? Username,
+    string? PrivateKeyPath);
+
 public sealed record CreateConnectionRequest(
     string Name,
     string Provider,
@@ -197,7 +215,8 @@ public sealed record CreateConnectionRequest(
     int? Port,
     string? Username,
     string? Password,
-    bool TrustServerCertificate);
+    bool TrustServerCertificate,
+    SshTunnelRequest? SshTunnel);
 
 public sealed record ConnectionConfigResponse(
     Guid Id,
@@ -207,7 +226,8 @@ public sealed record ConnectionConfigResponse(
     string Host,
     int? Port,
     string? Username,
-    bool TrustServerCertificate);
+    bool TrustServerCertificate,
+    SshTunnelConfigResponse SshTunnel);
 
 public sealed record TestConnectionRequest(
     Guid? ConnectionId,
@@ -218,7 +238,8 @@ public sealed record TestConnectionRequest(
     int? Port,
     string? Username,
     string? Password,
-    bool TrustServerCertificate);
+    bool TrustServerCertificate,
+    SshTunnelRequest? SshTunnel);
 
 public sealed record SqlResultColumnDto(string Name, string Type);
 
