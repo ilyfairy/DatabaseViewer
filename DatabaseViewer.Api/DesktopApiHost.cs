@@ -44,17 +44,105 @@ public static class DesktopApiHost
 
         app.MapGet("/api/explorer/bootstrap", async () => await explorer.GetBootstrapAsync());
         app.MapGet("/api/explorer/connections/{connectionId:guid}", async (Guid connectionId) => await explorer.GetConnectionConfigAsync(connectionId));
-        app.MapGet("/api/explorer/database-graph", async (Guid connectionId, string database) => await explorer.GetDatabaseGraphAsync(connectionId, database));
-        app.MapGet("/api/explorer/table", async (string tableKey, int? offset, int? pageSize, string? sortColumn, string? sortDirection) => await explorer.GetTablePageAsync(tableKey, offset ?? 0, pageSize ?? 100, sortColumn, sortDirection));
-        app.MapGet("/api/explorer/table-design", async (string tableKey) => await explorer.GetTableDesignAsync(tableKey));
-        app.MapGet("/api/explorer/table-search", async (string tableKey, string query, string[]? columns, int? offset, int? pageSize, string? sortColumn, string? sortDirection) => await explorer.SearchTableAsync(tableKey, query, columns, offset ?? 0, pageSize ?? 100, sortColumn, sortDirection));
-        app.MapGet("/api/explorer/sql-context", async (Guid connectionId, string database) => await explorer.GetSqlContextAsync(connectionId, database));
-        app.MapGet("/api/explorer/record", async (string tableKey, string rowKey) => await explorer.GetRecordAsync(tableKey, rowKey));
-        app.MapGet("/api/explorer/cell", async (string tableKey, string rowKey, string columnName) => await explorer.GetCellContentAsync(tableKey, rowKey, columnName));
+        app.MapGet("/api/explorer/database-graph", async (Guid connectionId, string database) =>
+        {
+            try
+            {
+                return Results.Ok(await explorer.GetDatabaseGraphAsync(connectionId, database));
+            }
+            catch (Exception ex)
+            {
+                return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
+        });
+        app.MapGet("/api/explorer/table", async (string tableKey, int? offset, int? pageSize, string? sortColumn, string? sortDirection) =>
+        {
+            try
+            {
+                return Results.Ok(await explorer.GetTablePageAsync(tableKey, offset ?? 0, pageSize ?? 100, sortColumn, sortDirection));
+            }
+            catch (Exception ex)
+            {
+                return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
+        });
+        app.MapGet("/api/explorer/table-design", async (string tableKey) =>
+        {
+            try
+            {
+                return Results.Ok(await explorer.GetTableDesignAsync(tableKey));
+            }
+            catch (Exception ex)
+            {
+                return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
+        });
+        app.MapGet("/api/explorer/table-search", async (string tableKey, string query, string[]? columns, int? offset, int? pageSize, string? sortColumn, string? sortDirection) =>
+        {
+            try
+            {
+                return Results.Ok(await explorer.SearchTableAsync(tableKey, query, columns, offset ?? 0, pageSize ?? 100, sortColumn, sortDirection));
+            }
+            catch (Exception ex)
+            {
+                return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
+        });
+        app.MapGet("/api/explorer/sql-context", async (Guid connectionId, string database) =>
+        {
+            try
+            {
+                return Results.Ok(await explorer.GetSqlContextAsync(connectionId, database));
+            }
+            catch (Exception ex)
+            {
+                return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
+        });
+        app.MapGet("/api/explorer/catalog-object", async (Guid connectionId, string database, string objectType, string? schema, string name) =>
+        {
+            try
+            {
+                return Results.Ok(await explorer.GetCatalogObjectDetailAsync(connectionId, database, objectType, schema, name));
+            }
+            catch (Exception ex)
+            {
+                return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
+        });
+        app.MapGet("/api/explorer/record", async (string tableKey, string rowKey) =>
+        {
+            try
+            {
+                return Results.Ok(await explorer.GetRecordAsync(tableKey, rowKey));
+            }
+            catch (Exception ex)
+            {
+                return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
+        });
+        app.MapGet("/api/explorer/cell", async (string tableKey, string rowKey, string columnName) =>
+        {
+            try
+            {
+                return Results.Ok(await explorer.GetCellContentAsync(tableKey, rowKey, columnName));
+            }
+            catch (Exception ex)
+            {
+                return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
+        });
         app.MapGet("/api/explorer/foreign-key", async (string tableKey, string rowKey, string columnName) =>
         {
-            var target = await explorer.ResolveForeignKeyAsync(tableKey, rowKey, columnName);
-            return target is null ? Results.NotFound() : Results.Ok(target);
+            try
+            {
+                var target = await explorer.ResolveForeignKeyAsync(tableKey, rowKey, columnName);
+                return target is null ? Results.NotFound() : Results.Ok(target);
+            }
+            catch (Exception ex)
+            {
+                return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
         });
         app.MapPost("/api/explorer/sql-execute", async (SqlExecutionRequest request) =>
         {

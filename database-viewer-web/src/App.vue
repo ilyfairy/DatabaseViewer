@@ -7,6 +7,7 @@ import 'splitpanes/dist/splitpanes.css';
 
 // Heavy components loaded lazily — not rendered on initial paint
 const DatabaseOverviewGraph = defineAsyncComponent(() => import('./components/DatabaseOverviewGraph.vue'));
+const CatalogObjectPanel = defineAsyncComponent(() => import('./components/CatalogObjectPanel.vue'));
 const SqlPanel = defineAsyncComponent(() => import('./components/SqlPanel.vue'));
 const TableMockDataPanel = defineAsyncComponent(() => import('./components/TableMockDataPanel.vue'));
 const TableDesignPanel = defineAsyncComponent(() => import('./components/TableDesignPanel.vue'));
@@ -32,6 +33,7 @@ const activeTableTab = computed(() => store.activeTableTab);
 const activeDesignTab = computed(() => store.activeDesignTab);
 const activeSqlTab = computed(() => store.activeSqlTab);
 const activeGraphTab = computed(() => store.activeGraphTab);
+const activeCatalogTab = computed(() => store.activeCatalogTab);
 const activeMockTab = computed(() => store.activeMockTab);
 const pendingSqlCloseTab = computed(() => {
   const pending = store.pendingSqlClose;
@@ -310,6 +312,11 @@ onBeforeUnmount(() => {
                 <div v-else-if="activeSqlTab" class="workspace-body">
                   <div class="workspace-main">
                     <SqlPanel :tab="activeSqlTab" />
+                  </div>
+                </div>
+                <div v-else-if="activeCatalogTab" class="workspace-body">
+                  <div class="workspace-main">
+                    <CatalogObjectPanel :tab="activeCatalogTab" />
                   </div>
                 </div>
                 <div v-else-if="activeMockTab" class="workspace-body">

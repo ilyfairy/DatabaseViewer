@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import type { Component } from 'vue';
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
-import { IconBolt, IconChevronDown, IconChevronRight, IconColumns3, IconDatabase, IconFunction, IconLink, IconListDetails, IconScript, IconServer, IconTable, IconTableColumn, IconVariable } from '@tabler/icons-vue';
+import { IconBolt, IconChevronDown, IconChevronRight, IconColumns3, IconDatabase, IconEye, IconFunction, IconLink, IconListDetails, IconScript, IconServer, IconTable, IconTableColumn, IconVariable } from '@tabler/icons-vue';
 import { NAlert, NButton, NCheckbox, NEmpty, NIcon, NInput, NModal, NSelect, NSpin, NText } from 'naive-ui';
 import { useExplorerStore } from '../stores/explorer';
-import type { AuthenticationMode, ProviderType, RoutineInfo, TableColumn, TableSummary } from '../types/explorer';
+import type { AuthenticationMode, ProviderType, RoutineInfo, SynonymInfo, TableColumn, TableDesignSection, TableSummary } from '../types/explorer';
 
 const store = useExplorerStore();
 const expandedConnections = ref<string[]>([]);
@@ -98,7 +98,7 @@ async function toggleTableNode(tableKey: string) {
   }
 }
 
-function toggleTableGroup(tableKey: string, section: 'columns' | 'indexes' | 'foreignKeys' | 'triggers') {
+function toggleTableGroup(tableKey: string, section: 'columns' | 'indexes' | 'foreignKeys' | 'triggers' | 'statistics') {
   const key = `${tableKey}:${section}`;
   expandedTableGroups.value = expandedTableGroups.value.includes(key)
     ? expandedTableGroups.value.filter((entry) => entry !== key)
@@ -109,7 +109,7 @@ function isTableExpanded(tableKey: string) {
   return expandedTables.value.includes(tableKey);
 }
 
-function isTableGroupExpanded(tableKey: string, section: 'columns' | 'indexes' | 'foreignKeys' | 'triggers') {
+function isTableGroupExpanded(tableKey: string, section: 'columns' | 'indexes' | 'foreignKeys' | 'triggers' | 'statistics') {
   return expandedTableGroups.value.includes(`${tableKey}:${section}`);
 }
 
@@ -137,20 +137,48 @@ function treeTriggers(tableKey: string) {
   return tableDesignForTree(tableKey)?.triggers ?? [];
 }
 
+function treeStatistics(tableKey: string) {
+  return tableDesignForTree(tableKey)?.statistics ?? [];
+}
+
 /** 切换存储过程/函数分组的展开状态 */
-function toggleRoutineGroup(connectionId: string, database: string, group: 'tables' | 'procedures' | 'functions') {
+function toggleRoutineGroup(connectionId: string, database: string, group: 'tables' | 'views' | 'synonyms' | 'sequences' | 'rules' | 'defaults' | 'types' | 'procedures' | 'functions') {
   const key = `${connectionId}:${database}:${group}`;
   expandedRoutineGroups.value = expandedRoutineGroups.value.includes(key)
     ? expandedRoutineGroups.value.filter((entry) => entry !== key)
     : [...expandedRoutineGroups.value, key];
 }
 
-function isRoutineGroupExpanded(connectionId: string, database: string, group: 'tables' | 'procedures' | 'functions') {
+function isRoutineGroupExpanded(connectionId: string, database: string, group: 'tables' | 'views' | 'synonyms' | 'sequences' | 'rules' | 'defaults' | 'types' | 'procedures' | 'functions') {
   return expandedRoutineGroups.value.includes(`${connectionId}:${database}:${group}`);
 }
 
 function treeTables(connectionId: string, database: string): TableSummary[] {
   return store.getTables(connectionId, database);
+}
+
+function treeViews(connectionId: string, database: string): TableSummary[] {
+  return store.getViews(connectionId, database);
+}
+
+function treeSynonyms(connectionId: string, database: string): SynonymInfo[] {
+  return store.getSynonyms(connectionId, database);
+}
+
+function treeSequences(connectionId: string, database: string) {
+  return store.getSequences(connectionId, database);
+}
+
+function treeRules(connectionId: string, database: string) {
+  return store.getRules(connectionId, database);
+}
+
+function treeDefaults(connectionId: string, database: string) {
+  return store.getDefaults(connectionId, database);
+}
+
+function treeUserDefinedTypes(connectionId: string, database: string) {
+  return store.getUserDefinedTypes(connectionId, database);
 }
 
 /** 获取指定数据库下的存储过程列表 */
@@ -264,9 +292,67 @@ function isTableFocused(tableKey: string) {
   return store.activeTableTab?.tableKey === tableKey || store.activeDesignTab?.tableKey === tableKey;
 }
 
-async function openDesignSection(tableKey: string, section: 'columns' | 'indexes' | 'foreignKeys' | 'triggers', entry: string | null = null) {
+async function openDesignSection(tableKey: string, section: TableDesignSection, entry: string | null = null) {
   await store.openTableDesign(tableKey);
   store.updateDesignTabSelection(`design:${tableKey}`, section, entry);
+}
+
+function openCatalogObject(connectionId: string, database: string, objectType: 'synonym' | 'sequence' | 'rule' | 'default' | 'user-defined-type', schema: string | null | undefined, name: string) {
+  void store.openCatalogObject(connectionId, database, objectType, schema ?? null, name);
+}
+
+function catalogObjectFullName(schema: string | null | undefined, name: string) {
+  return schema ? `${schema}.${name}` : name;
+}
+
+function catalogObjectTitle(schema: string | null | undefined, name: string, summary: string | null | undefined) {
+  const fullName = catalogObjectFullName(schema, name);
+  return summary ? `${fullName}\n${summary}` : fullName;
+}
+
+function databaseObjectSummary(connectionId: string, database: string) {
+  const tableCount = treeTables(connectionId, database).length;
+  const viewCount = treeViews(connectionId, database).length;
+  const synonymCount = treeSynonyms(connectionId, database).length;
+  const sequenceCount = treeSequences(connectionId, database).length;
+  const ruleCount = treeRules(connectionId, database).length;
+  const defaultCount = treeDefaults(connectionId, database).length;
+  const typeCount = treeUserDefinedTypes(connectionId, database).length;
+  const parts = [`${tableCount} 表`];
+  if (viewCount > 0) {
+    parts.push(`${viewCount} 视图`);
+  }
+  if (synonymCount > 0) {
+    parts.push(`${synonymCount} 同义词`);
+  }
+  if (sequenceCount > 0) {
+    parts.push(`${sequenceCount} 序列`);
+  }
+  if (ruleCount > 0) {
+    parts.push(`${ruleCount} 规则`);
+  }
+  if (defaultCount > 0) {
+    parts.push(`${defaultCount} 默认值`);
+  }
+  if (typeCount > 0) {
+    parts.push(`${typeCount} 类型`);
+  }
+
+  return parts.join(' · ');
+}
+
+function objectRowMeta(object: TableSummary) {
+  return object.objectType === 'view'
+    ? '视图'
+    : `${store.tableRowCountLabel(object.key) ?? '未统计'} rows`;
+}
+
+function showForeignKeyGroup(object: TableSummary) {
+  return object.objectType === 'table';
+}
+
+function objectTreeIcon(object: TableSummary): Component {
+  return object.objectType === 'view' ? IconEye : IconTable;
 }
 
 async function confirmDeleteConnection(connectionId: string) {
@@ -1011,7 +1097,7 @@ onBeforeUnmount(() => {
                   <NIcon class="tree-icon tree-icon-database" size="12"><IconDatabase /></NIcon>
                   <span class="tree-label-stack">
                     <span class="tree-label-main">{{ database.name }}</span>
-                    <span class="tree-label-meta">{{ store.getTables(connection.id, database.name).length }} tables</span>
+                    <span class="tree-label-meta">{{ databaseObjectSummary(connection.id, database.name) }}</span>
                   </span>
                 </button>
               </div>
@@ -1043,10 +1129,10 @@ onBeforeUnmount(() => {
                           <NIcon size="12"><component :is="treeToggleIcon(isTableExpanded(table.key))" /></NIcon>
                         </button>
                         <button type="button" class="tree-node-main" @click="store.openTable(table.key)">
-                          <NIcon class="tree-icon tree-icon-table" size="12"><IconTable /></NIcon>
+                          <NIcon class="tree-icon tree-icon-table" size="12"><component :is="objectTreeIcon(table)" /></NIcon>
                           <span class="tree-label-stack">
                             <span class="tree-label-main">{{ table.schema ? `${table.schema}.${table.name}` : table.name }}</span>
-                            <span class="tree-label-meta">{{ store.tableRowCountLabel(table.key) ?? '未统计' }} rows</span>
+                            <span class="tree-label-meta">{{ objectRowMeta(table) }}</span>
                           </span>
                         </button>
                       </div>
@@ -1103,7 +1189,7 @@ onBeforeUnmount(() => {
                             </div>
                           </div>
 
-                          <div class="tree-node">
+                          <div v-if="showForeignKeyGroup(table)" class="tree-node">
                             <div class="tree-row tree-row-group">
                               <button class="tree-toggle" type="button" @click="toggleTableGroup(table.key, 'foreignKeys')">
                                 <NIcon size="12"><component :is="treeToggleIcon(isTableGroupExpanded(table.key, 'foreignKeys'))" /></NIcon>
@@ -1142,9 +1228,256 @@ onBeforeUnmount(() => {
                               </button>
                             </div>
                           </div>
+
+                          <div class="tree-node">
+                            <div class="tree-row tree-row-group">
+                              <button class="tree-toggle" type="button" @click="toggleTableGroup(table.key, 'statistics')">
+                                <NIcon size="12"><component :is="treeToggleIcon(isTableGroupExpanded(table.key, 'statistics'))" /></NIcon>
+                              </button>
+                              <button type="button" class="tree-node-main" @click="openDesignSection(table.key, 'statistics')">
+                                <NIcon class="tree-icon tree-icon-index" size="12"><IconListDetails /></NIcon>
+                                <span class="tree-label-main">统计信息</span>
+                                <span class="tree-row-count">{{ treeStatistics(table.key).length }}</span>
+                              </button>
+                            </div>
+                            <div v-if="isTableGroupExpanded(table.key, 'statistics')" class="tree-children tree-children-animated">
+                              <button v-for="statistic in treeStatistics(table.key)" :key="statistic.name" type="button" class="tree-leaf-row" @dblclick.stop.prevent="openDesignSection(table.key, 'statistics', statistic.name)">
+                                <NIcon class="tree-icon tree-icon-leaf" size="12"><IconListDetails /></NIcon>
+                                <span class="tree-leaf-name">{{ statistic.name }}</span>
+                                <span class="tree-leaf-type">{{ statistic.columns.join(', ') || '-' }}</span>
+                              </button>
+                            </div>
+                          </div>
                         </template>
                       </div>
                     </div>
+                  </div>
+                </div>
+
+                <div v-if="treeViews(connection.id, database.name).length > 0" class="tree-node">
+                  <div class="tree-row tree-row-group">
+                    <button class="tree-toggle" type="button" @click="toggleRoutineGroup(connection.id, database.name, 'views')">
+                      <NIcon size="12"><component :is="treeToggleIcon(isRoutineGroupExpanded(connection.id, database.name, 'views'))" /></NIcon>
+                    </button>
+                    <button type="button" class="tree-node-main" @click="toggleRoutineGroup(connection.id, database.name, 'views')">
+                      <NIcon class="tree-icon tree-icon-table" size="12"><IconEye /></NIcon>
+                      <span class="tree-label-main">视图</span>
+                      <span class="tree-row-count">{{ treeViews(connection.id, database.name).length }}</span>
+                    </button>
+                  </div>
+                  <div v-if="isRoutineGroupExpanded(connection.id, database.name, 'views')" class="tree-children tree-children-animated">
+                    <div
+                      v-for="view in treeViews(connection.id, database.name)"
+                      :key="view.key"
+                      class="tree-node"
+                    >
+                      <div class="tree-row tree-row-table" :class="{ 'tree-row-active': isTableFocused(view.key) }">
+                        <button class="tree-toggle" type="button" @click="toggleTableNode(view.key)">
+                          <NIcon size="12"><component :is="treeToggleIcon(isTableExpanded(view.key))" /></NIcon>
+                        </button>
+                        <button type="button" class="tree-node-main" @click="store.openTable(view.key)">
+                          <NIcon class="tree-icon tree-icon-table" size="12"><component :is="objectTreeIcon(view)" /></NIcon>
+                          <span class="tree-label-stack">
+                            <span class="tree-label-main">{{ view.schema ? `${view.schema}.${view.name}` : view.name }}</span>
+                            <span class="tree-label-meta">{{ objectRowMeta(view) }}</span>
+                          </span>
+                        </button>
+                      </div>
+
+                      <div v-if="isTableExpanded(view.key)" class="tree-children tree-children-animated tree-children-table">
+                        <div v-if="tableDesignStatusForTree(view.key).loading" class="tree-loading-row">正在加载对象树...</div>
+                        <NAlert v-else-if="tableDesignStatusForTree(view.key).error" type="warning" :show-icon="false" class="tree-inline-alert">
+                          {{ tableDesignStatusForTree(view.key).error }}
+                        </NAlert>
+                        <template v-else-if="tableDesignForTree(view.key)">
+                          <div class="tree-node">
+                            <div class="tree-row tree-row-group">
+                              <button class="tree-toggle" type="button" @click="toggleTableGroup(view.key, 'columns')">
+                                <NIcon size="12"><component :is="treeToggleIcon(isTableGroupExpanded(view.key, 'columns'))" /></NIcon>
+                              </button>
+                              <button type="button" class="tree-node-main" @click="openDesignSection(view.key, 'columns')">
+                                <NIcon class="tree-icon tree-icon-column" size="12"><IconColumns3 /></NIcon>
+                                <span class="tree-label-main">字段</span>
+                                <span class="tree-row-count">{{ treeColumns(view.key).length }}</span>
+                              </button>
+                            </div>
+                            <div v-if="isTableGroupExpanded(view.key, 'columns')" class="tree-children tree-children-animated">
+                              <button
+                                v-for="column in treeColumns(view.key)"
+                                :key="column.name"
+                                type="button"
+                                class="tree-leaf-row"
+                                @dblclick.stop.prevent="openDesignSection(view.key, 'columns', column.name)"
+                              >
+                                <NIcon class="tree-icon tree-icon-leaf" size="12"><IconTableColumn /></NIcon>
+                                <span class="tree-leaf-name">{{ column.name }}</span>
+                                <span class="tree-leaf-type">{{ formatTreeColumnType(column) }}</span>
+                              </button>
+                            </div>
+                          </div>
+
+                          <div class="tree-node">
+                            <div class="tree-row tree-row-group">
+                              <button class="tree-toggle" type="button" @click="toggleTableGroup(view.key, 'indexes')">
+                                <NIcon size="12"><component :is="treeToggleIcon(isTableGroupExpanded(view.key, 'indexes'))" /></NIcon>
+                              </button>
+                              <button type="button" class="tree-node-main" @click="openDesignSection(view.key, 'indexes')">
+                                <NIcon class="tree-icon tree-icon-index" size="12"><IconListDetails /></NIcon>
+                                <span class="tree-label-main">索引</span>
+                                <span class="tree-row-count">{{ treeIndexes(view.key).length }}</span>
+                              </button>
+                            </div>
+                            <div v-if="isTableGroupExpanded(view.key, 'indexes')" class="tree-children tree-children-animated">
+                              <button v-for="index in treeIndexes(view.key)" :key="index.name" type="button" class="tree-leaf-row" @dblclick.stop.prevent="openDesignSection(view.key, 'indexes', index.name)">
+                                <NIcon class="tree-icon tree-icon-leaf" size="12"><IconListDetails /></NIcon>
+                                <span class="tree-leaf-name">{{ index.name }}</span>
+                                <span class="tree-leaf-type">{{ index.columns.join(', ') || '-' }}</span>
+                              </button>
+                            </div>
+                          </div>
+
+                          <div class="tree-node">
+                            <div class="tree-row tree-row-group">
+                              <button class="tree-toggle" type="button" @click="toggleTableGroup(view.key, 'triggers')">
+                                <NIcon size="12"><component :is="treeToggleIcon(isTableGroupExpanded(view.key, 'triggers'))" /></NIcon>
+                              </button>
+                              <button type="button" class="tree-node-main" @click="openDesignSection(view.key, 'triggers')">
+                                <NIcon class="tree-icon tree-icon-trigger" size="12"><IconBolt /></NIcon>
+                                <span class="tree-label-main">触发器</span>
+                                <span class="tree-row-count">{{ treeTriggers(view.key).length }}</span>
+                              </button>
+                            </div>
+                            <div v-if="isTableGroupExpanded(view.key, 'triggers')" class="tree-children tree-children-animated">
+                              <button v-for="trigger in treeTriggers(view.key)" :key="trigger.name" type="button" class="tree-leaf-row" @dblclick.stop.prevent="openDesignSection(view.key, 'triggers', trigger.name)">
+                                <NIcon class="tree-icon tree-icon-leaf" size="12"><IconBolt /></NIcon>
+                                <span class="tree-leaf-name">{{ trigger.name }}</span>
+                                <span class="tree-leaf-type">{{ trigger.event || trigger.timing || '-' }}</span>
+                              </button>
+                            </div>
+                          </div>
+
+                          <div class="tree-node">
+                            <div class="tree-row tree-row-group">
+                              <button class="tree-toggle" type="button" @click="toggleTableGroup(view.key, 'statistics')">
+                                <NIcon size="12"><component :is="treeToggleIcon(isTableGroupExpanded(view.key, 'statistics'))" /></NIcon>
+                              </button>
+                              <button type="button" class="tree-node-main" @click="openDesignSection(view.key, 'statistics')">
+                                <NIcon class="tree-icon tree-icon-index" size="12"><IconListDetails /></NIcon>
+                                <span class="tree-label-main">统计信息</span>
+                                <span class="tree-row-count">{{ treeStatistics(view.key).length }}</span>
+                              </button>
+                            </div>
+                            <div v-if="isTableGroupExpanded(view.key, 'statistics')" class="tree-children tree-children-animated">
+                              <button v-for="statistic in treeStatistics(view.key)" :key="statistic.name" type="button" class="tree-leaf-row" @dblclick.stop.prevent="openDesignSection(view.key, 'statistics', statistic.name)">
+                                <NIcon class="tree-icon tree-icon-leaf" size="12"><IconListDetails /></NIcon>
+                                <span class="tree-leaf-name">{{ statistic.name }}</span>
+                                <span class="tree-leaf-type">{{ statistic.columns.join(', ') || '-' }}</span>
+                              </button>
+                            </div>
+                          </div>
+                        </template>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div v-if="treeSynonyms(connection.id, database.name).length > 0" class="tree-node">
+                  <div class="tree-row tree-row-group">
+                    <button class="tree-toggle" type="button" @click="toggleRoutineGroup(connection.id, database.name, 'synonyms')">
+                      <NIcon size="12"><component :is="treeToggleIcon(isRoutineGroupExpanded(connection.id, database.name, 'synonyms'))" /></NIcon>
+                    </button>
+                    <button type="button" class="tree-node-main" @click="toggleRoutineGroup(connection.id, database.name, 'synonyms')">
+                      <NIcon class="tree-icon tree-icon-function" size="12"><IconLink /></NIcon>
+                      <span class="tree-label-main">同义词</span>
+                      <span class="tree-row-count">{{ treeSynonyms(connection.id, database.name).length }}</span>
+                    </button>
+                  </div>
+                  <div v-if="isRoutineGroupExpanded(connection.id, database.name, 'synonyms')" class="tree-children tree-children-animated">
+                    <button v-for="synonym in treeSynonyms(connection.id, database.name)" :key="`${synonym.schema ?? ''}.${synonym.name}`" type="button" class="tree-leaf-row" :title="catalogObjectTitle(synonym.schema, synonym.name, synonym.baseObjectName)" @dblclick.stop.prevent="openCatalogObject(connection.id, database.name, 'synonym', synonym.schema, synonym.name)">
+                      <NIcon class="tree-icon tree-icon-leaf" size="12"><IconLink /></NIcon>
+                      <span class="tree-leaf-name">{{ synonym.schema ? `${synonym.schema}.${synonym.name}` : synonym.name }}</span>
+                      <span class="tree-leaf-type">{{ synonym.baseObjectName }}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div v-if="treeSequences(connection.id, database.name).length > 0" class="tree-node">
+                  <div class="tree-row tree-row-group">
+                    <button class="tree-toggle" type="button" @click="toggleRoutineGroup(connection.id, database.name, 'sequences')">
+                      <NIcon size="12"><component :is="treeToggleIcon(isRoutineGroupExpanded(connection.id, database.name, 'sequences'))" /></NIcon>
+                    </button>
+                    <button type="button" class="tree-node-main" @click="toggleRoutineGroup(connection.id, database.name, 'sequences')">
+                      <NIcon class="tree-icon tree-icon-function" size="12"><IconVariable /></NIcon>
+                      <span class="tree-label-main">序列</span>
+                      <span class="tree-row-count">{{ treeSequences(connection.id, database.name).length }}</span>
+                    </button>
+                  </div>
+                  <div v-if="isRoutineGroupExpanded(connection.id, database.name, 'sequences')" class="tree-children tree-children-animated">
+                    <button v-for="sequence in treeSequences(connection.id, database.name)" :key="`${sequence.schema ?? ''}.${sequence.name}`" type="button" class="tree-leaf-row" :title="catalogObjectTitle(sequence.schema, sequence.name, `${sequence.dataType} · ${sequence.incrementValue}`)" @dblclick.stop.prevent="openCatalogObject(connection.id, database.name, 'sequence', sequence.schema, sequence.name)">
+                      <NIcon class="tree-icon tree-icon-leaf" size="12"><IconVariable /></NIcon>
+                      <span class="tree-leaf-name">{{ sequence.schema ? `${sequence.schema}.${sequence.name}` : sequence.name }}</span>
+                      <span class="tree-leaf-type">{{ `${sequence.dataType} · ${sequence.incrementValue}` }}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div v-if="treeRules(connection.id, database.name).length > 0" class="tree-node">
+                  <div class="tree-row tree-row-group">
+                    <button class="tree-toggle" type="button" @click="toggleRoutineGroup(connection.id, database.name, 'rules')">
+                      <NIcon size="12"><component :is="treeToggleIcon(isRoutineGroupExpanded(connection.id, database.name, 'rules'))" /></NIcon>
+                    </button>
+                    <button type="button" class="tree-node-main" @click="toggleRoutineGroup(connection.id, database.name, 'rules')">
+                      <NIcon class="tree-icon tree-icon-function" size="12"><IconListDetails /></NIcon>
+                      <span class="tree-label-main">规则</span>
+                      <span class="tree-row-count">{{ treeRules(connection.id, database.name).length }}</span>
+                    </button>
+                  </div>
+                  <div v-if="isRoutineGroupExpanded(connection.id, database.name, 'rules')" class="tree-children tree-children-animated">
+                    <button v-for="rule in treeRules(connection.id, database.name)" :key="`${rule.schema ?? ''}.${rule.name}`" type="button" class="tree-leaf-row" :title="catalogObjectTitle(rule.schema, rule.name, rule.definition || '规则')" @dblclick.stop.prevent="openCatalogObject(connection.id, database.name, 'rule', rule.schema, rule.name)">
+                      <NIcon class="tree-icon tree-icon-leaf" size="12"><IconListDetails /></NIcon>
+                      <span class="tree-leaf-name">{{ rule.schema ? `${rule.schema}.${rule.name}` : rule.name }}</span>
+                      <span class="tree-leaf-type">{{ rule.definition || '规则' }}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div v-if="treeDefaults(connection.id, database.name).length > 0" class="tree-node">
+                  <div class="tree-row tree-row-group">
+                    <button class="tree-toggle" type="button" @click="toggleRoutineGroup(connection.id, database.name, 'defaults')">
+                      <NIcon size="12"><component :is="treeToggleIcon(isRoutineGroupExpanded(connection.id, database.name, 'defaults'))" /></NIcon>
+                    </button>
+                    <button type="button" class="tree-node-main" @click="toggleRoutineGroup(connection.id, database.name, 'defaults')">
+                      <NIcon class="tree-icon tree-icon-function" size="12"><IconListDetails /></NIcon>
+                      <span class="tree-label-main">默认值</span>
+                      <span class="tree-row-count">{{ treeDefaults(connection.id, database.name).length }}</span>
+                    </button>
+                  </div>
+                  <div v-if="isRoutineGroupExpanded(connection.id, database.name, 'defaults')" class="tree-children tree-children-animated">
+                    <button v-for="item in treeDefaults(connection.id, database.name)" :key="`${item.schema ?? ''}.${item.name}`" type="button" class="tree-leaf-row" :title="catalogObjectTitle(item.schema, item.name, item.definition || '默认值')" @dblclick.stop.prevent="openCatalogObject(connection.id, database.name, 'default', item.schema, item.name)">
+                      <NIcon class="tree-icon tree-icon-leaf" size="12"><IconListDetails /></NIcon>
+                      <span class="tree-leaf-name">{{ item.schema ? `${item.schema}.${item.name}` : item.name }}</span>
+                      <span class="tree-leaf-type">{{ item.definition || '默认值' }}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div v-if="treeUserDefinedTypes(connection.id, database.name).length > 0" class="tree-node">
+                  <div class="tree-row tree-row-group">
+                    <button class="tree-toggle" type="button" @click="toggleRoutineGroup(connection.id, database.name, 'types')">
+                      <NIcon size="12"><component :is="treeToggleIcon(isRoutineGroupExpanded(connection.id, database.name, 'types'))" /></NIcon>
+                    </button>
+                    <button type="button" class="tree-node-main" @click="toggleRoutineGroup(connection.id, database.name, 'types')">
+                      <NIcon class="tree-icon tree-icon-function" size="12"><IconTableColumn /></NIcon>
+                      <span class="tree-label-main">类型</span>
+                      <span class="tree-row-count">{{ treeUserDefinedTypes(connection.id, database.name).length }}</span>
+                    </button>
+                  </div>
+                  <div v-if="isRoutineGroupExpanded(connection.id, database.name, 'types')" class="tree-children tree-children-animated">
+                    <button v-for="item in treeUserDefinedTypes(connection.id, database.name)" :key="`${item.schema ?? ''}.${item.name}`" type="button" class="tree-leaf-row" :title="catalogObjectTitle(item.schema, item.name, item.isTableType ? 'table type' : item.baseTypeName)" @dblclick.stop.prevent="openCatalogObject(connection.id, database.name, 'user-defined-type', item.schema, item.name)">
+                      <NIcon class="tree-icon tree-icon-leaf" size="12"><IconTableColumn /></NIcon>
+                      <span class="tree-leaf-name">{{ item.schema ? `${item.schema}.${item.name}` : item.name }}</span>
+                      <span class="tree-leaf-type">{{ item.isTableType ? 'table type' : item.baseTypeName }}</span>
+                    </button>
                   </div>
                 </div>
 
@@ -1621,9 +1954,10 @@ onBeforeUnmount(() => {
   color: $color-text-primary;
   text-align: left;
   cursor: pointer;
+  transition: background 120ms ease, box-shadow 120ms ease, color 120ms ease;
 
   &:hover {
-    background: transparent;
+    background: rgba(219, 234, 254, 0.7);
   }
 }
 
@@ -1771,6 +2105,14 @@ onBeforeUnmount(() => {
 
 .tree-leaf-row {
   padding-left: 21px;
+
+  &:hover .tree-leaf-name {
+    color: #0f172a;
+  }
+
+  &:hover .tree-leaf-type {
+    color: #64748b !important;
+  }
 }
 
 .tree-leaf-name {

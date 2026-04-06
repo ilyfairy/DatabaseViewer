@@ -19,6 +19,7 @@ public sealed class ExplorerApiService
     private readonly DatabaseQueryService _queryService;
     private readonly Dictionary<string, TableSchema> _schemaCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, IReadOnlyList<DbTableInfo>> _tablesCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, IReadOnlyList<DbTableInfo>> _viewsCache = new(StringComparer.OrdinalIgnoreCase);
 
     public ExplorerApiService(ConnectionStore connectionStore, DatabaseMetadataService metadataService, DatabaseQueryService queryService)
     {
@@ -40,44 +41,136 @@ public sealed class ExplorerApiService
                 var databaseNodes = new List<DatabaseNodeDto>();
                 foreach (var database in databases)
                 {
+                    IReadOnlyList<DbTableInfo> tables = Array.Empty<DbTableInfo>();
                     try
                     {
-                        var tables = await _metadataService.GetTablesAsync(connection, database);
+                        tables = await _metadataService.GetTablesAsync(connection, database);
                         _tablesCache[BuildTablesCacheKey(connection.Id, database)] = tables;
-
-                        var routines = Array.Empty<RoutineNodeDto>();
-                        try
-                        {
-                            var routineInfos = await _metadataService.GetRoutinesAsync(connection, database);
-                            routines = routineInfos.Select(r => new RoutineNodeDto(
-                                r.SchemaName,
-                                r.RoutineName,
-                                r.RoutineType,
-                                r.Parameters.Select(p => new RoutineParameterDto(p.Name, p.DataType, p.Direction, p.DefaultValue)).ToArray()
-                            )).ToArray();
-                        }
-                        catch
-                        {
-                            // 函数/存储过程加载失败不影响表加载
-                        }
-
-                        databaseNodes.Add(new DatabaseNodeDto(
-                            database,
-                            tables.Select(table => new TableNodeDto(
-                                BuildTableKey(connection.Id, table),
-                                table.DatabaseName,
-                                table.SchemaName,
-                                table.TableName,
-                                table.Comment,
-                                table.RowCount)).ToArray(),
-                            routines));
                     }
                     catch
                     {
-                        // 如果某个数据库的表加载失败（如权限不足），仍然保留该数据库（空表列表），
-                        // 以便用户可以在 SQL 编辑器中选择并手动执行查询。
-                        databaseNodes.Add(new DatabaseNodeDto(database, Array.Empty<TableNodeDto>(), Array.Empty<RoutineNodeDto>()));
+                        // Keep the database visible even if table metadata cannot be read.
                     }
+
+                    IReadOnlyList<DbTableInfo> views = Array.Empty<DbTableInfo>();
+                    try
+                    {
+                        views = await _metadataService.GetViewsAsync(connection, database);
+                        _viewsCache[BuildViewsCacheKey(connection.Id, database)] = views;
+                    }
+                    catch
+                    {
+                        // Keep other groups visible even if views fail.
+                    }
+
+                    IReadOnlyList<DbSynonymInfo> synonyms = Array.Empty<DbSynonymInfo>();
+                    try
+                    {
+                        synonyms = await _metadataService.GetSynonymsAsync(connection, database);
+                    }
+                    catch
+                    {
+                    }
+
+                    IReadOnlyList<DbSequenceInfo> sequences = Array.Empty<DbSequenceInfo>();
+                    try
+                    {
+                        sequences = await _metadataService.GetSequencesAsync(connection, database);
+                    }
+                    catch
+                    {
+                    }
+
+                    IReadOnlyList<DbRuleInfo> rules = Array.Empty<DbRuleInfo>();
+                    try
+                    {
+                        rules = await _metadataService.GetRulesAsync(connection, database);
+                    }
+                    catch
+                    {
+                    }
+
+                    IReadOnlyList<DbDefaultInfo> defaults = Array.Empty<DbDefaultInfo>();
+                    try
+                    {
+                        defaults = await _metadataService.GetDefaultsAsync(connection, database);
+                    }
+                    catch
+                    {
+                    }
+
+                    IReadOnlyList<DbUserDefinedTypeInfo> userDefinedTypes = Array.Empty<DbUserDefinedTypeInfo>();
+                    try
+                    {
+                        userDefinedTypes = await _metadataService.GetUserDefinedTypesAsync(connection, database);
+                    }
+                    catch
+                    {
+                    }
+
+                    var routines = Array.Empty<RoutineNodeDto>();
+                    try
+                    {
+                        var routineInfos = await _metadataService.GetRoutinesAsync(connection, database);
+                        routines = routineInfos.Select(r => new RoutineNodeDto(
+                            r.SchemaName,
+                            r.RoutineName,
+                            r.RoutineType,
+                            r.Parameters.Select(p => new RoutineParameterDto(p.Name, p.DataType, p.Direction, p.DefaultValue)).ToArray()
+                        )).ToArray();
+                    }
+                    catch
+                    {
+                        // 函数/存储过程加载失败不影响其它对象加载
+                    }
+
+                    databaseNodes.Add(new DatabaseNodeDto(
+                        database,
+                        tables.Select(table => new TableNodeDto(
+                            BuildTableKey(connection.Id, table),
+                            table.DatabaseName,
+                            table.SchemaName,
+                            table.TableName,
+                            ToObjectTypeKey(table.ObjectType),
+                            table.Comment,
+                            table.RowCount)).ToArray(),
+                        views.Select(view => new TableNodeDto(
+                            BuildTableKey(connection.Id, view),
+                            view.DatabaseName,
+                            view.SchemaName,
+                            view.TableName,
+                            ToObjectTypeKey(view.ObjectType),
+                            view.Comment,
+                            view.RowCount)).ToArray(),
+                        synonyms.Select(synonym => new SynonymNodeDto(
+                            synonym.DatabaseName,
+                            synonym.SchemaName,
+                            synonym.SynonymName,
+                            synonym.BaseObjectName)).ToArray(),
+                        sequences.Select(sequence => new SequenceNodeDto(
+                            sequence.DatabaseName,
+                            sequence.SchemaName,
+                            sequence.SequenceName,
+                            sequence.DataType,
+                            sequence.StartValue,
+                            sequence.IncrementValue)).ToArray(),
+                        rules.Select(rule => new RuleNodeDto(
+                            rule.DatabaseName,
+                            rule.SchemaName,
+                            rule.RuleName,
+                            rule.Definition)).ToArray(),
+                        defaults.Select(item => new DefaultNodeDto(
+                            item.DatabaseName,
+                            item.SchemaName,
+                            item.DefaultName,
+                            item.Definition)).ToArray(),
+                        userDefinedTypes.Select(item => new UserDefinedTypeNodeDto(
+                            item.DatabaseName,
+                            item.SchemaName,
+                            item.TypeName,
+                            item.BaseTypeName,
+                            item.IsTableType)).ToArray(),
+                        routines));
                 }
 
                 result.Add(new ConnectionNodeDto(
@@ -240,6 +333,11 @@ public sealed class ExplorerApiService
             _tablesCache.Remove(cacheKey);
         }
 
+        foreach (var cacheKey in _viewsCache.Keys.Where(key => key.StartsWith($"{connectionId}:", StringComparison.OrdinalIgnoreCase)).ToArray())
+        {
+            _viewsCache.Remove(cacheKey);
+        }
+
         return new ConnectionNodeDto(
             updated.Id,
             updated.Name,
@@ -257,15 +355,23 @@ public sealed class ExplorerApiService
         var context = await ResolveContextAsync(tableKey);
         var schema = await GetSchemaAsync(context.Connection, context.Table);
         var resolvedSort = ResolveSort(schema, sortColumn, sortDirection);
-        var page = await _queryService.GetTablePageAsync(context.Connection, schema, offset, pageSize, resolvedSort.Column, resolvedSort.Descending);
+        TableDataResult page;
+        try
+        {
+            page = await _queryService.GetTablePageAsync(context.Connection, schema, offset, pageSize, resolvedSort.Column, resolvedSort.Descending);
+        }
+        catch (DbException ex)
+        {
+            throw new InvalidOperationException(BuildFriendlyReadErrorMessage(ex, schema));
+        }
 
         return new TablePageResponse(
             tableKey,
-            context.Table.DatabaseName,
-            context.Table.SchemaName,
-            context.Table.TableName,
-            context.Table.Comment,
-            context.Table.RowCount,
+            schema.Table.DatabaseName,
+            schema.Table.SchemaName,
+            schema.Table.TableName,
+            schema.Table.Comment,
+            schema.Table.RowCount,
             schema.PrimaryKeys,
             schema.Columns.Select(MapColumn).ToArray(),
             schema.Columns.Where(column => column.ForeignKey is not null).Select(column => new ForeignKeyDto(
@@ -285,19 +391,21 @@ public sealed class ExplorerApiService
         return new TableDesignResponse(
             tableKey,
             context.Connection.Id,
-            context.Table.DatabaseName,
+            schema.Table.DatabaseName,
             ToProviderKey(context.Connection.ProviderType),
-            context.Table.SchemaName,
-            context.Table.TableName,
-            context.Table.Comment,
+            ToObjectTypeKey(schema.Table.ObjectType),
+            schema.Table.SchemaName,
+            schema.Table.TableName,
+            schema.Table.Comment,
             schema.Columns.Select(MapColumn).ToArray(),
             schema.Columns.Where(column => column.ForeignKey is not null).Select(column => new ForeignKeyDto(
                 column.Name,
                 BuildTableKey(context.Connection.Id, ResolveTargetTable(context.Table.DatabaseName, column.ForeignKey!)),
                 column.ForeignKey!.TargetColumn,
                 !IsPhysicalForeignKey(column.ForeignKey!))).ToArray(),
-            BuildDesignIndexes(schema),
-            Array.Empty<TableTriggerDto>());
+            await BuildDesignIndexesAsync(context.Connection, schema),
+            (await _metadataService.GetObjectTriggersAsync(context.Connection, schema.Table)).Select(trigger => new TableTriggerDto(trigger.Name, trigger.Timing, trigger.Event)).ToArray(),
+            (await _metadataService.GetObjectStatisticsAsync(context.Connection, schema.Table)).Select(MapStatistic).ToArray());
     }
 
     public async Task<TableSearchResponse> SearchTableAsync(string tableKey, string query, string[]? columns, int offset, int pageSize, string? sortColumn, string? sortDirection)
@@ -306,7 +414,15 @@ public sealed class ExplorerApiService
         var schema = await GetSchemaAsync(context.Connection, context.Table);
         var searchableColumns = ResolveSearchableColumns(schema, columns);
         var resolvedSort = ResolveSort(schema, sortColumn, sortDirection);
-        var result = await _queryService.SearchTableAsync(context.Connection, schema, searchableColumns, query, offset, pageSize, resolvedSort.Column, resolvedSort.Descending);
+        TableSearchResult result;
+        try
+        {
+            result = await _queryService.SearchTableAsync(context.Connection, schema, searchableColumns, query, offset, pageSize, resolvedSort.Column, resolvedSort.Descending);
+        }
+        catch (DbException ex)
+        {
+            throw new InvalidOperationException(BuildFriendlyReadErrorMessage(ex, schema));
+        }
 
         return new TableSearchResponse(
             tableKey,
@@ -329,7 +445,10 @@ public sealed class ExplorerApiService
         var tables = connection.ProviderType == DatabaseProviderType.SqlServer
             ? await _metadataService.GetTablesAsync(connection, database, includeSystemObjects: true)
             : await EnsureTablesAsync(connection, database);
-        var schemas = await Task.WhenAll(tables.Select(async table => await GetSchemaAsync(connection, table)));
+        var views = connection.ProviderType == DatabaseProviderType.SqlServer
+            ? await _metadataService.GetViewsAsync(connection, database, includeSystemObjects: true)
+            : await EnsureViewsAsync(connection, database);
+        var schemas = await Task.WhenAll(tables.Concat(views).Select(async table => await GetSchemaAsync(connection, table)));
 
         return new SqlContextResponse(
             connectionId,
@@ -342,6 +461,37 @@ public sealed class ExplorerApiService
                 schema.Columns.Select(column => column.Name).ToArray())).ToArray());
     }
 
+    public async Task<CatalogObjectDetailResponse> GetCatalogObjectDetailAsync(Guid connectionId, string database, string objectType, string? schema, string name)
+    {
+        if (string.IsNullOrWhiteSpace(database))
+        {
+            throw new InvalidOperationException("Database is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            throw new InvalidOperationException("Object name is required.");
+        }
+
+        var connection = (await _connectionStore.LoadAsync()).FirstOrDefault(item => item.Id == connectionId)
+            ?? throw new InvalidOperationException("Connection not found.");
+        var resolvedType = ParseCatalogObjectType(objectType);
+        var detail = await _metadataService.GetCatalogObjectDetailAsync(connection, database, resolvedType, schema, name)
+            ?? throw new InvalidOperationException("Catalog object not found.");
+
+        return new CatalogObjectDetailResponse(
+            connectionId,
+            database,
+            ToProviderKey(connection.ProviderType),
+            ToCatalogObjectTypeKey(detail.ObjectType),
+            detail.SchemaName,
+            detail.ObjectName,
+            detail.Title,
+            detail.Summary,
+            detail.Definition,
+            detail.Properties.Select(property => new CatalogObjectPropertyDto(property.Label, property.Value)).ToArray());
+    }
+
     public async Task<CellContentResponse> GetCellContentAsync(string tableKey, string rowKey, string columnName)
     {
         var context = await ResolveContextAsync(tableKey);
@@ -349,8 +499,16 @@ public sealed class ExplorerApiService
         var column = schema.Columns.FirstOrDefault(entry => string.Equals(entry.Name, columnName, StringComparison.OrdinalIgnoreCase))
             ?? throw new InvalidOperationException("Column not found.");
 
-        var record = await _queryService.GetRecordAsync(context.Connection, schema, DecodeRowKey(rowKey))
-            ?? throw new InvalidOperationException("Record not found.");
+        RecordDetailsResult record;
+        try
+        {
+            record = await _queryService.GetRecordAsync(context.Connection, schema, DecodeRowKey(rowKey))
+                ?? throw new InvalidOperationException("Record not found.");
+        }
+        catch (DbException ex)
+        {
+            throw new InvalidOperationException(BuildFriendlyReadErrorMessage(ex, schema));
+        }
 
         var rawValue = DatabaseQueryService.NormalizeDbNull(record.Row[column.Name]);
         if (rawValue is null)
@@ -392,8 +550,16 @@ public sealed class ExplorerApiService
         var context = await ResolveContextAsync(tableKey);
         var schema = await GetSchemaAsync(context.Connection, context.Table);
         var keyValues = DecodeRowKey(rowKey);
-        var record = await _queryService.GetRecordAsync(context.Connection, schema, keyValues)
-            ?? throw new InvalidOperationException("Record not found.");
+        RecordDetailsResult record;
+        try
+        {
+            record = await _queryService.GetRecordAsync(context.Connection, schema, keyValues)
+                ?? throw new InvalidOperationException("Record not found.");
+        }
+        catch (DbException ex)
+        {
+            throw new InvalidOperationException(BuildFriendlyReadErrorMessage(ex, schema));
+        }
 
         var reverseReferences = new List<ReverseReferenceGroupDto>();
         foreach (var incoming in schema.IncomingForeignKeys)
@@ -796,8 +962,22 @@ public sealed class ExplorerApiService
         column.NumericPrecision,
         column.NumericScale);
 
-    private static IReadOnlyList<TableIndexDto> BuildDesignIndexes(TableSchema schema)
+    private static TableStatisticDto MapStatistic(TableStatisticInfo statistic) => new(
+        statistic.Name,
+        statistic.IsAutoCreated,
+        statistic.IsUserCreated,
+        statistic.NoRecompute,
+        statistic.FilterDefinition,
+        statistic.Columns.ToArray());
+
+    private async Task<IReadOnlyList<TableIndexDto>> BuildDesignIndexesAsync(ConnectionDefinition connection, TableSchema schema)
     {
+        var indexes = await _metadataService.GetObjectIndexesAsync(connection, schema.Table);
+        if (indexes.Count > 0)
+        {
+            return indexes.Select(index => new TableIndexDto(index.Name, index.IsPrimaryKey, index.IsUnique, index.Columns.ToArray())).ToArray();
+        }
+
         if (schema.PrimaryKeys.Count == 0)
         {
             return Array.Empty<TableIndexDto>();
@@ -1077,6 +1257,25 @@ public sealed class ExplorerApiService
         return message;
     }
 
+    private static string BuildFriendlyReadErrorMessage(DbException exception, TableSchema schema)
+    {
+        var message = exception.Message.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)[0];
+        if (schema.Table.ObjectType == DbObjectType.View)
+        {
+            if (message.Contains("绑定错误", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("could not use view or function", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("invalid column name", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("列名", StringComparison.OrdinalIgnoreCase))
+            {
+                return $"视图 {schema.Table.DisplayName} 当前无法查询，可能是该视图或它依赖的对象定义已经失效。数据库返回: {message}";
+            }
+
+            return $"视图 {schema.Table.DisplayName} 查询失败: {message}";
+        }
+
+        return message;
+    }
+
     private static (string? Column, bool Descending) ResolveSort(TableSchema schema, string? sortColumn, string? sortDirection)
     {
         if (string.IsNullOrWhiteSpace(sortColumn))
@@ -1179,7 +1378,8 @@ public sealed class ExplorerApiService
         }
 
         var tables = await EnsureTablesAsync(connection, table.DatabaseName);
-        var resolved = tables.FirstOrDefault(item =>
+        var views = await EnsureViewsAsync(connection, table.DatabaseName);
+        var resolved = tables.Concat(views).FirstOrDefault(item =>
             string.Equals(item.TableName, table.TableName, StringComparison.OrdinalIgnoreCase)
             && string.Equals(item.SchemaName ?? string.Empty, table.SchemaName ?? string.Empty, StringComparison.OrdinalIgnoreCase))
             ?? table;
@@ -1199,6 +1399,18 @@ public sealed class ExplorerApiService
         var tables = await _metadataService.GetTablesAsync(connection, database);
         _tablesCache[cacheKey] = tables;
         return tables;
+    }
+    private async Task<IReadOnlyList<DbTableInfo>> EnsureViewsAsync(ConnectionDefinition connection, string database)
+    {
+        var cacheKey = BuildViewsCacheKey(connection.Id, database);
+        if (_viewsCache.TryGetValue(cacheKey, out var cached))
+        {
+            return cached;
+        }
+
+        var views = await _metadataService.GetViewsAsync(connection, database);
+        _viewsCache[cacheKey] = views;
+        return views;
     }
 
     private static DbTableInfo ResolveTargetTable(string fallbackDatabase, ForeignKeyReference foreignKey) => new()
@@ -1225,15 +1437,48 @@ public sealed class ExplorerApiService
                 _tablesCache.Remove(cacheKey);
             }
 
+            foreach (var cacheKey in _viewsCache.Keys.Where(key => key.StartsWith($"{connectionId}:", StringComparison.OrdinalIgnoreCase)).ToArray())
+            {
+                _viewsCache.Remove(cacheKey);
+            }
+
             return;
         }
 
         _tablesCache.Remove(BuildTablesCacheKey(connectionId, database));
+        _viewsCache.Remove(BuildViewsCacheKey(connectionId, database));
     }
 
     private static bool IsPhysicalForeignKey(ForeignKeyReference foreignKey) =>
         !string.Equals(foreignKey.TargetColumn, "id", StringComparison.OrdinalIgnoreCase)
         || !foreignKey.SourceColumn.EndsWith("_id", StringComparison.OrdinalIgnoreCase);
+
+    private static string ToObjectTypeKey(DbObjectType objectType) => objectType switch
+    {
+        DbObjectType.View => "view",
+        _ => "table",
+    };
+
+    private static DbCatalogObjectType ParseCatalogObjectType(string value) => value.ToLowerInvariant() switch
+    {
+        "synonym" => DbCatalogObjectType.Synonym,
+        "sequence" => DbCatalogObjectType.Sequence,
+        "rule" => DbCatalogObjectType.Rule,
+        "default" => DbCatalogObjectType.Default,
+        "user-defined-type" => DbCatalogObjectType.UserDefinedType,
+        "type" => DbCatalogObjectType.UserDefinedType,
+        _ => throw new InvalidOperationException("Unsupported catalog object type."),
+    };
+
+    private static string ToCatalogObjectTypeKey(DbCatalogObjectType objectType) => objectType switch
+    {
+        DbCatalogObjectType.Synonym => "synonym",
+        DbCatalogObjectType.Sequence => "sequence",
+        DbCatalogObjectType.Rule => "rule",
+        DbCatalogObjectType.Default => "default",
+        DbCatalogObjectType.UserDefinedType => "user-defined-type",
+        _ => "synonym",
+    };
 
     private static Dictionary<string, object?> MapRow(TableSchema schema, DataRow row)
     {
@@ -1303,6 +1548,7 @@ public sealed class ExplorerApiService
     private static string BuildSchemaCacheKey(Guid connectionId, DbTableInfo table) => $"{connectionId}:{table.QualifiedKey}";
 
     private static string BuildTablesCacheKey(Guid connectionId, string database) => $"{connectionId}:{database}";
+    private static string BuildViewsCacheKey(Guid connectionId, string database) => $"{connectionId}:{database}:views";
 
     private static string BuildSuggestedFileName(string tableName, string columnName, string extension)
     {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Component } from 'vue';
 import { computed, ref } from 'vue';
-import { IconFlask2, IconSchema, IconSql, IconTable, IconTableOptions } from '@tabler/icons-vue';
+import { IconFlask2, IconListDetails, IconSchema, IconSql, IconTable, IconTableOptions } from '@tabler/icons-vue';
 import { Close } from '@vicons/carbon';
 import { NButton, NIcon } from 'naive-ui';
 import { useExplorerStore } from '../stores/explorer';
@@ -39,6 +39,8 @@ function tabKindIcon(tab: WorkspaceTab): Component {
       return IconTableOptions;
     case 'graph':
       return IconSchema;
+    case 'catalog':
+      return IconListDetails;
     case 'mock':
       return IconFlask2;
     case 'sql':

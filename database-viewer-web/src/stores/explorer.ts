@@ -3,6 +3,9 @@ import { defineStore } from 'pinia';
 import { useLocalStorage } from '@vueuse/core';
 import dayjs from 'dayjs';
 import type {
+  CatalogObjectDetail,
+  CatalogObjectType,
+  CatalogObjectWorkspaceTab,
   CellValue,
   ConnectionConfig,
   ConnectionInfo,
@@ -252,15 +255,18 @@ export const useExplorerStore = defineStore('explorer', () => {
   });
   const sqlContextState = ref<Record<string, { loading: boolean; error: string | null; value: SqlContext | null }>>({});
   const tableDesignState = ref<Record<string, { loading: boolean; error: string | null; value: TableDesign | null }>>({});
+  const catalogObjectState = ref<Record<string, { loading: boolean; error: string | null; value: CatalogObjectDetail | null }>>({});
   const pendingSqlClose = ref<PendingSqlCloseState | null>(null);
 
   const allTables = computed(() => connections.value.flatMap((connection) => connection.databases.flatMap((database) => database.tables)));
-  const tableMetaMap = computed(() => new Map(allTables.value.map((table) => [table.key, table] as const)));
+  const allDataObjects = computed(() => connections.value.flatMap((connection) => connection.databases.flatMap((database) => [...database.tables, ...database.views])));
+  const tableMetaMap = computed(() => new Map(allDataObjects.value.map((table) => [table.key, table] as const)));
   const activeTab = computed(() => workspaceTabs.value.find((tab) => tab.id === activeTabId.value));
   const activeTableTab = computed(() => activeTab.value?.type === 'table' ? activeTab.value as TableWorkspaceTab : undefined);
   const activeDesignTab = computed(() => activeTab.value?.type === 'design' ? activeTab.value as TableDesignWorkspaceTab : undefined);
   const activeSqlTab = computed(() => activeTab.value?.type === 'sql' ? activeTab.value as SqlWorkspaceTab : undefined);
   const activeGraphTab = computed(() => activeTab.value?.type === 'graph' ? activeTab.value as GraphWorkspaceTab : undefined);
+  const activeCatalogTab = computed(() => activeTab.value?.type === 'catalog' ? activeTab.value as CatalogObjectWorkspaceTab : undefined);
   const activeMockTab = computed(() => activeTab.value?.type === 'mock' ? activeTab.value as TableMockWorkspaceTab : undefined);
   const gridPanel = computed(() => openPanels.value.find((panel) => panel.type === 'grid') as ExplorerGridPanel | undefined);
   const detailPanels = computed(() => openPanels.value.filter((panel) => panel.type === 'detail') as ExplorerDetailPanel[]);
@@ -276,6 +282,10 @@ export const useExplorerStore = defineStore('explorer', () => {
 
   function buildDesignTabId(tableKey: string) {
     return `design:${tableKey}`;
+  }
+
+  function buildCatalogTabId(connectionId: string, database: string, objectType: CatalogObjectType, schema: string | null | undefined, name: string) {
+    return `catalog:${connectionId}:${database}:${objectType}:${schema ?? ''}:${name}`;
   }
 
   function buildSqlTabId() {
@@ -362,11 +372,11 @@ export const useExplorerStore = defineStore('explorer', () => {
   function reconcileWorkspaceTabs() {
     workspaceTabs.value = workspaceTabs.value.filter((tab) => {
       if (tab.type === 'table') {
-        return allTables.value.some((table) => table.key === tab.tableKey);
+        return allDataObjects.value.some((table) => table.key === tab.tableKey);
       }
 
       if (tab.type === 'design') {
-        return allTables.value.some((table) => table.key === tab.tableKey);
+        return allDataObjects.value.some((table) => table.key === tab.tableKey);
       }
 
       if (tab.type === 'mock') {
@@ -377,12 +387,17 @@ export const useExplorerStore = defineStore('explorer', () => {
         return connections.value.some((connection) => connection.id === tab.connectionId);
       }
 
+      if (tab.type === 'catalog') {
+        const databaseStillExists = getConnectionDatabases(tab.connectionId).some((entry) => entry.name === tab.database);
+        return databaseStillExists;
+      }
+
       return true;
     }).map((tab) => {
       if (tab.type === 'table') {
         return {
           ...tab,
-          detailPanels: tab.detailPanels.filter((panel) => panel.tableKey && allTables.value.some((table) => table.key === panel.tableKey)),
+          detailPanels: tab.detailPanels.filter((panel) => panel.tableKey && allDataObjects.value.some((table) => table.key === panel.tableKey)),
         };
       }
 
@@ -406,6 +421,10 @@ export const useExplorerStore = defineStore('explorer', () => {
       if (tab.type === 'graph') {
         const databaseStillExists = getConnectionDatabases(tab.connectionId).some((entry) => entry.name === tab.database);
         return databaseStillExists ? tab : null;
+      }
+
+      if (tab.type === 'catalog') {
+        return tab;
       }
 
       const connectionId = tab.connectionId && connections.value.some((connection) => connection.id === tab.connectionId)
@@ -440,8 +459,14 @@ export const useExplorerStore = defineStore('explorer', () => {
           .map((database) => ({
             ...database,
             tables: database.tables.filter((table) => `${database.name} ${table.name} ${table.comment ?? ''}`.toLowerCase().includes(query)),
+            views: database.views.filter((view) => `${database.name} ${view.name} ${view.comment ?? ''}`.toLowerCase().includes(query)),
+            synonyms: database.synonyms.filter((synonym) => `${database.name} ${synonym.name} ${synonym.baseObjectName}`.toLowerCase().includes(query)),
+            sequences: database.sequences.filter((sequence) => `${database.name} ${sequence.name} ${sequence.dataType}`.toLowerCase().includes(query)),
+            rules: database.rules.filter((rule) => `${database.name} ${rule.name} ${rule.definition ?? ''}`.toLowerCase().includes(query)),
+            defaults: database.defaults.filter((item) => `${database.name} ${item.name} ${item.definition ?? ''}`.toLowerCase().includes(query)),
+            userDefinedTypes: database.userDefinedTypes.filter((item) => `${database.name} ${item.name} ${item.baseTypeName}`.toLowerCase().includes(query)),
           }))
-          .filter((database) => database.tables.length > 0 || database.name.toLowerCase().includes(query)),
+          .filter((database) => database.tables.length > 0 || database.views.length > 0 || database.synonyms.length > 0 || database.sequences.length > 0 || database.rules.length > 0 || database.defaults.length > 0 || database.userDefinedTypes.length > 0 || database.name.toLowerCase().includes(query)),
       }))
       .filter((connection) => connection.name.toLowerCase().includes(query) || connection.host.toLowerCase().includes(query) || connection.databases.length > 0);
   });
@@ -544,6 +569,30 @@ export const useExplorerStore = defineStore('explorer', () => {
     return getDatabases(connectionId).find((entry) => entry.name === database)?.tables ?? [];
   }
 
+  function getViews(connectionId: string, database: string) {
+    return getDatabases(connectionId).find((entry) => entry.name === database)?.views ?? [];
+  }
+
+  function getSynonyms(connectionId: string, database: string) {
+    return getDatabases(connectionId).find((entry) => entry.name === database)?.synonyms ?? [];
+  }
+
+  function getSequences(connectionId: string, database: string) {
+    return getDatabases(connectionId).find((entry) => entry.name === database)?.sequences ?? [];
+  }
+
+  function getRules(connectionId: string, database: string) {
+    return getDatabases(connectionId).find((entry) => entry.name === database)?.rules ?? [];
+  }
+
+  function getDefaults(connectionId: string, database: string) {
+    return getDatabases(connectionId).find((entry) => entry.name === database)?.defaults ?? [];
+  }
+
+  function getUserDefinedTypes(connectionId: string, database: string) {
+    return getDatabases(connectionId).find((entry) => entry.name === database)?.userDefinedTypes ?? [];
+  }
+
   function getRoutines(connectionId: string, database: string) {
     return getDatabases(connectionId).find((entry) => entry.name === database)?.routines ?? [];
   }
@@ -618,6 +667,18 @@ export const useExplorerStore = defineStore('explorer', () => {
     };
   }
 
+  function getCatalogObjectState(tabId: string) {
+    return catalogObjectState.value[tabId] ?? {
+      loading: false,
+      error: null,
+      value: null,
+    };
+  }
+
+  function getCatalogObject(tabId: string) {
+    return catalogObjectState.value[tabId]?.value ?? null;
+  }
+
   function getLoadedTable(tableKey: string) {
     return loadedTables.value[tableKey];
   }
@@ -647,7 +708,7 @@ export const useExplorerStore = defineStore('explorer', () => {
   }
 
   function getConnectionForTable(tableKey: string) {
-    return connections.value.find((connection) => connection.databases.some((database) => database.tables.some((table) => table.key === tableKey)));
+    return connections.value.find((connection) => connection.databases.some((database) => [...database.tables, ...database.views].some((table) => table.key === tableKey)));
   }
 
   async function ensureTableLoaded(tableKey: string, forceReload = false) {
@@ -1023,6 +1084,51 @@ export const useExplorerStore = defineStore('explorer', () => {
     }
   }
 
+  async function ensureCatalogObjectLoaded(tab: CatalogObjectWorkspaceTab, forceReload = false) {
+    const current = catalogObjectState.value[tab.id];
+    if (current?.loading) {
+      return current.value;
+    }
+
+    if (current?.value && !forceReload) {
+      return current.value;
+    }
+
+    catalogObjectState.value[tab.id] = {
+      loading: true,
+      error: null,
+      value: current?.value ?? null,
+    };
+
+    try {
+      const params = new URLSearchParams({
+        connectionId: tab.connectionId,
+        database: tab.database,
+        objectType: tab.objectType,
+        name: tab.name,
+      });
+      if (tab.schema) {
+        params.set('schema', tab.schema);
+      }
+
+      const response = await requestJson<CatalogObjectDetail>(`/api/explorer/catalog-object?${params.toString()}`);
+      catalogObjectState.value[tab.id] = {
+        loading: false,
+        error: null,
+        value: response,
+      };
+      return response;
+    }
+    catch (error) {
+      catalogObjectState.value[tab.id] = {
+        loading: false,
+        error: error instanceof Error ? error.message : '对象属性加载失败',
+        value: current?.value ?? null,
+      };
+      throw error;
+    }
+  }
+
   function updateDesignTabSelection(tabId: string, selectedSection: TableDesignSection, selectedEntry: string | null) {
     workspaceTabs.value = workspaceTabs.value.map((tab) => tab.id === tabId && tab.type === 'design'
       ? {
@@ -1271,14 +1377,14 @@ export const useExplorerStore = defineStore('explorer', () => {
   }
 
   async function refreshDatabase(connectionId: string, database: string) {
-    const beforeKeys = new Set(getConnectionDatabases(connectionId)
-      .find((entry) => entry.name === database)?.tables.map((table) => table.key) ?? []);
+    const beforeObjects = getConnectionDatabases(connectionId).find((entry) => entry.name === database);
+    const beforeKeys = new Set([...(beforeObjects?.tables ?? []), ...(beforeObjects?.views ?? [])].map((table) => table.key));
 
     try {
       await refreshBootstrap();
 
-      const afterKeys = getConnectionDatabases(connectionId)
-        .find((entry) => entry.name === database)?.tables.map((table) => table.key) ?? [];
+      const afterObjects = getConnectionDatabases(connectionId).find((entry) => entry.name === database);
+      const afterKeys = [...(afterObjects?.tables ?? []), ...(afterObjects?.views ?? [])].map((table) => table.key);
       const affectedKeys = new Set([...beforeKeys, ...afterKeys]);
 
       for (const tableKey of affectedKeys) {
@@ -1427,6 +1533,11 @@ export const useExplorerStore = defineStore('explorer', () => {
       return `${tab.database} 关系总览`;
     }
 
+    if (tab.type === 'catalog') {
+      const prefix = tab.schema ? `${tab.schema}.${tab.name}` : tab.name;
+      return `${tab.database} / ${prefix}`;
+    }
+
     if (tab.filePath) {
       return getSqlTabFileName(tab.filePath) ?? 'SQL';
     }
@@ -1484,10 +1595,44 @@ export const useExplorerStore = defineStore('explorer', () => {
     void openSqlTabWithContext();
   }
 
+  async function openCatalogObject(connectionId: string, database: string, objectType: CatalogObjectType, schema: string | null, name: string) {
+    const tabId = buildCatalogTabId(connectionId, database, objectType, schema, name);
+    const existing = workspaceTabs.value.find((tab) => tab.id === tabId && tab.type === 'catalog') as CatalogObjectWorkspaceTab | undefined;
+    if (!existing) {
+      upsertWorkspaceTab({
+        id: tabId,
+        type: 'catalog',
+        connectionId,
+        database,
+        objectType,
+        schema,
+        name,
+      });
+    }
+
+    setActiveTab(tabId);
+    const tab = (workspaceTabs.value.find((entry) => entry.id === tabId && entry.type === 'catalog') as CatalogObjectWorkspaceTab | undefined)
+      ?? {
+        id: tabId,
+        type: 'catalog',
+        connectionId,
+        database,
+        objectType,
+        schema,
+        name,
+      };
+    await ensureCatalogObjectLoaded(tab, true);
+  }
+
   async function openTableMockTab(tableKey: string) {
     const table = getTable(tableKey);
     if (!table) {
       showNotice('warning', '目标表不存在，无法打开 Mock 数据生成器');
+      return;
+    }
+
+    if (table.objectType === 'view') {
+      showNotice('warning', '视图当前不支持生成 Mock 数据。');
       return;
     }
 
@@ -2102,6 +2247,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     activeDesignTab,
     activeSqlTab,
     activeGraphTab,
+    activeCatalogTab,
     activeMockTab,
     sidebarQuery,
     globalSearch,
@@ -2128,14 +2274,23 @@ export const useExplorerStore = defineStore('explorer', () => {
     getConnectionInfo,
     getSqlContext,
     getTables,
+    getViews,
+    getSynonyms,
+    getSequences,
+    getRules,
+    getDefaults,
+    getUserDefinedTypes,
     getRoutines,
     getWorkspaceTabLabel,
     getTable,
     getTableDesign,
     getTableDesignStatus,
+    getCatalogObject,
+    getCatalogObjectState,
     getLoadedTable,
     ensureTableLoaded,
     ensureTableDesignLoaded,
+    ensureCatalogObjectLoaded,
     getTableSortState,
     getPanelRecord,
     getFilteredRows,
@@ -2164,6 +2319,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     moveWorkspaceTab,
     openTable,
     openTableDesign,
+    openCatalogObject,
     openTableMockTab,
     openSqlTab,
     openSqlTabWithContext,

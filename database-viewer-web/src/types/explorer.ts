@@ -1,6 +1,8 @@
 export type ProviderType = 'sqlserver' | 'mysql' | 'postgresql' | 'sqlite'
 export type AuthenticationMode = 'windows' | 'password'
 export type CellValue = string | number | boolean | null
+export type DatabaseObjectType = 'table' | 'view'
+export type CatalogObjectType = 'synonym' | 'sequence' | 'rule' | 'default' | 'user-defined-type'
 
 export interface ConnectionInfo {
   id: string
@@ -43,7 +45,69 @@ export interface TestConnectionRequest extends CreateConnectionRequest {
 export interface DatabaseInfo {
   name: string
   tables: TableSummary[]
+  views: TableSummary[]
+  synonyms: SynonymInfo[]
+  sequences: SequenceInfo[]
+  rules: RuleInfo[]
+  defaults: DefaultInfo[]
+  userDefinedTypes: UserDefinedTypeInfo[]
   routines: RoutineInfo[]
+}
+
+export interface SynonymInfo {
+  database: string
+  schema?: string | null
+  name: string
+  baseObjectName: string
+}
+
+export interface SequenceInfo {
+  database: string
+  schema?: string | null
+  name: string
+  dataType: string
+  startValue: string
+  incrementValue: string
+}
+
+export interface RuleInfo {
+  database: string
+  schema?: string | null
+  name: string
+  definition?: string | null
+}
+
+export interface DefaultInfo {
+  database: string
+  schema?: string | null
+  name: string
+  definition?: string | null
+}
+
+export interface UserDefinedTypeInfo {
+  database: string
+  schema?: string | null
+  name: string
+  baseTypeName: string
+  isTableType: boolean
+}
+
+export interface CatalogObjectProperty {
+  label: string
+  value?: string | null
+}
+
+export interface CatalogObjectDetail {
+  connectionId: string
+  database: string
+  provider: ProviderType
+  objectType: CatalogObjectType
+  schema?: string | null
+  name: string
+  title: string
+  summary?: string | null
+  definition?: string | null
+  properties: CatalogObjectProperty[]
 }
 
 export interface RoutineInfo {
@@ -126,6 +190,7 @@ export interface TableSummary {
   database: string
   schema?: string
   name: string
+  objectType: DatabaseObjectType
   comment?: string
   rowCount?: number | null
 }
@@ -212,7 +277,7 @@ export interface TableWorkspaceTab {
   detailPanels: ExplorerDetailPanel[]
 }
 
-export type TableDesignSection = 'columns' | 'indexes' | 'foreignKeys' | 'triggers'
+export type TableDesignSection = 'columns' | 'indexes' | 'foreignKeys' | 'triggers' | 'statistics'
 
 export interface TableIndexInfo {
   name: string
@@ -227,11 +292,21 @@ export interface TableTriggerInfo {
   event?: string | null
 }
 
+export interface TableStatisticInfo {
+  name: string
+  isAutoCreated: boolean
+  isUserCreated: boolean
+  noRecompute: boolean
+  filterDefinition?: string | null
+  columns: string[]
+}
+
 export interface TableDesign {
   tableKey: string
   connectionId: string
   database: string
   provider: ProviderType
+  objectType: DatabaseObjectType
   schema?: string | null
   name: string
   comment?: string | null
@@ -239,6 +314,7 @@ export interface TableDesign {
   foreignKeys: ForeignKeyRef[]
   indexes: TableIndexInfo[]
   triggers: TableTriggerInfo[]
+  statistics: TableStatisticInfo[]
 }
 
 export interface TableDesignWorkspaceTab {
@@ -276,6 +352,16 @@ export interface GraphWorkspaceTab {
   graph: DatabaseGraph | null
 }
 
+export interface CatalogObjectWorkspaceTab {
+  id: string
+  type: 'catalog'
+  connectionId: string
+  database: string
+  objectType: CatalogObjectType
+  schema?: string | null
+  name: string
+}
+
 export interface TableMockWorkspaceTab {
   id: string
   type: 'mock'
@@ -284,7 +370,7 @@ export interface TableMockWorkspaceTab {
   tableKey: string
 }
 
-export type WorkspaceTab = TableWorkspaceTab | TableDesignWorkspaceTab | SqlWorkspaceTab | GraphWorkspaceTab | TableMockWorkspaceTab
+export type WorkspaceTab = TableWorkspaceTab | TableDesignWorkspaceTab | SqlWorkspaceTab | GraphWorkspaceTab | CatalogObjectWorkspaceTab | TableMockWorkspaceTab
 
 export interface ReverseReferenceRow {
   rowKey: string

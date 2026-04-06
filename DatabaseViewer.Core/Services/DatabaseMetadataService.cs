@@ -40,44 +40,7 @@ public sealed class DatabaseMetadataService
 
         if (connection.ProviderType == DatabaseProviderType.SqlServer)
         {
-            var sql = includeSystemObjects
-                ? @"
-                SELECT
-                    objects.SchemaName,
-                    objects.TableName,
-                    objects.Comment,
-                    objects.TableRowCount
-                FROM (
-                    SELECT
-                        s.name AS SchemaName,
-                        t.name AS TableName,
-                        CAST(ep.value AS nvarchar(4000)) AS Comment,
-                        CAST(SUM(CASE WHEN p.index_id IN (0, 1) THEN p.rows ELSE 0 END) AS int) AS TableRowCount,
-                        CAST(0 AS int) AS SortOrder
-                    FROM sys.tables t
-                    INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
-                    LEFT JOIN sys.extended_properties ep
-                        ON ep.major_id = t.object_id
-                        AND ep.minor_id = 0
-                        AND ep.name = 'MS_Description'
-                    LEFT JOIN sys.partitions p ON p.object_id = t.object_id
-                    GROUP BY s.name, t.name, ep.value
-
-                    UNION ALL
-
-                    SELECT
-                        s.name AS SchemaName,
-                        o.name AS TableName,
-                        CAST(NULL AS nvarchar(4000)) AS Comment,
-                        CAST(NULL AS int) AS TableRowCount,
-                        CAST(1 AS int) AS SortOrder
-                    FROM sys.objects o
-                    INNER JOIN sys.schemas s ON s.schema_id = o.schema_id
-                    WHERE o.type = 'V'
-                      AND s.name IN ('sys', 'INFORMATION_SCHEMA')
-                ) objects
-                ORDER BY objects.SortOrder, objects.SchemaName, objects.TableName;"
-                : @"
+            var sql = @"
                 SELECT
                     s.name AS SchemaName,
                     t.name AS TableName,
@@ -90,15 +53,17 @@ public sealed class DatabaseMetadataService
                     AND ep.minor_id = 0
                     AND ep.name = 'MS_Description'
                 LEFT JOIN sys.partitions p ON p.object_id = t.object_id
+                WHERE (@includeSystemObjects = 1 OR t.is_ms_shipped = 0)
                 GROUP BY s.name, t.name, ep.value
                 ORDER BY s.name, t.name;";
 
-            var rows = await db.QueryAsync(sql);
+            var rows = await db.QueryAsync(sql, new { includeSystemObjects });
             return rows.Select(row => new DbTableInfo
             {
                 DatabaseName = databaseName,
                 SchemaName = row.SchemaName,
                 TableName = row.TableName,
+                ObjectType = DbObjectType.Table,
                 Comment = row.Comment,
                 RowCount = row.TableRowCount,
             }).ToArray();
@@ -125,6 +90,7 @@ public sealed class DatabaseMetadataService
                 DatabaseName = databaseName,
                 SchemaName = row.SchemaName,
                 TableName = row.TableName,
+                ObjectType = DbObjectType.Table,
                 Comment = string.IsNullOrWhiteSpace((string?)row.Comment) ? null : row.Comment,
                 RowCount = row.TableRowCount,
             }).ToArray();
@@ -147,6 +113,7 @@ public sealed class DatabaseMetadataService
                 DatabaseName = databaseName,
                 SchemaName = null,
                 TableName = row.TableName,
+                ObjectType = DbObjectType.Table,
                 Comment = null,
                 RowCount = null,
             }).ToArray();
@@ -163,9 +130,605 @@ public sealed class DatabaseMetadataService
             DatabaseName = databaseName,
             SchemaName = databaseName,
             TableName = row.TableName,
+            ObjectType = DbObjectType.Table,
             Comment = string.IsNullOrWhiteSpace((string?)row.Comment) ? null : row.Comment,
             RowCount = row.TableRowCount,
         }).ToArray();
+    }
+
+    public async Task<IReadOnlyList<DbTableInfo>> GetViewsAsync(ConnectionDefinition connection, string databaseName, bool includeSystemObjects = false)
+    {
+        await using var db = DbConnectionFactory.Create(connection, databaseName);
+        await db.OpenAsync();
+
+        if (connection.ProviderType == DatabaseProviderType.SqlServer)
+        {
+            var sql = includeSystemObjects
+                ? @"
+                SELECT
+                    s.name AS SchemaName,
+                    v.name AS ViewName,
+                    CAST(ep.value AS nvarchar(4000)) AS Comment
+                FROM sys.all_views v
+                INNER JOIN sys.schemas s ON s.schema_id = v.schema_id
+                LEFT JOIN sys.extended_properties ep
+                    ON ep.major_id = v.object_id
+                    AND ep.minor_id = 0
+                    AND ep.name = 'MS_Description'
+                ORDER BY s.name, v.name;"
+                : @"
+                SELECT
+                    s.name AS SchemaName,
+                    v.name AS ViewName,
+                    CAST(ep.value AS nvarchar(4000)) AS Comment
+                FROM sys.views v
+                INNER JOIN sys.schemas s ON s.schema_id = v.schema_id
+                LEFT JOIN sys.extended_properties ep
+                    ON ep.major_id = v.object_id
+                    AND ep.minor_id = 0
+                    AND ep.name = 'MS_Description'
+                WHERE v.is_ms_shipped = 0
+                ORDER BY s.name, v.name;";
+
+            var rows = await db.QueryAsync(sql);
+            return rows.Select(row => new DbTableInfo
+            {
+                DatabaseName = databaseName,
+                SchemaName = row.SchemaName,
+                TableName = row.ViewName,
+                ObjectType = DbObjectType.View,
+                Comment = string.IsNullOrWhiteSpace((string?)row.Comment) ? null : row.Comment,
+                RowCount = null,
+            }).ToArray();
+        }
+
+        return Array.Empty<DbTableInfo>();
+    }
+
+    public async Task<IReadOnlyList<DbSynonymInfo>> GetSynonymsAsync(ConnectionDefinition connection, string databaseName, bool includeSystemObjects = false)
+    {
+        await using var db = DbConnectionFactory.Create(connection, databaseName);
+        await db.OpenAsync();
+
+        if (connection.ProviderType == DatabaseProviderType.SqlServer)
+        {
+            var sql = @"
+                SELECT
+                    s.name AS SchemaName,
+                    sy.name AS SynonymName,
+                    sy.base_object_name AS BaseObjectName,
+                    PARSENAME(sy.base_object_name, 4) AS TargetServerName,
+                    PARSENAME(sy.base_object_name, 3) AS TargetDatabaseName,
+                    PARSENAME(sy.base_object_name, 2) AS TargetSchemaName,
+                    PARSENAME(sy.base_object_name, 1) AS TargetObjectName
+                FROM sys.synonyms sy
+                INNER JOIN sys.schemas s ON s.schema_id = sy.schema_id
+                ORDER BY s.name, sy.name;";
+
+            var rows = await db.QueryAsync(sql);
+            return rows.Select(row => new DbSynonymInfo
+            {
+                DatabaseName = databaseName,
+                SchemaName = row.SchemaName,
+                SynonymName = row.SynonymName,
+                BaseObjectName = row.BaseObjectName,
+                TargetServerName = row.TargetServerName,
+                TargetDatabaseName = row.TargetDatabaseName,
+                TargetSchemaName = row.TargetSchemaName,
+                TargetObjectName = row.TargetObjectName,
+            }).ToArray();
+        }
+
+        return Array.Empty<DbSynonymInfo>();
+    }
+
+    public async Task<IReadOnlyList<DbSequenceInfo>> GetSequencesAsync(ConnectionDefinition connection, string databaseName)
+    {
+        if (connection.ProviderType != DatabaseProviderType.SqlServer)
+        {
+            return Array.Empty<DbSequenceInfo>();
+        }
+
+        await using var db = DbConnectionFactory.Create(connection, databaseName);
+        await db.OpenAsync();
+
+        var rows = await db.QueryAsync(@"
+            SELECT
+                sc.name AS SchemaName,
+                sq.name AS SequenceName,
+                TYPE_NAME(sq.user_type_id) AS DataType,
+                CONVERT(nvarchar(128), sq.start_value) AS StartValue,
+                CONVERT(nvarchar(128), sq.increment) AS IncrementValue
+            FROM sys.sequences sq
+            INNER JOIN sys.schemas sc ON sc.schema_id = sq.schema_id
+            ORDER BY sc.name, sq.name;");
+
+        return rows.Select(row => new DbSequenceInfo
+        {
+            DatabaseName = databaseName,
+            SchemaName = row.SchemaName,
+            SequenceName = row.SequenceName,
+            DataType = row.DataType,
+            StartValue = row.StartValue,
+            IncrementValue = row.IncrementValue,
+        }).ToArray();
+    }
+
+    public async Task<IReadOnlyList<DbRuleInfo>> GetRulesAsync(ConnectionDefinition connection, string databaseName)
+    {
+        if (connection.ProviderType != DatabaseProviderType.SqlServer)
+        {
+            return Array.Empty<DbRuleInfo>();
+        }
+
+        await using var db = DbConnectionFactory.Create(connection, databaseName);
+        await db.OpenAsync();
+
+        var rows = await db.QueryAsync(@"
+            SELECT
+                sc.name AS SchemaName,
+                o.name AS RuleName,
+                OBJECT_DEFINITION(o.object_id) AS Definition
+            FROM sys.objects o
+            INNER JOIN sys.schemas sc ON sc.schema_id = o.schema_id
+            WHERE o.type = 'R'
+            ORDER BY sc.name, o.name;");
+
+        return rows.Select(row => new DbRuleInfo
+        {
+            DatabaseName = databaseName,
+            SchemaName = row.SchemaName,
+            RuleName = row.RuleName,
+            Definition = row.Definition,
+        }).ToArray();
+    }
+
+    public async Task<IReadOnlyList<DbDefaultInfo>> GetDefaultsAsync(ConnectionDefinition connection, string databaseName)
+    {
+        if (connection.ProviderType != DatabaseProviderType.SqlServer)
+        {
+            return Array.Empty<DbDefaultInfo>();
+        }
+
+        await using var db = DbConnectionFactory.Create(connection, databaseName);
+        await db.OpenAsync();
+
+        var rows = await db.QueryAsync(@"
+            SELECT
+                sc.name AS SchemaName,
+                o.name AS DefaultName,
+                OBJECT_DEFINITION(o.object_id) AS Definition
+            FROM sys.objects o
+            INNER JOIN sys.schemas sc ON sc.schema_id = o.schema_id
+            WHERE o.type = 'D'
+            ORDER BY sc.name, o.name;");
+
+        return rows.Select(row => new DbDefaultInfo
+        {
+            DatabaseName = databaseName,
+            SchemaName = row.SchemaName,
+            DefaultName = row.DefaultName,
+            Definition = row.Definition,
+        }).ToArray();
+    }
+
+    public async Task<IReadOnlyList<DbUserDefinedTypeInfo>> GetUserDefinedTypesAsync(ConnectionDefinition connection, string databaseName)
+    {
+        if (connection.ProviderType != DatabaseProviderType.SqlServer)
+        {
+            return Array.Empty<DbUserDefinedTypeInfo>();
+        }
+
+        await using var db = DbConnectionFactory.Create(connection, databaseName);
+        await db.OpenAsync();
+
+        var rows = await db.QueryAsync(@"
+            SELECT
+                sc.name AS SchemaName,
+                t.name AS TypeName,
+                CASE
+                    WHEN t.is_table_type = 1 THEN 'table type'
+                    ELSE bt.name
+                END AS BaseTypeName,
+                CAST(t.is_table_type AS bit) AS IsTableType
+            FROM sys.types t
+            INNER JOIN sys.schemas sc ON sc.schema_id = t.schema_id
+            LEFT JOIN sys.types bt ON bt.user_type_id = t.system_type_id AND bt.user_type_id = bt.system_type_id
+            WHERE t.is_user_defined = 1
+            ORDER BY sc.name, t.name;");
+
+        return rows.Select(row => new DbUserDefinedTypeInfo
+        {
+            DatabaseName = databaseName,
+            SchemaName = row.SchemaName,
+            TypeName = row.TypeName,
+            BaseTypeName = row.BaseTypeName,
+            IsTableType = row.IsTableType,
+        }).ToArray();
+    }
+
+    public async Task<DbCatalogObjectDetailInfo?> GetCatalogObjectDetailAsync(ConnectionDefinition connection, string databaseName, DbCatalogObjectType objectType, string? schemaName, string objectName)
+    {
+        if (connection.ProviderType != DatabaseProviderType.SqlServer)
+        {
+            return null;
+        }
+
+        await using var db = DbConnectionFactory.Create(connection, databaseName);
+        await db.OpenAsync();
+
+        var resolvedSchema = string.IsNullOrWhiteSpace(schemaName) ? "dbo" : schemaName;
+
+        return objectType switch
+        {
+            DbCatalogObjectType.Synonym => await GetSynonymDetailAsync(db, databaseName, resolvedSchema, objectName),
+            DbCatalogObjectType.Sequence => await GetSequenceDetailAsync(db, databaseName, resolvedSchema, objectName),
+            DbCatalogObjectType.Rule => await GetRuleDetailAsync(db, databaseName, resolvedSchema, objectName),
+            DbCatalogObjectType.Default => await GetDefaultDetailAsync(db, databaseName, resolvedSchema, objectName),
+            DbCatalogObjectType.UserDefinedType => await GetUserDefinedTypeDetailAsync(db, databaseName, resolvedSchema, objectName),
+            _ => null,
+        };
+    }
+
+    private static async Task<DbCatalogObjectDetailInfo?> GetSynonymDetailAsync(DbConnection db, string databaseName, string schemaName, string objectName)
+    {
+        var row = await db.QuerySingleOrDefaultAsync(@"
+            SELECT
+                s.name AS SchemaName,
+                sy.name AS SynonymName,
+                sy.base_object_name AS BaseObjectName,
+                PARSENAME(sy.base_object_name, 4) AS TargetServerName,
+                PARSENAME(sy.base_object_name, 3) AS TargetDatabaseName,
+                PARSENAME(sy.base_object_name, 2) AS TargetSchemaName,
+                PARSENAME(sy.base_object_name, 1) AS TargetObjectName
+            FROM sys.synonyms sy
+            INNER JOIN sys.schemas s ON s.schema_id = sy.schema_id
+            WHERE s.name = @schemaName
+              AND sy.name = @objectName;",
+            new { schemaName, objectName });
+
+        if (row is null)
+        {
+            return null;
+        }
+
+        return new DbCatalogObjectDetailInfo
+        {
+            DatabaseName = databaseName,
+            SchemaName = row.SchemaName,
+            ObjectName = row.SynonymName,
+            ObjectType = DbCatalogObjectType.Synonym,
+            Title = string.IsNullOrWhiteSpace((string?)row.SchemaName) ? (string)row.SynonymName : $"{row.SchemaName}.{row.SynonymName}",
+            Summary = row.BaseObjectName,
+            Properties =
+            [
+                new DbCatalogObjectProperty { Label = "同义词名称", Value = row.SynonymName },
+                new DbCatalogObjectProperty { Label = "同义词架构", Value = row.SchemaName },
+                new DbCatalogObjectProperty { Label = "目标服务器", Value = row.TargetServerName },
+                new DbCatalogObjectProperty { Label = "目标数据库", Value = row.TargetDatabaseName },
+                new DbCatalogObjectProperty { Label = "目标架构", Value = row.TargetSchemaName },
+                new DbCatalogObjectProperty { Label = "目标对象", Value = row.TargetObjectName },
+                new DbCatalogObjectProperty { Label = "基对象名称", Value = row.BaseObjectName },
+            ],
+        };
+    }
+
+    private static async Task<DbCatalogObjectDetailInfo?> GetSequenceDetailAsync(DbConnection db, string databaseName, string schemaName, string objectName)
+    {
+        var row = await db.QuerySingleOrDefaultAsync(@"
+            SELECT
+                sc.name AS SchemaName,
+                sq.name AS SequenceName,
+                TYPE_NAME(sq.user_type_id) AS DataType,
+                CONVERT(nvarchar(128), sq.start_value) AS StartValue,
+                CONVERT(nvarchar(128), sq.increment) AS IncrementValue,
+                CONVERT(nvarchar(128), sq.minimum_value) AS MinimumValue,
+                CONVERT(nvarchar(128), sq.maximum_value) AS MaximumValue,
+                CONVERT(nvarchar(128), sq.current_value) AS CurrentValue,
+                CAST(sq.is_cycling AS bit) AS IsCycling,
+                CAST(sq.is_cached AS bit) AS IsCached,
+                CONVERT(nvarchar(128), sq.cache_size) AS CacheSize
+            FROM sys.sequences sq
+            INNER JOIN sys.schemas sc ON sc.schema_id = sq.schema_id
+            WHERE sc.name = @schemaName
+              AND sq.name = @objectName;",
+            new { schemaName, objectName });
+
+        if (row is null)
+        {
+            return null;
+        }
+
+        return new DbCatalogObjectDetailInfo
+        {
+            DatabaseName = databaseName,
+            SchemaName = row.SchemaName,
+            ObjectName = row.SequenceName,
+            ObjectType = DbCatalogObjectType.Sequence,
+            Title = $"{row.SchemaName}.{row.SequenceName}",
+            Summary = row.DataType,
+            Properties =
+            [
+                new DbCatalogObjectProperty { Label = "序列名称", Value = row.SequenceName },
+                new DbCatalogObjectProperty { Label = "架构", Value = row.SchemaName },
+                new DbCatalogObjectProperty { Label = "数据类型", Value = row.DataType },
+                new DbCatalogObjectProperty { Label = "起始值", Value = row.StartValue },
+                new DbCatalogObjectProperty { Label = "增量", Value = row.IncrementValue },
+                new DbCatalogObjectProperty { Label = "最小值", Value = row.MinimumValue },
+                new DbCatalogObjectProperty { Label = "最大值", Value = row.MaximumValue },
+                new DbCatalogObjectProperty { Label = "当前值", Value = row.CurrentValue },
+                new DbCatalogObjectProperty { Label = "循环", Value = (bool)row.IsCycling ? "是" : "否" },
+                new DbCatalogObjectProperty { Label = "缓存", Value = (bool)row.IsCached ? $"是 ({row.CacheSize})" : "否" },
+            ],
+        };
+    }
+
+    private static async Task<DbCatalogObjectDetailInfo?> GetRuleDetailAsync(DbConnection db, string databaseName, string schemaName, string objectName)
+    {
+        var row = await db.QuerySingleOrDefaultAsync(@"
+            SELECT
+                sc.name AS SchemaName,
+                o.name AS RuleName,
+                OBJECT_DEFINITION(o.object_id) AS Definition
+            FROM sys.objects o
+            INNER JOIN sys.schemas sc ON sc.schema_id = o.schema_id
+            WHERE o.type = 'R'
+              AND sc.name = @schemaName
+              AND o.name = @objectName;",
+            new { schemaName, objectName });
+
+        if (row is null)
+        {
+            return null;
+        }
+
+        return new DbCatalogObjectDetailInfo
+        {
+            DatabaseName = databaseName,
+            SchemaName = row.SchemaName,
+            ObjectName = row.RuleName,
+            ObjectType = DbCatalogObjectType.Rule,
+            Title = $"{row.SchemaName}.{row.RuleName}",
+            Summary = "规则",
+            Definition = row.Definition,
+            Properties =
+            [
+                new DbCatalogObjectProperty { Label = "规则名称", Value = row.RuleName },
+                new DbCatalogObjectProperty { Label = "架构", Value = row.SchemaName },
+            ],
+        };
+    }
+
+    private static async Task<DbCatalogObjectDetailInfo?> GetDefaultDetailAsync(DbConnection db, string databaseName, string schemaName, string objectName)
+    {
+        var row = await db.QuerySingleOrDefaultAsync(@"
+            SELECT
+                sc.name AS SchemaName,
+                o.name AS DefaultName,
+                OBJECT_DEFINITION(o.object_id) AS Definition
+            FROM sys.objects o
+            INNER JOIN sys.schemas sc ON sc.schema_id = o.schema_id
+            WHERE o.type = 'D'
+              AND sc.name = @schemaName
+              AND o.name = @objectName;",
+            new { schemaName, objectName });
+
+        if (row is null)
+        {
+            return null;
+        }
+
+        return new DbCatalogObjectDetailInfo
+        {
+            DatabaseName = databaseName,
+            SchemaName = row.SchemaName,
+            ObjectName = row.DefaultName,
+            ObjectType = DbCatalogObjectType.Default,
+            Title = $"{row.SchemaName}.{row.DefaultName}",
+            Summary = "默认值",
+            Definition = row.Definition,
+            Properties =
+            [
+                new DbCatalogObjectProperty { Label = "默认值名称", Value = row.DefaultName },
+                new DbCatalogObjectProperty { Label = "架构", Value = row.SchemaName },
+            ],
+        };
+    }
+
+    private static async Task<DbCatalogObjectDetailInfo?> GetUserDefinedTypeDetailAsync(DbConnection db, string databaseName, string schemaName, string objectName)
+    {
+        var row = await db.QuerySingleOrDefaultAsync(@"
+            SELECT
+                sc.name AS SchemaName,
+                t.name AS TypeName,
+                CASE
+                    WHEN t.is_table_type = 1 THEN 'table type'
+                    ELSE bt.name
+                END AS BaseTypeName,
+                CAST(t.is_table_type AS bit) AS IsTableType,
+                CAST(t.is_nullable AS bit) AS IsNullable,
+                t.max_length AS MaxLength,
+                t.precision AS PrecisionValue,
+                t.scale AS ScaleValue
+            FROM sys.types t
+            INNER JOIN sys.schemas sc ON sc.schema_id = t.schema_id
+            LEFT JOIN sys.types bt ON bt.user_type_id = t.system_type_id AND bt.user_type_id = bt.system_type_id
+            WHERE t.is_user_defined = 1
+              AND sc.name = @schemaName
+              AND t.name = @objectName;",
+            new { schemaName, objectName });
+
+        if (row is null)
+        {
+            return null;
+        }
+
+        return new DbCatalogObjectDetailInfo
+        {
+            DatabaseName = databaseName,
+            SchemaName = row.SchemaName,
+            ObjectName = row.TypeName,
+            ObjectType = DbCatalogObjectType.UserDefinedType,
+            Title = $"{row.SchemaName}.{row.TypeName}",
+            Summary = row.BaseTypeName,
+            Properties =
+            [
+                new DbCatalogObjectProperty { Label = "类型名称", Value = row.TypeName },
+                new DbCatalogObjectProperty { Label = "架构", Value = row.SchemaName },
+                new DbCatalogObjectProperty { Label = "基础类型", Value = row.BaseTypeName },
+                new DbCatalogObjectProperty { Label = "表类型", Value = (bool)row.IsTableType ? "是" : "否" },
+                new DbCatalogObjectProperty { Label = "可空", Value = (bool)row.IsNullable ? "是" : "否" },
+                new DbCatalogObjectProperty { Label = "最大长度", Value = Convert.ToString(row.MaxLength) },
+                new DbCatalogObjectProperty { Label = "精度", Value = Convert.ToString(row.PrecisionValue) },
+                new DbCatalogObjectProperty { Label = "小数位", Value = Convert.ToString(row.ScaleValue) },
+            ],
+        };
+    }
+
+    public async Task<IReadOnlyList<TableIndexInfo>> GetObjectIndexesAsync(ConnectionDefinition connection, DbTableInfo table)
+    {
+        if (connection.ProviderType != DatabaseProviderType.SqlServer)
+        {
+            return Array.Empty<TableIndexInfo>();
+        }
+
+        await using var db = DbConnectionFactory.Create(connection, table.DatabaseName);
+        await db.OpenAsync();
+
+        var rows = await db.QueryAsync(@"
+            SELECT
+                i.name AS IndexName,
+                CAST(i.is_primary_key AS bit) AS IsPrimaryKey,
+                CAST(i.is_unique AS bit) AS IsUnique,
+                c.name AS ColumnName,
+                ic.key_ordinal AS KeyOrdinal
+            FROM sys.indexes i
+            INNER JOIN sys.objects o ON o.object_id = i.object_id
+            INNER JOIN sys.schemas s ON s.schema_id = o.schema_id
+            LEFT JOIN sys.index_columns ic
+                ON ic.object_id = i.object_id
+                AND ic.index_id = i.index_id
+                AND ic.key_ordinal > 0
+            LEFT JOIN sys.columns c
+                ON c.object_id = ic.object_id
+                AND c.column_id = ic.column_id
+            WHERE o.name = @objectName
+              AND s.name = @schemaName
+              AND o.type IN ('U', 'V')
+              AND i.index_id > 0
+              AND i.is_hypothetical = 0
+              AND i.name IS NOT NULL
+            ORDER BY i.name, ic.key_ordinal;",
+            new { objectName = table.TableName, schemaName = table.SchemaName ?? "dbo" });
+
+        return rows
+            .GroupBy(row => (string)row.IndexName, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new TableIndexInfo
+            {
+                Name = group.Key,
+                IsPrimaryKey = group.First().IsPrimaryKey,
+                IsUnique = group.First().IsUnique,
+                Columns = group
+                    .Where(item => item.ColumnName is not null)
+                    .OrderBy(item => (int?)item.KeyOrdinal ?? int.MaxValue)
+                    .Select(item => (string)item.ColumnName)
+                    .ToArray(),
+            })
+            .ToArray();
+    }
+
+    public async Task<IReadOnlyList<TableTriggerInfo>> GetObjectTriggersAsync(ConnectionDefinition connection, DbTableInfo table)
+    {
+        if (connection.ProviderType != DatabaseProviderType.SqlServer)
+        {
+            return Array.Empty<TableTriggerInfo>();
+        }
+
+        await using var db = DbConnectionFactory.Create(connection, table.DatabaseName);
+        await db.OpenAsync();
+
+        var rows = await db.QueryAsync(@"
+            SELECT
+                tr.name AS TriggerName,
+                CASE WHEN tr.is_instead_of_trigger = 1 THEN 'INSTEAD OF' ELSE 'AFTER' END AS TriggerTiming,
+                STUFF((
+                    SELECT DISTINCT ', ' + te.type_desc
+                    FROM sys.trigger_events te
+                    WHERE te.object_id = tr.object_id
+                    FOR XML PATH(''), TYPE
+                ).value('.', 'nvarchar(max)'), 1, 2, '') AS TriggerEvent
+            FROM sys.triggers tr
+            INNER JOIN sys.objects o ON o.object_id = tr.parent_id
+            INNER JOIN sys.schemas s ON s.schema_id = o.schema_id
+            WHERE tr.parent_class_desc = 'OBJECT_OR_COLUMN'
+              AND o.name = @objectName
+              AND s.name = @schemaName
+              AND o.type IN ('U', 'V')
+            ORDER BY tr.name;",
+            new { objectName = table.TableName, schemaName = table.SchemaName ?? "dbo" });
+
+        return rows.Select(row => new TableTriggerInfo
+        {
+            Name = row.TriggerName,
+            Timing = row.TriggerTiming,
+            Event = string.IsNullOrWhiteSpace((string?)row.TriggerEvent) ? null : row.TriggerEvent,
+        }).ToArray();
+    }
+
+    public async Task<IReadOnlyList<TableStatisticInfo>> GetObjectStatisticsAsync(ConnectionDefinition connection, DbTableInfo table)
+    {
+        if (connection.ProviderType != DatabaseProviderType.SqlServer)
+        {
+            return Array.Empty<TableStatisticInfo>();
+        }
+
+        await using var db = DbConnectionFactory.Create(connection, table.DatabaseName);
+        await db.OpenAsync();
+
+        var rows = await db.QueryAsync(@"
+            SELECT
+                st.name AS StatisticName,
+                CAST(st.auto_created AS bit) AS IsAutoCreated,
+                CAST(st.user_created AS bit) AS IsUserCreated,
+                CAST(st.no_recompute AS bit) AS NoRecompute,
+                st.filter_definition AS FilterDefinition,
+                c.name AS ColumnName,
+                sc.stats_column_id AS StatsColumnId
+            FROM sys.stats st
+            INNER JOIN sys.objects o ON o.object_id = st.object_id
+            INNER JOIN sys.schemas s ON s.schema_id = o.schema_id
+            LEFT JOIN sys.indexes i
+                ON i.object_id = st.object_id
+                AND i.index_id = st.stats_id
+            LEFT JOIN sys.stats_columns sc
+                ON sc.object_id = st.object_id
+                AND sc.stats_id = st.stats_id
+            LEFT JOIN sys.columns c
+                ON c.object_id = sc.object_id
+                AND c.column_id = sc.column_id
+            WHERE o.name = @objectName
+              AND s.name = @schemaName
+              AND o.type IN ('U', 'V')
+              AND i.index_id IS NULL
+            ORDER BY st.name, sc.stats_column_id;",
+            new { objectName = table.TableName, schemaName = table.SchemaName ?? "dbo" });
+
+        return rows
+            .GroupBy(row => (string)row.StatisticName, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new TableStatisticInfo
+            {
+                Name = group.Key,
+                IsAutoCreated = group.First().IsAutoCreated,
+                IsUserCreated = group.First().IsUserCreated,
+                NoRecompute = group.First().NoRecompute,
+                FilterDefinition = string.IsNullOrWhiteSpace((string?)group.First().FilterDefinition) ? null : group.First().FilterDefinition,
+                Columns = group
+                    .Where(item => item.ColumnName is not null)
+                    .OrderBy(item => (int?)item.StatsColumnId ?? int.MaxValue)
+                    .Select(item => (string)item.ColumnName)
+                    .ToArray(),
+            })
+            .ToArray();
     }
 
     public async Task<TableSchema> GetTableSchemaAsync(ConnectionDefinition connection, DbTableInfo table, IReadOnlyList<DbTableInfo> databaseTables)

@@ -16,6 +16,12 @@ public sealed record ConnectionNodeDto(
 public sealed record DatabaseNodeDto(
     string Name,
     IReadOnlyList<TableNodeDto> Tables,
+    IReadOnlyList<TableNodeDto> Views,
+    IReadOnlyList<SynonymNodeDto> Synonyms,
+    IReadOnlyList<SequenceNodeDto> Sequences,
+    IReadOnlyList<RuleNodeDto> Rules,
+    IReadOnlyList<DefaultNodeDto> Defaults,
+    IReadOnlyList<UserDefinedTypeNodeDto> UserDefinedTypes,
     IReadOnlyList<RoutineNodeDto> Routines);
 
 public sealed record DatabaseGraphNodeDto(
@@ -50,7 +56,17 @@ public sealed record DatabaseGraphResponse(
     IReadOnlyList<DatabaseGraphNodeDto> Nodes,
     IReadOnlyList<DatabaseGraphEdgeDto> Edges);
 
-public sealed record TableNodeDto(string Key, string Database, string? Schema, string Name, string? Comment, int? RowCount);
+public sealed record TableNodeDto(string Key, string Database, string? Schema, string Name, string ObjectType, string? Comment, int? RowCount);
+
+public sealed record SynonymNodeDto(string Database, string? Schema, string Name, string BaseObjectName);
+
+public sealed record SequenceNodeDto(string Database, string? Schema, string Name, string DataType, string StartValue, string IncrementValue);
+
+public sealed record RuleNodeDto(string Database, string? Schema, string Name, string? Definition);
+
+public sealed record DefaultNodeDto(string Database, string? Schema, string Name, string? Definition);
+
+public sealed record UserDefinedTypeNodeDto(string Database, string? Schema, string Name, string BaseTypeName, bool IsTableType);
 
 public sealed record RoutineNodeDto(string? Schema, string Name, string RoutineType, IReadOnlyList<RoutineParameterDto> Parameters);
 
@@ -77,18 +93,42 @@ public sealed record TableIndexDto(string Name, bool IsPrimaryKey, bool IsUnique
 
 public sealed record TableTriggerDto(string Name, string? Timing, string? Event);
 
+public sealed record TableStatisticDto(
+    string Name,
+    bool IsAutoCreated,
+    bool IsUserCreated,
+    bool NoRecompute,
+    string? FilterDefinition,
+    IReadOnlyList<string> Columns);
+
 public sealed record TableDesignResponse(
     string TableKey,
     Guid ConnectionId,
     string Database,
     string Provider,
+    string ObjectType,
     string? Schema,
     string Name,
     string? Comment,
     IReadOnlyList<ColumnDto> Columns,
     IReadOnlyList<ForeignKeyDto> ForeignKeys,
     IReadOnlyList<TableIndexDto> Indexes,
-    IReadOnlyList<TableTriggerDto> Triggers);
+    IReadOnlyList<TableTriggerDto> Triggers,
+    IReadOnlyList<TableStatisticDto> Statistics);
+
+public sealed record CatalogObjectPropertyDto(string Label, string? Value);
+
+public sealed record CatalogObjectDetailResponse(
+    Guid ConnectionId,
+    string Database,
+    string Provider,
+    string ObjectType,
+    string? Schema,
+    string Name,
+    string Title,
+    string? Summary,
+    string? Definition,
+    IReadOnlyList<CatalogObjectPropertyDto> Properties);
 
 public sealed record TablePageResponse(
     string TableKey,

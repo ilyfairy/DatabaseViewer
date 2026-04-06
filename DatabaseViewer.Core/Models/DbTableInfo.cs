@@ -8,6 +8,8 @@ public sealed class DbTableInfo
 
     public string TableName { get; set; } = string.Empty;
 
+    public DbObjectType ObjectType { get; set; } = DbObjectType.Table;
+
     public string? Comment { get; set; }
 
     public int? RowCount { get; set; }
