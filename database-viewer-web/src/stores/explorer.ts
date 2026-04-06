@@ -30,6 +30,7 @@ import type {
   TableRowInsertRequest,
   TableRowInsertResponse,
   SqlExecutionResponse,
+  SqliteRekeyRequest,
   SqlWorkspaceTab,
   TableDefinition,
   TableMockWorkspaceTab,
@@ -2314,6 +2315,23 @@ export const useExplorerStore = defineStore('explorer', () => {
     showNotice('success', '连接已更新');
   }
 
+  async function rekeySqliteDatabase(request: SqliteRekeyRequest) {
+    const response = await fetch('/api/explorer/connections/rekey', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+
+    await refreshBootstrap();
+    showNotice('success', 'SQLite 加密密钥已更新');
+  }
+
   function getReverseReferences(panel: ExplorerDetailPanel): ReverseReferenceGroup[] {
     return detailCache.value[panel.id]?.reverseReferences ?? [];
   }
@@ -2464,6 +2482,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     getConnectionConfig,
     testConnection,
     updateConnection,
+    rekeySqliteDatabase,
     deleteConnection,
     showNotice,
     dismissNotice,

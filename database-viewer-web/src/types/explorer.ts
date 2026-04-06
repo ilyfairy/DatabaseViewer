@@ -26,6 +26,21 @@ export interface CreateConnectionRequest {
   password?: string | null
   trustServerCertificate: boolean
   sshTunnel: SshTunnelRequest
+  sqliteCipher: SqliteCipherRequest
+}
+
+export interface SqliteCipherRequest {
+  enabled: boolean
+  password?: string | null
+  keyFormat: 'passphrase' | 'hex'
+  pageSize?: number | null
+  kdfIter?: number | null
+  cipherCompatibility?: number | null
+  plaintextHeaderSize?: number | null
+  skipBytes?: number | null
+  useHmac?: boolean | null
+  kdfAlgorithm?: 'PBKDF2_HMAC_SHA1' | 'PBKDF2_HMAC_SHA256' | 'PBKDF2_HMAC_SHA512' | null
+  hmacAlgorithm?: 'HMAC_SHA1' | 'HMAC_SHA256' | 'HMAC_SHA512' | null
 }
 
 export interface SshTunnelRequest {
@@ -58,10 +73,33 @@ export interface ConnectionConfig {
   username?: string | null
   trustServerCertificate: boolean
   sshTunnel: SshTunnelConfig
+  sqliteCipher: SqliteCipherConfig
+}
+
+export interface SqliteCipherConfig {
+  enabled: boolean
+  hasPassword: boolean
+  keyFormat: 'passphrase' | 'hex'
+  pageSize?: number | null
+  kdfIter?: number | null
+  cipherCompatibility?: number | null
+  plaintextHeaderSize?: number | null
+  skipBytes?: number | null
+  useHmac?: boolean | null
+  kdfAlgorithm?: 'PBKDF2_HMAC_SHA1' | 'PBKDF2_HMAC_SHA256' | 'PBKDF2_HMAC_SHA512' | null
+  hmacAlgorithm?: 'HMAC_SHA1' | 'HMAC_SHA256' | 'HMAC_SHA512' | null
 }
 
 export interface TestConnectionRequest extends CreateConnectionRequest {
   connectionId?: string | null
+}
+
+export interface SqliteRekeyRequest {
+  connectionId: string
+  currentPassword?: string | null
+  currentKeyFormat?: 'passphrase' | 'hex' | null
+  newPassword: string
+  newKeyFormat: 'passphrase' | 'hex'
 }
 
 export interface DatabaseInfo {

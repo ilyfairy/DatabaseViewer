@@ -207,6 +207,32 @@ public sealed record SshTunnelConfigResponse(
     string? Username,
     string? PrivateKeyPath);
 
+public sealed record SqliteCipherRequest(
+    bool Enabled,
+    string? Password,
+    string? KeyFormat,
+    int? PageSize,
+    int? KdfIter,
+    int? CipherCompatibility,
+    int? PlaintextHeaderSize,
+    int? SkipBytes,
+    bool? UseHmac,
+    string? KdfAlgorithm,
+    string? HmacAlgorithm);
+
+public sealed record SqliteCipherConfigResponse(
+    bool Enabled,
+    bool HasPassword,
+    string KeyFormat,
+    int? PageSize,
+    int? KdfIter,
+    int? CipherCompatibility,
+    int? PlaintextHeaderSize,
+    int? SkipBytes,
+    bool? UseHmac,
+    string? KdfAlgorithm,
+    string? HmacAlgorithm);
+
 public sealed record CreateConnectionRequest(
     string Name,
     string Provider,
@@ -216,7 +242,8 @@ public sealed record CreateConnectionRequest(
     string? Username,
     string? Password,
     bool TrustServerCertificate,
-    SshTunnelRequest? SshTunnel);
+    SshTunnelRequest? SshTunnel,
+    SqliteCipherRequest? SqliteCipher);
 
 public sealed record ConnectionConfigResponse(
     Guid Id,
@@ -227,7 +254,8 @@ public sealed record ConnectionConfigResponse(
     int? Port,
     string? Username,
     bool TrustServerCertificate,
-    SshTunnelConfigResponse SshTunnel);
+    SshTunnelConfigResponse SshTunnel,
+    SqliteCipherConfigResponse SqliteCipher);
 
 public sealed record TestConnectionRequest(
     Guid? ConnectionId,
@@ -239,7 +267,15 @@ public sealed record TestConnectionRequest(
     string? Username,
     string? Password,
     bool TrustServerCertificate,
-    SshTunnelRequest? SshTunnel);
+    SshTunnelRequest? SshTunnel,
+    SqliteCipherRequest? SqliteCipher);
+
+public sealed record SqliteRekeyRequest(
+    Guid ConnectionId,
+    string? CurrentPassword,
+    string? CurrentKeyFormat,
+    string NewPassword,
+    string NewKeyFormat);
 
 public sealed record SqlResultColumnDto(string Name, string Type);
 

@@ -18,6 +18,28 @@ public sealed class ConnectionPersistenceModel
 
     public string EncryptedPassword { get; set; } = string.Empty;
 
+    public bool SqliteCipherEnabled { get; set; }
+
+    public string EncryptedSqliteCipherPassword { get; set; } = string.Empty;
+
+    public SqliteCipherKeyFormat SqliteCipherKeyFormat { get; set; } = SqliteCipherKeyFormat.Passphrase;
+
+    public int? SqliteCipherPageSize { get; set; }
+
+    public int? SqliteCipherKdfIter { get; set; }
+
+    public int? SqliteCipherCompatibility { get; set; }
+
+    public int? SqliteCipherPlaintextHeaderSize { get; set; }
+
+    public int? SqliteCipherSkipBytes { get; set; }
+
+    public bool? SqliteCipherUseHmac { get; set; }
+
+    public string SqliteCipherKdfAlgorithm { get; set; } = string.Empty;
+
+    public string SqliteCipherHmacAlgorithm { get; set; } = string.Empty;
+
     public bool TrustServerCertificate { get; set; }
 
     public bool SshEnabled { get; set; }

@@ -27,10 +27,36 @@ public sealed class DatabaseQueryService
         }
     }
 
+    public async Task RekeySqliteDatabaseAsync(ConnectionDefinition currentDefinition, SqliteCipherOptions targetCipher)
+    {
+        if (currentDefinition.ProviderType != DatabaseProviderType.Sqlite)
+        {
+            throw new InvalidOperationException("只有 SQLite 连接支持修改加密密钥。", null);
+        }
+
+        await using var connection = DbConnectionFactory.Create(currentDefinition);
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = DbConnectionFactory.BuildSqliteRekeyCommandText(targetCipher.KeyFormat, targetCipher.Password);
+        await command.ExecuteNonQueryAsync();
+
+        await using var validateCommand = connection.CreateCommand();
+        validateCommand.CommandText = "SELECT COUNT(*) FROM sqlite_master;";
+        await validateCommand.ExecuteScalarAsync();
+    }
+
     public async Task<TableDataResult> GetTablePageAsync(ConnectionDefinition definition, TableSchema schema, int offset, int pageSize, string? sortColumn = null, bool sortDescending = false)
     {
         await using var connection = DbConnectionFactory.Create(definition, schema.Table.DatabaseName);
         await connection.OpenAsync();
+
+        var resolvedRowCount = schema.Table.RowCount;
+        if (!resolvedRowCount.HasValue)
+        {
+            resolvedRowCount = await GetTableRowCountAsync(connection, definition.ProviderType, schema.Table);
+            schema.Table.RowCount = resolvedRowCount;
+        }
 
         var orderColumns = schema.PrimaryKeys.Count > 0
             ? schema.PrimaryKeys
@@ -63,7 +89,25 @@ public sealed class DatabaseQueryService
             Schema = schema,
             Offset = offset,
             PageSize = pageSize,
+            RowCount = resolvedRowCount,
             HasMoreRows = hasMoreRows,
+        };
+    }
+
+    private static async Task<int?> GetTableRowCountAsync(DbConnection connection, DatabaseProviderType providerType, DbTableInfo table)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = SqlDialect.BuildTableCountQuery(providerType, table);
+        var scalar = await command.ExecuteScalarAsync();
+        return scalar switch
+        {
+            null => null,
+            DBNull => null,
+            int intValue => intValue,
+            long longValue when longValue <= int.MaxValue && longValue >= int.MinValue => (int)longValue,
+            long longValue => (int)Math.Clamp(longValue, int.MinValue, int.MaxValue),
+            decimal decimalValue => (int)decimalValue,
+            _ => Convert.ToInt32(scalar, System.Globalization.CultureInfo.InvariantCulture),
         };
     }
 

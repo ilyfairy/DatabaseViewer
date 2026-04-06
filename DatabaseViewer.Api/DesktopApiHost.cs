@@ -223,6 +223,18 @@ public static class DesktopApiHost
                 return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
             }
         });
+        app.MapPost("/api/explorer/connections/rekey", async (SqliteRekeyRequest request) =>
+        {
+            try
+            {
+                await explorer.RekeySqliteDatabaseAsync(request);
+                return Results.NoContent();
+            }
+            catch (Exception ex)
+            {
+                return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
+        });
         app.MapPut("/api/explorer/connections/{connectionId:guid}", async (Guid connectionId, CreateConnectionRequest request) =>
         {
             try

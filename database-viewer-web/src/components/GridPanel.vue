@@ -1319,7 +1319,6 @@ watch(dragSelectionMode, (mode, _, onCleanup) => {
         <div class="grid-panel-title-row">
           <h3>{{ tableMeta?.schema ? `${tableMeta.schema}.${tableMeta.name}` : tableMeta?.name }}</h3>
           <span class="panel-meta">{{ loadedRowCount }} / {{ totalRowCount }} rows</span>
-          <NTag size="small" :bordered="false" type="default">{{ tableStats.rowCount }} 行</NTag>
           <NTag size="small" :bordered="false" type="info">{{ tableStats.foreignKeyCount }} FK</NTag>
           <NTag size="small" :bordered="false" type="warning">{{ tableStats.reverseCount }} 反向引用</NTag>
         </div>

@@ -57,6 +57,12 @@ public static class SqlDialect
         };
     }
 
+    public static string BuildTableCountQuery(DatabaseProviderType providerType, DbTableInfo table)
+    {
+        var qualifiedTable = GetQualifiedTableName(providerType, table);
+        return $"SELECT COUNT(1) FROM {qualifiedTable}";
+    }
+
     /// <summary>用安全的索引化参数名（_k0, _k1...）构建主键 WHERE 子句，避免列名含特殊字符导致参数名无效。</summary>
     public static (string WhereClause, IReadOnlyList<string> ParameterNames) BuildKeyWhereClause(DatabaseProviderType providerType, IReadOnlyList<string> keyColumns)
     {

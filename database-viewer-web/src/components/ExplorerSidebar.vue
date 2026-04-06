@@ -14,7 +14,7 @@ const expandedRoutineGroups = ref<string[]>([]);
 const expandedRoutines = ref<string[]>([]);
 const expandedRoutineParamGroups = ref<string[]>([]);
 const expandedTableGroups = ref<string[]>([]);
-const connectionContextMenu = ref<{ x: number; y: number; connectionId: string; connectionName: string } | null>(null);
+const connectionContextMenu = ref<{ x: number; y: number; connectionId: string; connectionName: string; provider: ProviderType } | null>(null);
 const databaseContextMenu = ref<{ x: number; y: number; connectionId: string; database: string } | null>(null);
 const tableContextMenu = ref<{ x: number; y: number; connectionId: string; database: string; table: TableSummary; showScriptSubmenu: boolean } | null>(null);
 const routineContextMenu = ref<{ x: number; y: number; connectionId: string; database: string; provider: ProviderType; routine: RoutineInfo } | null>(null);
@@ -36,7 +36,11 @@ const createConnectionVisible = ref(false);
 const createConnectionLoading = ref(false);
 const testConnectionLoading = ref(false);
 const createConnectionError = ref<string | null>(null);
-const activeConnectionSettingsTab = ref<'general' | 'ssh'>('general');
+const sqliteRekeyVisible = ref(false);
+const sqliteRekeyLoading = ref(false);
+const sqliteRekeyError = ref<string | null>(null);
+const sqliteRekeyTarget = ref<{ connectionId: string; connectionName: string; currentEncrypted: boolean } | null>(null);
+const activeConnectionSettingsTab = ref<'general' | 'ssh' | 'cipher'>('general');
 const createConnectionForm = reactive({
   name: '',
   provider: 'sqlserver' as ProviderType,
@@ -54,6 +58,24 @@ const createConnectionForm = reactive({
   sshPassword: '',
   sshPrivateKeyPath: '',
   sshPassphrase: '',
+  sqliteCipherEnabled: false,
+  sqliteCipherHasStoredPassword: false,
+  sqliteCipherPassword: '',
+  sqliteCipherKeyFormat: 'passphrase' as 'passphrase' | 'hex',
+  sqliteCipherPageSize: '',
+  sqliteCipherKdfIter: '',
+  sqliteCipherCompatibility: '',
+  sqliteCipherPlaintextHeaderSize: '',
+  sqliteCipherSkipBytes: '',
+  sqliteCipherUseHmac: 'default' as 'default' | 'enabled' | 'disabled',
+  sqliteCipherKdfAlgorithm: '' as '' | 'PBKDF2_HMAC_SHA1' | 'PBKDF2_HMAC_SHA256' | 'PBKDF2_HMAC_SHA512',
+  sqliteCipherHmacAlgorithm: '' as '' | 'HMAC_SHA1' | 'HMAC_SHA256' | 'HMAC_SHA512',
+});
+const sqliteRekeyForm = reactive({
+  currentPassword: '',
+  currentKeyFormat: 'passphrase' as 'passphrase' | 'hex',
+  newPassword: '',
+  newKeyFormat: 'passphrase' as 'passphrase' | 'hex',
 });
 const closeAllContextMenus = () => {
   closeConnectionContextMenu();
@@ -73,6 +95,27 @@ const providerOptions = [
 const sshAuthenticationOptions = [
   { label: '密码', value: 'password' },
   { label: '公钥', value: 'publicKey' },
+];
+const sqliteCipherKeyFormatOptions = [
+  { label: '口令', value: 'passphrase' },
+  { label: '十六进制密钥', value: 'hex' },
+];
+const sqliteCipherUseHmacOptions = [
+  { label: '跟随默认值', value: 'default' },
+  { label: '启用 HMAC', value: 'enabled' },
+  { label: '禁用 HMAC', value: 'disabled' },
+];
+const sqliteCipherKdfAlgorithmOptions = [
+  { label: '跟随默认值', value: '' },
+  { label: 'PBKDF2_HMAC_SHA1', value: 'PBKDF2_HMAC_SHA1' },
+  { label: 'PBKDF2_HMAC_SHA256', value: 'PBKDF2_HMAC_SHA256' },
+  { label: 'PBKDF2_HMAC_SHA512', value: 'PBKDF2_HMAC_SHA512' },
+];
+const sqliteCipherHmacAlgorithmOptions = [
+  { label: '跟随默认值', value: '' },
+  { label: 'HMAC_SHA1', value: 'HMAC_SHA1' },
+  { label: 'HMAC_SHA256', value: 'HMAC_SHA256' },
+  { label: 'HMAC_SHA512', value: 'HMAC_SHA512' },
 ];
 const authenticationOptions = computed(() => createConnectionForm.provider === 'sqlserver'
   ? [
@@ -447,15 +490,16 @@ async function confirmDeleteConnection(connectionId: string) {
   }
 }
 
-function openConnectionContextMenu(event: MouseEvent, connectionId: string, connectionName: string) {
+function openConnectionContextMenu(event: MouseEvent, connectionId: string, connectionName: string, provider: ProviderType) {
   closeDatabaseContextMenu();
   closeTableContextMenu();
-  const menuPosition = getViewportSafeMenuPosition(event, 220, 120);
+  const menuPosition = getViewportSafeMenuPosition(event, 220, provider === 'sqlite' ? 156 : 120);
   connectionContextMenu.value = {
     x: menuPosition.x,
     y: menuPosition.y,
     connectionId,
     connectionName,
+    provider,
   };
 }
 
@@ -501,6 +545,26 @@ async function openEditConnectionDialog() {
     createConnectionForm.sshPassword = '';
     createConnectionForm.sshPrivateKeyPath = config.sshTunnel.privateKeyPath ?? '';
     createConnectionForm.sshPassphrase = '';
+    createConnectionForm.sqliteCipherEnabled = config.sqliteCipher.enabled;
+    createConnectionForm.sqliteCipherHasStoredPassword = config.sqliteCipher.hasPassword;
+    createConnectionForm.sqliteCipherPassword = '';
+    createConnectionForm.sqliteCipherKeyFormat = config.sqliteCipher.keyFormat;
+    createConnectionForm.sqliteCipherPageSize = config.sqliteCipher.pageSize ? String(config.sqliteCipher.pageSize) : '';
+    createConnectionForm.sqliteCipherKdfIter = config.sqliteCipher.kdfIter ? String(config.sqliteCipher.kdfIter) : '';
+    createConnectionForm.sqliteCipherCompatibility = config.sqliteCipher.cipherCompatibility ? String(config.sqliteCipher.cipherCompatibility) : '';
+    createConnectionForm.sqliteCipherPlaintextHeaderSize = config.sqliteCipher.plaintextHeaderSize !== null && config.sqliteCipher.plaintextHeaderSize !== undefined
+      ? String(config.sqliteCipher.plaintextHeaderSize)
+      : '';
+    createConnectionForm.sqliteCipherSkipBytes = config.sqliteCipher.skipBytes !== null && config.sqliteCipher.skipBytes !== undefined
+      ? String(config.sqliteCipher.skipBytes)
+      : '';
+    createConnectionForm.sqliteCipherUseHmac = config.sqliteCipher.useHmac === true
+      ? 'enabled'
+      : config.sqliteCipher.useHmac === false
+        ? 'disabled'
+        : 'default';
+    createConnectionForm.sqliteCipherKdfAlgorithm = config.sqliteCipher.kdfAlgorithm ?? '';
+    createConnectionForm.sqliteCipherHmacAlgorithm = config.sqliteCipher.hmacAlgorithm ?? '';
     activeConnectionSettingsTab.value = 'general';
     createConnectionVisible.value = true;
   }
@@ -510,6 +574,79 @@ async function openEditConnectionDialog() {
   finally {
     createConnectionLoading.value = false;
     closeConnectionContextMenu();
+  }
+}
+
+async function openSqliteRekeyDialog() {
+  if (!connectionContextMenu.value || connectionContextMenu.value.provider !== 'sqlite') {
+    return;
+  }
+
+  sqliteRekeyLoading.value = true;
+  sqliteRekeyError.value = null;
+
+  try {
+    const config = await store.getConnectionConfig(connectionContextMenu.value.connectionId);
+    sqliteRekeyTarget.value = {
+      connectionId: config.id,
+      connectionName: config.name,
+      currentEncrypted: config.sqliteCipher.enabled,
+    };
+    sqliteRekeyForm.currentPassword = '';
+    sqliteRekeyForm.currentKeyFormat = config.sqliteCipher.keyFormat;
+    sqliteRekeyForm.newPassword = '';
+    sqliteRekeyForm.newKeyFormat = config.sqliteCipher.keyFormat;
+    sqliteRekeyVisible.value = true;
+  }
+  catch (error) {
+    sqliteRekeyError.value = error instanceof Error ? error.message : 'SQLite 加密配置加载失败';
+  }
+  finally {
+    sqliteRekeyLoading.value = false;
+    closeConnectionContextMenu();
+  }
+}
+
+function closeSqliteRekeyDialog() {
+  sqliteRekeyVisible.value = false;
+  sqliteRekeyLoading.value = false;
+  sqliteRekeyError.value = null;
+  sqliteRekeyTarget.value = null;
+  sqliteRekeyForm.currentPassword = '';
+  sqliteRekeyForm.currentKeyFormat = 'passphrase';
+  sqliteRekeyForm.newPassword = '';
+  sqliteRekeyForm.newKeyFormat = 'passphrase';
+}
+
+function handleSqliteRekeyVisibleChange(value: boolean) {
+  if (!value) {
+    closeSqliteRekeyDialog();
+  }
+}
+
+async function submitSqliteRekey() {
+  if (!sqliteRekeyTarget.value) {
+    return;
+  }
+
+  sqliteRekeyLoading.value = true;
+  sqliteRekeyError.value = null;
+
+  try {
+    await store.rekeySqliteDatabase({
+      connectionId: sqliteRekeyTarget.value.connectionId,
+      currentPassword: sqliteRekeyForm.currentPassword.trim() ? sqliteRekeyForm.currentPassword : null,
+      currentKeyFormat: sqliteRekeyForm.currentPassword.trim() ? sqliteRekeyForm.currentKeyFormat : null,
+      newPassword: sqliteRekeyForm.newPassword,
+      newKeyFormat: sqliteRekeyForm.newKeyFormat,
+    });
+    closeSqliteRekeyDialog();
+  }
+  catch (error) {
+    sqliteRekeyError.value = error instanceof Error ? error.message : 'SQLite 加密密钥更新失败';
+  }
+  finally {
+    sqliteRekeyLoading.value = false;
   }
 }
 
@@ -1021,6 +1158,18 @@ function resetCreateConnectionForm() {
   createConnectionForm.sshPassword = '';
   createConnectionForm.sshPrivateKeyPath = '';
   createConnectionForm.sshPassphrase = '';
+  createConnectionForm.sqliteCipherEnabled = false;
+  createConnectionForm.sqliteCipherHasStoredPassword = false;
+  createConnectionForm.sqliteCipherPassword = '';
+  createConnectionForm.sqliteCipherKeyFormat = 'passphrase';
+  createConnectionForm.sqliteCipherPageSize = '';
+  createConnectionForm.sqliteCipherKdfIter = '';
+  createConnectionForm.sqliteCipherCompatibility = '';
+  createConnectionForm.sqliteCipherPlaintextHeaderSize = '';
+  createConnectionForm.sqliteCipherSkipBytes = '';
+  createConnectionForm.sqliteCipherUseHmac = 'default';
+  createConnectionForm.sqliteCipherKdfAlgorithm = '';
+  createConnectionForm.sqliteCipherHmacAlgorithm = '';
   activeConnectionSettingsTab.value = 'general';
   createConnectionError.value = null;
 }
@@ -1049,6 +1198,70 @@ function handleProviderChange(provider: ProviderType) {
     createConnectionForm.sshEnabled = false;
     activeConnectionSettingsTab.value = 'general';
   }
+
+  if (provider !== 'sqlite' && activeConnectionSettingsTab.value === 'cipher') {
+    activeConnectionSettingsTab.value = 'general';
+  }
+}
+
+function toNullableNumber(value: string) {
+  const normalizedValue = value.trim();
+  if (!normalizedValue) {
+    return null;
+  }
+
+  const parsedValue = Number(normalizedValue);
+  return Number.isFinite(parsedValue) ? parsedValue : null;
+}
+
+function toNullableSqliteCipherUseHmac(value: 'default' | 'enabled' | 'disabled') {
+  if (value === 'enabled') {
+    return true;
+  }
+
+  if (value === 'disabled') {
+    return false;
+  }
+
+  return null;
+}
+
+function buildSqliteCipherPayload() {
+  if (createConnectionForm.provider !== 'sqlite') {
+    return {
+      enabled: false,
+      password: null,
+      keyFormat: 'passphrase' as const,
+      pageSize: null,
+      kdfIter: null,
+      cipherCompatibility: null,
+      plaintextHeaderSize: null,
+      skipBytes: null,
+      useHmac: null,
+      kdfAlgorithm: null,
+      hmacAlgorithm: null,
+    };
+  }
+
+  return {
+    enabled: createConnectionForm.sqliteCipherEnabled,
+    password: createConnectionForm.sqliteCipherEnabled && createConnectionForm.sqliteCipherPassword.trim()
+      ? createConnectionForm.sqliteCipherPassword
+      : null,
+    keyFormat: createConnectionForm.sqliteCipherKeyFormat,
+    pageSize: createConnectionForm.sqliteCipherEnabled ? toNullableNumber(createConnectionForm.sqliteCipherPageSize) : null,
+    kdfIter: createConnectionForm.sqliteCipherEnabled ? toNullableNumber(createConnectionForm.sqliteCipherKdfIter) : null,
+    cipherCompatibility: createConnectionForm.sqliteCipherEnabled ? toNullableNumber(createConnectionForm.sqliteCipherCompatibility) : null,
+    plaintextHeaderSize: createConnectionForm.sqliteCipherEnabled ? toNullableNumber(createConnectionForm.sqliteCipherPlaintextHeaderSize) : null,
+    skipBytes: createConnectionForm.sqliteCipherEnabled ? toNullableNumber(createConnectionForm.sqliteCipherSkipBytes) : null,
+    useHmac: createConnectionForm.sqliteCipherEnabled ? toNullableSqliteCipherUseHmac(createConnectionForm.sqliteCipherUseHmac) : null,
+    kdfAlgorithm: createConnectionForm.sqliteCipherEnabled && createConnectionForm.sqliteCipherKdfAlgorithm
+      ? createConnectionForm.sqliteCipherKdfAlgorithm
+      : null,
+    hmacAlgorithm: createConnectionForm.sqliteCipherEnabled && createConnectionForm.sqliteCipherHmacAlgorithm
+      ? createConnectionForm.sqliteCipherHmacAlgorithm
+      : null,
+  };
 }
 
 async function browseSshPrivateKeyFile() {
@@ -1105,6 +1318,7 @@ async function submitCreateConnection() {
         privateKeyPath: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled || createConnectionForm.sshAuthentication !== 'publicKey' ? null : (createConnectionForm.sshPrivateKeyPath || null),
         passphrase: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled || createConnectionForm.sshAuthentication !== 'publicKey' ? null : (createConnectionForm.sshPassphrase || null),
       },
+      sqliteCipher: buildSqliteCipherPayload(),
     };
 
     if (editingConnectionId.value) {
@@ -1147,6 +1361,7 @@ async function testCurrentConnection() {
         privateKeyPath: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled || createConnectionForm.sshAuthentication !== 'publicKey' ? null : (createConnectionForm.sshPrivateKeyPath || null),
         passphrase: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled || createConnectionForm.sshAuthentication !== 'publicKey' ? null : (createConnectionForm.sshPassphrase || null),
       },
+      sqliteCipher: buildSqliteCipherPayload(),
     });
   }
   catch (error) {
@@ -1175,7 +1390,7 @@ onBeforeUnmount(() => {
     <div class="sidebar-toolbar compact-panel">
       <strong>连接与表</strong>
       <div class="sidebar-toolbar-actions">
-        <NButton size="tiny" tertiary type="primary" @click="openCreateConnectionDialog">新建连接</NButton>
+        <NButton size="small" tertiary type="primary" @click="openCreateConnectionDialog">新建连接</NButton>
       </div>
     </div>
 
@@ -1196,7 +1411,7 @@ onBeforeUnmount(() => {
           class="tree-root connection-card"
           :style="{ '--connection-accent': connection.accent }"
         >
-          <div class="tree-row tree-row-connection" @contextmenu.prevent.stop="openConnectionContextMenu($event, connection.id, connection.name)">
+          <div class="tree-row tree-row-connection" @contextmenu.prevent.stop="openConnectionContextMenu($event, connection.id, connection.name, connection.provider)">
             <button class="tree-toggle" type="button" @click="toggleConnection(connection.id)">
               <NIcon size="12"><component :is="treeToggleIcon(expandedConnections.includes(connection.id))" /></NIcon>
             </button>
@@ -1810,6 +2025,9 @@ onBeforeUnmount(() => {
       <button type="button" class="database-context-menu-item" @click.stop="openEditConnectionDialog()">
         编辑连接
       </button>
+      <button v-if="connectionContextMenu.provider === 'sqlite'" type="button" class="database-context-menu-item" @click.stop="openSqliteRekeyDialog()">
+        修改加密密码
+      </button>
       <button type="button" class="database-context-menu-item" @click.stop="openDeleteConnectionConfirm()">
         删除连接
       </button>
@@ -1868,41 +2086,257 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <NModal v-model:show="createConnectionVisible" preset="card" style="width: min(460px, 92vw)" :title="editingConnectionId ? '编辑连接' : '新建连接'">
+    <NModal v-model:show="createConnectionVisible" preset="card" style="width: min(500px, 94vw)" :title="editingConnectionId ? '编辑连接' : '新建连接'">
       <div class="connection-dialog-form">
         <NTabs v-model:value="activeConnectionSettingsTab" type="line" animated>
           <NTabPane name="general" tab="常规">
             <div class="connection-dialog-form connection-dialog-form-section">
-              <NInput v-model:value="createConnectionForm.name" placeholder="连接名称" />
-              <NSelect :value="createConnectionForm.provider" :options="providerOptions" @update:value="handleProviderChange($event)" />
-              <NSelect v-if="createConnectionForm.provider !== 'sqlite'" v-model:value="createConnectionForm.authentication" :options="authenticationOptions" />
-              <NInput v-model:value="createConnectionForm.host" :placeholder="createConnectionForm.provider === 'sqlite' ? '数据库文件路径，例如 C:\\data\\app.db' : '主机，例如 db.internal 或 127.0.0.1'" />
-              <NButton v-if="createConnectionForm.provider === 'sqlite'" tertiary type="primary" @click="browseSqliteDatabaseFile">选择或新建 SQLite 文件</NButton>
-              <NText v-if="createConnectionForm.provider === 'sqlite'" depth="3">SQLite 会把这里当作数据库文件路径；如果文件不存在，会在首次连接时自动创建。</NText>
-              <NInput v-if="createConnectionForm.provider !== 'sqlite'" v-model:value="createConnectionForm.port" placeholder="端口" inputmode="numeric" />
-              <NInput v-if="createConnectionForm.provider !== 'sqlite' && createConnectionForm.authentication !== 'windows'" v-model:value="createConnectionForm.username" placeholder="用户名" />
-              <NInput v-if="createConnectionForm.provider !== 'sqlite' && createConnectionForm.authentication !== 'windows'" v-model:value="createConnectionForm.password" type="password" show-password-on="click" :placeholder="editingConnectionId ? '密码，留空则保持不变' : '密码'" />
-              <NCheckbox v-if="createConnectionForm.provider === 'sqlserver'" v-model:checked="createConnectionForm.trustServerCertificate">信任服务器证书</NCheckbox>
+              <div class="connection-parameter-grid">
+                <div class="connection-parameter-row">
+                  <div class="connection-parameter-meta" title="连接显示名称。">
+                    <span class="connection-parameter-label">连接名称</span>
+                    <span class="connection-parameter-key">name</span>
+                  </div>
+                  <NInput v-model:value="createConnectionForm.name" class="connection-parameter-control" placeholder="输入连接名称" />
+                </div>
+
+                <div class="connection-parameter-row">
+                  <div class="connection-parameter-meta" title="数据库类型。">
+                    <span class="connection-parameter-label">数据库类型</span>
+                    <span class="connection-parameter-key">provider</span>
+                  </div>
+                  <NSelect :value="createConnectionForm.provider" :options="providerOptions" class="connection-parameter-control" @update:value="handleProviderChange($event)" />
+                </div>
+
+                <div v-if="createConnectionForm.provider !== 'sqlite'" class="connection-parameter-row">
+                  <div class="connection-parameter-meta" title="认证方式。SQL Server 支持 Windows 身份验证。">
+                    <span class="connection-parameter-label">认证方式</span>
+                    <span class="connection-parameter-key">authentication</span>
+                  </div>
+                  <NSelect v-model:value="createConnectionForm.authentication" :options="authenticationOptions" class="connection-parameter-control" />
+                </div>
+
+                <div class="connection-parameter-row">
+                  <div class="connection-parameter-meta" :title="createConnectionForm.provider === 'sqlite' ? 'SQLite 数据库文件路径。文件不存在时会在首次连接时创建。' : '数据库主机、IP 或数据源地址。'">
+                    <span class="connection-parameter-label">{{ createConnectionForm.provider === 'sqlite' ? '数据库文件' : '主机 / 数据源' }}</span>
+                    <span class="connection-parameter-key">{{ createConnectionForm.provider === 'sqlite' ? 'data_source' : 'host' }}</span>
+                  </div>
+                  <div v-if="createConnectionForm.provider === 'sqlite'" class="connection-dialog-inline-row connection-parameter-control">
+                    <NInput v-model:value="createConnectionForm.host" placeholder="例如 C:\\data\\app.db" />
+                    <NButton tertiary type="primary" @click="browseSqliteDatabaseFile">选择...</NButton>
+                  </div>
+                  <NInput v-else v-model:value="createConnectionForm.host" class="connection-parameter-control" placeholder="例如 db.internal 或 127.0.0.1" />
+                </div>
+
+                <div v-if="createConnectionForm.provider !== 'sqlite'" class="connection-parameter-row">
+                  <div class="connection-parameter-meta" title="数据库端口。">
+                    <span class="connection-parameter-label">端口</span>
+                    <span class="connection-parameter-key">port</span>
+                  </div>
+                  <NInput v-model:value="createConnectionForm.port" class="connection-parameter-control" placeholder="输入端口" inputmode="numeric" />
+                </div>
+
+                <div v-if="createConnectionForm.provider !== 'sqlite' && createConnectionForm.authentication !== 'windows'" class="connection-parameter-row">
+                  <div class="connection-parameter-meta" title="登录用户名。">
+                    <span class="connection-parameter-label">用户名</span>
+                    <span class="connection-parameter-key">username</span>
+                  </div>
+                  <NInput v-model:value="createConnectionForm.username" class="connection-parameter-control" placeholder="输入用户名" />
+                </div>
+
+                <div v-if="createConnectionForm.provider !== 'sqlite' && createConnectionForm.authentication !== 'windows'" class="connection-parameter-row">
+                  <div class="connection-parameter-meta" :title="editingConnectionId ? '编辑已有连接时留空会保持原密码。' : '数据库登录密码。'">
+                    <span class="connection-parameter-label">密码</span>
+                    <span class="connection-parameter-key">password</span>
+                  </div>
+                  <NInput v-model:value="createConnectionForm.password" class="connection-parameter-control" type="password" show-password-on="click" :placeholder="editingConnectionId ? '留空则保持原密码' : '输入密码'" />
+                </div>
+
+                <div v-if="createConnectionForm.provider === 'sqlserver'" class="connection-parameter-row connection-parameter-row-toggle">
+                  <div class="connection-parameter-meta" title="是否跳过 SQL Server 服务器证书验证。">
+                    <span class="connection-parameter-label">信任服务器证书</span>
+                    <span class="connection-parameter-key">trust_server_certificate</span>
+                  </div>
+                  <NCheckbox v-model:checked="createConnectionForm.trustServerCertificate">启用</NCheckbox>
+                </div>
+              </div>
+              <NText v-if="createConnectionForm.provider === 'sqlite'" depth="3">SQLite 文件会在首次连接时自动创建。</NText>
+            </div>
+          </NTabPane>
+          <NTabPane v-if="createConnectionForm.provider === 'sqlite'" name="cipher" tab="加密">
+            <div class="connection-dialog-form connection-dialog-form-section">
+              <div class="connection-parameter-row connection-parameter-row-toggle">
+                <div class="connection-parameter-meta" title="开启后按下面的参数使用 SQLCipher 打开或创建数据库。">
+                  <span class="connection-parameter-label">启用加密</span>
+                  <span class="connection-parameter-key">enabled</span>
+                </div>
+                <NCheckbox v-model:checked="createConnectionForm.sqliteCipherEnabled">启用 SQLCipher 加密</NCheckbox>
+              </div>
+              <NText depth="3">留空表示跟随默认值。</NText>
+              <template v-if="createConnectionForm.sqliteCipherEnabled">
+                <div class="connection-parameter-grid">
+                  <div class="connection-parameter-row">
+                    <div class="connection-parameter-meta" title="选择口令或十六进制原始密钥格式。">
+                      <span class="connection-parameter-label">密钥格式</span>
+                      <span class="connection-parameter-key">key_format</span>
+                    </div>
+                    <NSelect v-model:value="createConnectionForm.sqliteCipherKeyFormat" :options="sqliteCipherKeyFormatOptions" class="connection-parameter-control" />
+                  </div>
+
+                  <div class="connection-parameter-row">
+                    <div class="connection-parameter-meta" :title="editingConnectionId && createConnectionForm.sqliteCipherHasStoredPassword ? '编辑连接时留空会保留当前保存的密钥。' : createConnectionForm.sqliteCipherKeyFormat === 'hex' ? '请输入偶数长度的 HEX 字符串。' : '数据库加密口令。'">
+                      <span class="connection-parameter-label">密钥</span>
+                      <span class="connection-parameter-key">key</span>
+                    </div>
+                    <NInput
+                      v-model:value="createConnectionForm.sqliteCipherPassword"
+                      type="password"
+                      show-password-on="click"
+                      class="connection-parameter-control"
+                      :placeholder="editingConnectionId && createConnectionForm.sqliteCipherHasStoredPassword ? '留空则保持当前密钥' : createConnectionForm.sqliteCipherKeyFormat === 'hex' ? '例如 0011AABB' : '输入 SQLCipher 密码'"
+                    />
+                  </div>
+
+                  <div class="connection-parameter-row">
+                    <div class="connection-parameter-meta" title="页面大小。常见值为 4096。">
+                      <span class="connection-parameter-label">页面大小</span>
+                      <span class="connection-parameter-key">cipher_page_size</span>
+                    </div>
+                    <NInput v-model:value="createConnectionForm.sqliteCipherPageSize" class="connection-parameter-control" placeholder="例如 4096" inputmode="numeric" />
+                  </div>
+
+                  <div class="connection-parameter-row">
+                    <div class="connection-parameter-meta" title="KDF 迭代次数。常见值如 256000。">
+                      <span class="connection-parameter-label">KDF 迭代</span>
+                      <span class="connection-parameter-key">kdf_iter</span>
+                    </div>
+                    <NInput v-model:value="createConnectionForm.sqliteCipherKdfIter" class="connection-parameter-control" placeholder="例如 256000" inputmode="numeric" />
+                  </div>
+
+                  <div class="connection-parameter-row">
+                    <div class="connection-parameter-meta" title="兼容 SQLCipher 版本。常见值为 3 或 4。">
+                      <span class="connection-parameter-label">兼容版本</span>
+                      <span class="connection-parameter-key">cipher_compatibility</span>
+                    </div>
+                    <NInput v-model:value="createConnectionForm.sqliteCipherCompatibility" class="connection-parameter-control" placeholder="例如 4" inputmode="numeric" />
+                  </div>
+
+                  <div class="connection-parameter-row">
+                    <div class="connection-parameter-meta" title="明文头大小。通常保留默认即可。">
+                      <span class="connection-parameter-label">纯文本头</span>
+                      <span class="connection-parameter-key">cipher_plaintext_header_size</span>
+                    </div>
+                    <NInput v-model:value="createConnectionForm.sqliteCipherPlaintextHeaderSize" class="connection-parameter-control" placeholder="例如 0 或 32" inputmode="numeric" />
+                  </div>
+
+                  <div class="connection-parameter-row">
+                    <div class="connection-parameter-meta" title="读取数据库前跳过的头部字节数。普通 SQLite 留空即可。">
+                      <span class="connection-parameter-label">跳过字节</span>
+                      <span class="connection-parameter-key">skip_bytes</span>
+                    </div>
+                    <NInput v-model:value="createConnectionForm.sqliteCipherSkipBytes" class="connection-parameter-control" placeholder="例如 1024" inputmode="numeric" />
+                  </div>
+
+                  <div class="connection-parameter-row">
+                    <div class="connection-parameter-meta" title="是否启用页级 HMAC 校验。默认通常跟随 SQLCipher 版本。">
+                      <span class="connection-parameter-label">HMAC 校验</span>
+                      <span class="connection-parameter-key">cipher_use_hmac</span>
+                    </div>
+                    <NSelect v-model:value="createConnectionForm.sqliteCipherUseHmac" :options="sqliteCipherUseHmacOptions" class="connection-parameter-control" />
+                  </div>
+
+                  <div class="connection-parameter-row">
+                    <div class="connection-parameter-meta" title="派生密钥时使用的 KDF 算法。">
+                      <span class="connection-parameter-label">KDF 算法</span>
+                      <span class="connection-parameter-key">cipher_kdf_algorithm</span>
+                    </div>
+                    <NSelect v-model:value="createConnectionForm.sqliteCipherKdfAlgorithm" :options="sqliteCipherKdfAlgorithmOptions" class="connection-parameter-control" />
+                  </div>
+
+                  <div class="connection-parameter-row">
+                    <div class="connection-parameter-meta" title="页完整性校验使用的 HMAC 算法。">
+                      <span class="connection-parameter-label">HMAC 算法</span>
+                      <span class="connection-parameter-key">cipher_hmac_algorithm</span>
+                    </div>
+                    <NSelect v-model:value="createConnectionForm.sqliteCipherHmacAlgorithm" :options="sqliteCipherHmacAlgorithmOptions" class="connection-parameter-control" />
+                  </div>
+                </div>
+              </template>
             </div>
           </NTabPane>
           <NTabPane v-if="createConnectionForm.provider !== 'sqlite'" name="ssh" tab="SSH">
             <div class="connection-dialog-form connection-dialog-form-section">
-              <NCheckbox v-model:checked="createConnectionForm.sshEnabled">使用 SSH 隧道</NCheckbox>
+              <div class="connection-parameter-row connection-parameter-row-toggle">
+                <div class="connection-parameter-meta" title="开启后通过 SSH 跳板连接数据库。">
+                  <span class="connection-parameter-label">SSH 隧道</span>
+                  <span class="connection-parameter-key">ssh.enabled</span>
+                </div>
+                <NCheckbox v-model:checked="createConnectionForm.sshEnabled">启用</NCheckbox>
+              </div>
               <template v-if="createConnectionForm.sshEnabled">
-                <NInput v-model:value="createConnectionForm.sshHost" placeholder="SSH 主机，例如 jump.example.com" />
-                <NInput v-model:value="createConnectionForm.sshPort" placeholder="SSH 端口，默认 22" inputmode="numeric" />
-                <NInput v-model:value="createConnectionForm.sshUsername" placeholder="SSH 用户名" />
-                <NSelect v-model:value="createConnectionForm.sshAuthentication" :options="sshAuthenticationOptions" />
-                <NInput v-if="createConnectionForm.sshAuthentication === 'password'" v-model:value="createConnectionForm.sshPassword" type="password" show-password-on="click" :placeholder="editingConnectionId ? 'SSH 密码，留空则保持不变' : 'SSH 密码'" />
-                <template v-else>
-                  <div class="connection-dialog-inline-row">
-                    <NInput v-model:value="createConnectionForm.sshPrivateKeyPath" placeholder="私钥路径，留空自动尝试 ~/.ssh" />
-                    <NButton tertiary @click="browseSshPrivateKeyFile">选择...</NButton>
+                <div class="connection-parameter-grid">
+                  <div class="connection-parameter-row">
+                    <div class="connection-parameter-meta" title="SSH 跳板主机地址。">
+                      <span class="connection-parameter-label">SSH 主机</span>
+                      <span class="connection-parameter-key">ssh.host</span>
+                    </div>
+                    <NInput v-model:value="createConnectionForm.sshHost" class="connection-parameter-control" placeholder="例如 jump.example.com" />
                   </div>
-                  <NInput v-model:value="createConnectionForm.sshPassphrase" type="password" show-password-on="click" :placeholder="editingConnectionId ? '通行短语，留空则保持不变' : '通行短语，可选'" />
-                  <NText depth="3">若私钥路径留空，程序会自动尝试读取用户目录 `.ssh` 下的 `id_ed25519`、`id_rsa`、`id_ecdsa`、`id_dsa`。</NText>
-                </template>
-                <NText depth="3">数据库主机和端口会作为 SSH 目标地址使用。例如数据库主机填 127.0.0.1，就表示 SSH 服务器上的 127.0.0.1。</NText>
+
+                  <div class="connection-parameter-row">
+                    <div class="connection-parameter-meta" title="SSH 监听端口，默认 22。">
+                      <span class="connection-parameter-label">SSH 端口</span>
+                      <span class="connection-parameter-key">ssh.port</span>
+                    </div>
+                    <NInput v-model:value="createConnectionForm.sshPort" class="connection-parameter-control" placeholder="输入端口" inputmode="numeric" />
+                  </div>
+
+                  <div class="connection-parameter-row">
+                    <div class="connection-parameter-meta" title="SSH 登录用户名。">
+                      <span class="connection-parameter-label">SSH 用户名</span>
+                      <span class="connection-parameter-key">ssh.username</span>
+                    </div>
+                    <NInput v-model:value="createConnectionForm.sshUsername" class="connection-parameter-control" placeholder="输入用户名" />
+                  </div>
+
+                  <div class="connection-parameter-row">
+                    <div class="connection-parameter-meta" title="SSH 认证方式，可选密码或公钥。">
+                      <span class="connection-parameter-label">SSH 认证</span>
+                      <span class="connection-parameter-key">ssh.authentication</span>
+                    </div>
+                    <NSelect v-model:value="createConnectionForm.sshAuthentication" :options="sshAuthenticationOptions" class="connection-parameter-control" />
+                  </div>
+
+                  <div v-if="createConnectionForm.sshAuthentication === 'password'" class="connection-parameter-row">
+                    <div class="connection-parameter-meta" :title="editingConnectionId ? '编辑已有连接时留空会保持原 SSH 密码。' : 'SSH 登录密码。'">
+                      <span class="connection-parameter-label">SSH 密码</span>
+                      <span class="connection-parameter-key">ssh.password</span>
+                    </div>
+                    <NInput v-model:value="createConnectionForm.sshPassword" class="connection-parameter-control" type="password" show-password-on="click" :placeholder="editingConnectionId ? '留空则保持原密码' : '输入 SSH 密码'" />
+                  </div>
+
+                  <template v-else>
+                    <div class="connection-parameter-row">
+                      <div class="connection-parameter-meta" title="私钥文件路径；留空时会自动尝试用户目录下的默认密钥。">
+                        <span class="connection-parameter-label">私钥路径</span>
+                        <span class="connection-parameter-key">ssh.private_key_path</span>
+                      </div>
+                      <div class="connection-dialog-inline-row connection-parameter-control">
+                        <NInput v-model:value="createConnectionForm.sshPrivateKeyPath" placeholder="留空自动尝试默认私钥" />
+                        <NButton tertiary @click="browseSshPrivateKeyFile">选择...</NButton>
+                      </div>
+                    </div>
+
+                    <div class="connection-parameter-row">
+                      <div class="connection-parameter-meta" :title="editingConnectionId ? '编辑已有连接时留空会保持原通行短语。' : '私钥通行短语，可选。'">
+                        <span class="connection-parameter-label">通行短语</span>
+                        <span class="connection-parameter-key">ssh.passphrase</span>
+                      </div>
+                      <NInput v-model:value="createConnectionForm.sshPassphrase" class="connection-parameter-control" type="password" show-password-on="click" :placeholder="editingConnectionId ? '留空则保持原通行短语' : '可选'" />
+                    </div>
+                  </template>
+                </div>
+                <NText depth="3">数据库主机和端口会作为 SSH 目标地址使用。</NText>
               </template>
             </div>
           </NTabPane>
@@ -1941,6 +2375,65 @@ onBeforeUnmount(() => {
         <div class="connection-dialog-actions">
           <NButton tertiary @click="closeDeleteConnectionConfirm()">取消</NButton>
           <NButton type="error" @click="deleteConnectionConfirm && confirmDeleteConnection(deleteConnectionConfirm.connectionId)">删除</NButton>
+        </div>
+      </div>
+    </NModal>
+
+    <NModal v-model:show="sqliteRekeyVisible" preset="card" style="width: min(460px, 92vw)" title="修改 SQLite 加密密码" @update:show="handleSqliteRekeyVisibleChange">
+      <div class="connection-dialog-form connection-dialog-form-section">
+        <NText depth="3">{{ sqliteRekeyTarget?.currentEncrypted ? '留空当前密码时会使用已保存密钥。' : '提交后会把当前 SQLite 数据库转换成 SQLCipher。' }}</NText>
+        <template v-if="sqliteRekeyTarget?.currentEncrypted">
+          <div class="connection-parameter-grid">
+            <div class="connection-parameter-row">
+              <div class="connection-parameter-meta" title="当前数据库使用的密钥格式。">
+                <span class="connection-parameter-label">当前密钥格式</span>
+                <span class="connection-parameter-key">current.key_format</span>
+              </div>
+              <NSelect v-model:value="sqliteRekeyForm.currentKeyFormat" :options="sqliteCipherKeyFormatOptions" class="connection-parameter-control" />
+            </div>
+
+            <div class="connection-parameter-row">
+              <div class="connection-parameter-meta" title="当前数据库密码；留空时使用连接里已保存的密钥。">
+                <span class="connection-parameter-label">当前密码</span>
+                <span class="connection-parameter-key">current.key</span>
+              </div>
+              <NInput
+                v-model:value="sqliteRekeyForm.currentPassword"
+                class="connection-parameter-control"
+                type="password"
+                show-password-on="click"
+                placeholder="留空则使用已保存密钥"
+              />
+            </div>
+          </div>
+        </template>
+        <div class="connection-parameter-grid">
+          <div class="connection-parameter-row">
+            <div class="connection-parameter-meta" title="新的密钥格式。">
+              <span class="connection-parameter-label">新密钥格式</span>
+              <span class="connection-parameter-key">new.key_format</span>
+            </div>
+            <NSelect v-model:value="sqliteRekeyForm.newKeyFormat" :options="sqliteCipherKeyFormatOptions" class="connection-parameter-control" />
+          </div>
+
+          <div class="connection-parameter-row">
+            <div class="connection-parameter-meta" title="新的 SQLCipher 密钥或密码。">
+              <span class="connection-parameter-label">新密码</span>
+              <span class="connection-parameter-key">new.key</span>
+            </div>
+            <NInput
+              v-model:value="sqliteRekeyForm.newPassword"
+              class="connection-parameter-control"
+              type="password"
+              show-password-on="click"
+              :placeholder="sqliteRekeyForm.newKeyFormat === 'hex' ? '例如 0011AABB' : '输入新的 SQLCipher 密码'"
+            />
+          </div>
+        </div>
+        <NAlert v-if="sqliteRekeyError" type="warning" :show-icon="false">{{ sqliteRekeyError }}</NAlert>
+        <div class="connection-dialog-actions">
+          <NButton tertiary @click="closeSqliteRekeyDialog">取消</NButton>
+          <NButton type="primary" :loading="sqliteRekeyLoading" @click="submitSqliteRekey">更新密钥</NButton>
         </div>
       </div>
     </NModal>
@@ -2483,7 +2976,67 @@ onBeforeUnmount(() => {
 .connection-dialog-inline-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
+}
+
+.connection-parameter-grid {
+  display: grid;
+  gap: 6px;
+}
+
+.connection-parameter-row {
+  display: grid;
+  grid-template-columns: minmax(96px, 118px) minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+}
+
+.connection-parameter-row-toggle {
+  align-items: center;
+}
+
+.connection-parameter-meta {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.connection-parameter-label {
+  font-size: 14px;
+  line-height: 1.25;
+  font-weight: 700;
+  color: rgba(15, 23, 42, 0.9);
+  white-space: nowrap;
+}
+
+.connection-parameter-key {
+  display: none;
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 500;
+  color: rgba(100, 116, 139, 0.95);
+}
+
+.connection-parameter-control {
+  min-width: 0;
+}
+
+.connection-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+@media (max-width: 720px) {
+  .connection-parameter-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .connection-dialog-actions {
+    justify-content: stretch;
+    flex-wrap: wrap;
+  }
 }
 </style>

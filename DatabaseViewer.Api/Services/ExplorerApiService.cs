@@ -313,7 +313,19 @@ public sealed class ExplorerApiService
                 string.IsNullOrWhiteSpace(connection.SshTunnel.Host) ? null : connection.SshTunnel.Host,
                 connection.SshTunnel.Port > 0 ? connection.SshTunnel.Port : null,
                 string.IsNullOrWhiteSpace(connection.SshTunnel.Username) ? null : connection.SshTunnel.Username,
-                string.IsNullOrWhiteSpace(connection.SshTunnel.PrivateKeyPath) ? null : connection.SshTunnel.PrivateKeyPath));
+                string.IsNullOrWhiteSpace(connection.SshTunnel.PrivateKeyPath) ? null : connection.SshTunnel.PrivateKeyPath),
+            new SqliteCipherConfigResponse(
+                connection.SqliteCipher.Enabled,
+                !string.IsNullOrWhiteSpace(connection.SqliteCipher.Password),
+                ToSqliteCipherKeyFormatKey(connection.SqliteCipher.KeyFormat),
+                connection.SqliteCipher.PageSize,
+                connection.SqliteCipher.KdfIter,
+                connection.SqliteCipher.CipherCompatibility,
+                connection.SqliteCipher.PlaintextHeaderSize,
+                connection.SqliteCipher.SkipBytes,
+                connection.SqliteCipher.UseHmac,
+                string.IsNullOrWhiteSpace(connection.SqliteCipher.KdfAlgorithm) ? null : connection.SqliteCipher.KdfAlgorithm,
+                string.IsNullOrWhiteSpace(connection.SqliteCipher.HmacAlgorithm) ? null : connection.SqliteCipher.HmacAlgorithm));
     }
 
     public async Task TestConnectionAsync(TestConnectionRequest request)
@@ -330,13 +342,55 @@ public sealed class ExplorerApiService
             request.Username,
             request.Password,
             request.TrustServerCertificate,
-            request.SshTunnel), existing);
+            request.SshTunnel,
+            request.SqliteCipher), existing);
 
         var canConnect = await _queryService.TestConnectionAsync(definition);
         if (!canConnect)
         {
             throw BuildConnectionFailureException(definition);
         }
+    }
+
+    public async Task RekeySqliteDatabaseAsync(SqliteRekeyRequest request)
+    {
+        var connections = (await _connectionStore.LoadAsync()).ToList();
+        var existingIndex = connections.FindIndex(item => item.Id == request.ConnectionId);
+        if (existingIndex < 0)
+        {
+            throw new InvalidOperationException("Connection not found.");
+        }
+
+        var existing = connections[existingIndex];
+        if (existing.ProviderType != DatabaseProviderType.Sqlite)
+        {
+            throw new InvalidOperationException("只有 SQLite 连接支持修改加密密钥。", null);
+        }
+
+        if (string.IsNullOrWhiteSpace(request.NewPassword))
+        {
+            throw new InvalidOperationException("新的 SQLCipher 密码不能为空。", null);
+        }
+
+        var currentConnection = CloneConnectionDefinition(existing);
+        if (!string.IsNullOrWhiteSpace(request.CurrentPassword))
+        {
+            currentConnection.SqliteCipher = CloneSqliteCipherOptions(existing.SqliteCipher);
+            currentConnection.SqliteCipher.Enabled = true;
+            currentConnection.SqliteCipher.Password = request.CurrentPassword.Trim();
+            currentConnection.SqliteCipher.KeyFormat = ParseSqliteCipherKeyFormat(request.CurrentKeyFormat);
+        }
+
+        var updated = CloneConnectionDefinition(existing);
+        updated.SqliteCipher = CloneSqliteCipherOptions(existing.SqliteCipher);
+        updated.SqliteCipher.Enabled = true;
+        updated.SqliteCipher.Password = request.NewPassword.Trim();
+        updated.SqliteCipher.KeyFormat = ParseSqliteCipherKeyFormat(request.NewKeyFormat);
+
+        await _queryService.RekeySqliteDatabaseAsync(currentConnection, updated.SqliteCipher);
+
+        connections[existingIndex] = updated;
+        await _connectionStore.SaveAsync(connections);
     }
 
     public async Task<ConnectionNodeDto> UpdateConnectionAsync(Guid connectionId, CreateConnectionRequest request)
@@ -408,7 +462,7 @@ public sealed class ExplorerApiService
             schema.Table.SchemaName,
             schema.Table.TableName,
             schema.Table.Comment,
-            schema.Table.RowCount,
+            page.RowCount ?? schema.Table.RowCount,
             schema.PrimaryKeys,
             schema.Columns.Select(MapColumn).ToArray(),
             schema.Columns.Where(column => column.ForeignKey is not null).Select(column => new ForeignKeyDto(
@@ -937,6 +991,9 @@ public sealed class ExplorerApiService
             ? string.Empty
             : request.Password ?? existing?.Password ?? string.Empty;
 
+        var sqliteCipherRequest = request.SqliteCipher ?? new SqliteCipherRequest(false, null, null, null, null, null, null, null, null, null, null);
+        var sqliteCipher = ResolveSqliteCipherOptions(providerType, sqliteCipherRequest, existing?.SqliteCipher);
+
         var sshTunnel = request.SshTunnel ?? new SshTunnelRequest(false, "password", null, null, null, null, null, null);
         var sshAuthenticationMode = ParseSshAuthenticationMode(sshTunnel.Authentication);
 
@@ -996,6 +1053,7 @@ public sealed class ExplorerApiService
             Port = request.Port ?? GetDefaultPort(providerType),
             Username = resolvedUsername,
             Password = resolvedPassword,
+            SqliteCipher = sqliteCipher,
             TrustServerCertificate = request.TrustServerCertificate,
             SshTunnel = new SshTunnelOptions
             {
@@ -1033,11 +1091,159 @@ public sealed class ExplorerApiService
         return value == SshAuthenticationMode.PublicKey ? "publicKey" : "password";
     }
 
+    private static SqliteCipherOptions ResolveSqliteCipherOptions(DatabaseProviderType providerType, SqliteCipherRequest request, SqliteCipherOptions? existing)
+    {
+        if (providerType != DatabaseProviderType.Sqlite)
+        {
+            return new SqliteCipherOptions();
+        }
+
+        if (!request.Enabled)
+        {
+            return new SqliteCipherOptions();
+        }
+
+        var resolvedPassword = !string.IsNullOrWhiteSpace(request.Password)
+            ? request.Password.Trim()
+            : existing?.Password ?? string.Empty;
+
+        if (string.IsNullOrWhiteSpace(resolvedPassword))
+        {
+            throw new InvalidOperationException("启用 SQLCipher 时必须提供密码或十六进制密钥。", null);
+        }
+
+        var keyFormat = ParseSqliteCipherKeyFormat(request.KeyFormat);
+        var normalizedKdfAlgorithm = NormalizeSqliteCipherAlgorithm(request.KdfAlgorithm, "cipher_kdf_algorithm",
+        [
+            "PBKDF2_HMAC_SHA1",
+            "PBKDF2_HMAC_SHA256",
+            "PBKDF2_HMAC_SHA512",
+        ]);
+        var normalizedHmacAlgorithm = NormalizeSqliteCipherAlgorithm(request.HmacAlgorithm, "cipher_hmac_algorithm",
+        [
+            "HMAC_SHA1",
+            "HMAC_SHA256",
+            "HMAC_SHA512",
+        ]);
+
+        ValidateSqliteCipherNumber(request.PageSize, "cipher_page_size", minimumValue: 512);
+        ValidateSqliteCipherNumber(request.KdfIter, "kdf_iter", minimumValue: 1);
+        ValidateSqliteCipherNumber(request.CipherCompatibility, "cipher_compatibility", minimumValue: 1, maximumValue: 4);
+        ValidateSqliteCipherNumber(request.PlaintextHeaderSize, "cipher_plaintext_header_size", minimumValue: 0);
+        ValidateSqliteCipherNumber(request.SkipBytes, "skip_bytes", minimumValue: 0);
+
+        return new SqliteCipherOptions
+        {
+            Enabled = true,
+            Password = resolvedPassword,
+            KeyFormat = keyFormat,
+            PageSize = request.PageSize,
+            KdfIter = request.KdfIter,
+            CipherCompatibility = request.CipherCompatibility,
+            PlaintextHeaderSize = request.PlaintextHeaderSize,
+            SkipBytes = request.SkipBytes,
+            UseHmac = request.UseHmac,
+            KdfAlgorithm = normalizedKdfAlgorithm,
+            HmacAlgorithm = normalizedHmacAlgorithm,
+        };
+    }
+
+    private static void ValidateSqliteCipherNumber(int? value, string optionName, int minimumValue, int? maximumValue = null)
+    {
+        if (!value.HasValue)
+        {
+            return;
+        }
+
+        if (value.Value < minimumValue || (maximumValue.HasValue && value.Value > maximumValue.Value))
+        {
+            throw new InvalidOperationException($"SQLite 加密参数 {optionName} 超出允许范围。", null);
+        }
+    }
+
+    private static string NormalizeSqliteCipherAlgorithm(string? value, string optionName, IReadOnlyCollection<string> allowedValues)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var normalizedValue = value.Trim().ToUpperInvariant();
+        if (!allowedValues.Contains(normalizedValue, StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException($"SQLite 加密参数 {optionName} 不受支持。", null);
+        }
+
+        return normalizedValue;
+    }
+
+    private static SqliteCipherKeyFormat ParseSqliteCipherKeyFormat(string? value)
+    {
+        return value?.ToLowerInvariant() switch
+        {
+            "hex" => SqliteCipherKeyFormat.Hex,
+            _ => SqliteCipherKeyFormat.Passphrase,
+        };
+    }
+
+    private static ConnectionDefinition CloneConnectionDefinition(ConnectionDefinition source)
+    {
+        return new ConnectionDefinition
+        {
+            Id = source.Id,
+            Name = source.Name,
+            ProviderType = source.ProviderType,
+            AuthenticationMode = source.AuthenticationMode,
+            Host = source.Host,
+            Port = source.Port,
+            Username = source.Username,
+            Password = source.Password,
+            TrustServerCertificate = source.TrustServerCertificate,
+            SqliteCipher = CloneSqliteCipherOptions(source.SqliteCipher),
+            SshTunnel = new SshTunnelOptions
+            {
+                Enabled = source.SshTunnel.Enabled,
+                AuthenticationMode = source.SshTunnel.AuthenticationMode,
+                Host = source.SshTunnel.Host,
+                Port = source.SshTunnel.Port,
+                Username = source.SshTunnel.Username,
+                Password = source.SshTunnel.Password,
+                PrivateKeyPath = source.SshTunnel.PrivateKeyPath,
+                Passphrase = source.SshTunnel.Passphrase,
+            },
+        };
+    }
+
+    private static SqliteCipherOptions CloneSqliteCipherOptions(SqliteCipherOptions source)
+    {
+        return new SqliteCipherOptions
+        {
+            Enabled = source.Enabled,
+            Password = source.Password,
+            KeyFormat = source.KeyFormat,
+            PageSize = source.PageSize,
+            KdfIter = source.KdfIter,
+            CipherCompatibility = source.CipherCompatibility,
+            PlaintextHeaderSize = source.PlaintextHeaderSize,
+            SkipBytes = source.SkipBytes,
+            UseHmac = source.UseHmac,
+            KdfAlgorithm = source.KdfAlgorithm,
+            HmacAlgorithm = source.HmacAlgorithm,
+        };
+    }
+
+    private static string ToSqliteCipherKeyFormatKey(SqliteCipherKeyFormat value)
+    {
+        return value == SqliteCipherKeyFormat.Hex ? "hex" : "passphrase";
+    }
+
     private static InvalidOperationException BuildConnectionFailureException(ConnectionDefinition definition)
     {
         if (definition.ProviderType == DatabaseProviderType.Sqlite)
         {
-            return new InvalidOperationException("SQLite 连接失败，请检查数据库文件路径以及目录读写权限。新数据库文件会在首次连接时自动创建。", null);
+            return definition.SqliteCipher.Enabled
+                ? new InvalidOperationException("SQLite / SQLCipher 连接失败，请检查数据库文件路径、密码、密钥格式以及加密参数。新数据库文件会在首次连接时自动创建。", null)
+                : new InvalidOperationException("SQLite 连接失败，请检查数据库文件路径以及目录读写权限。新数据库文件会在首次连接时自动创建。", null);
         }
 
         return new InvalidOperationException("连接失败，请检查地址、账号、密码和认证方式。\n如果是 SQL Server 本地实例，可尝试 .\\SQLEXPRESS 或 localhost。\n如果使用 Windows 身份验证，请将认证方式切换为 Windows。");

@@ -12,5 +12,7 @@ public sealed class TableDataResult
 
     public required int PageSize { get; init; }
 
+    public int? RowCount { get; init; }
+
     public bool HasMoreRows { get; init; }
 }
