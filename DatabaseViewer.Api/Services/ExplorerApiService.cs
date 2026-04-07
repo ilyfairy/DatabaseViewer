@@ -14,6 +14,7 @@ namespace DatabaseViewer.Api.Services;
 
 public sealed class ExplorerApiService
 {
+    private readonly ApplicationSettingsStore _applicationSettingsStore;
     private readonly ConnectionStore _connectionStore;
     private readonly DatabaseMetadataService _metadataService;
     private readonly DatabaseQueryService _queryService;
@@ -21,15 +22,54 @@ public sealed class ExplorerApiService
     private readonly Dictionary<string, IReadOnlyList<DbTableInfo>> _tablesCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, IReadOnlyList<DbTableInfo>> _viewsCache = new(StringComparer.OrdinalIgnoreCase);
 
-    public ExplorerApiService(ConnectionStore connectionStore, DatabaseMetadataService metadataService, DatabaseQueryService queryService)
+    public ExplorerApiService(ApplicationSettingsStore applicationSettingsStore, ConnectionStore connectionStore, DatabaseMetadataService metadataService, DatabaseQueryService queryService)
     {
+        _applicationSettingsStore = applicationSettingsStore;
         _connectionStore = connectionStore;
         _metadataService = metadataService;
         _queryService = queryService;
     }
 
+    public async Task<ExplorerSettingsDto> GetSettingsAsync()
+    {
+        var settings = await _applicationSettingsStore.LoadAsync();
+        return new ExplorerSettingsDto(settings.ShowTableRowCounts);
+    }
+
+    public async Task<ExplorerSettingsDto> UpdateSettingsAsync(UpdateExplorerSettingsRequest request)
+    {
+        var settings = new ApplicationSettings
+        {
+            ShowTableRowCounts = request.ShowTableRowCounts,
+            WorkspaceLayout = (await _applicationSettingsStore.LoadAsync()).WorkspaceLayout,
+        };
+
+        await _applicationSettingsStore.SaveAsync(settings);
+        InvalidateMetadataCaches();
+        return new ExplorerSettingsDto(settings.ShowTableRowCounts);
+    }
+
+    public async Task<WorkspaceLayoutDto> GetWorkspaceLayoutAsync()
+    {
+        var settings = await _applicationSettingsStore.LoadAsync();
+        return new WorkspaceLayoutDto(settings.WorkspaceLayout.SidebarPaneSize, settings.WorkspaceLayout.DetailPaneSize);
+    }
+
+    public async Task<WorkspaceLayoutDto> UpdateWorkspaceLayoutAsync(UpdateWorkspaceLayoutRequest request)
+    {
+        var settings = await _applicationSettingsStore.LoadAsync();
+        settings.WorkspaceLayout = new WorkspaceLayoutSettings
+        {
+            SidebarPaneSize = request.SidebarPaneSize,
+            DetailPaneSize = request.DetailPaneSize,
+        };
+        await _applicationSettingsStore.SaveAsync(settings);
+        return new WorkspaceLayoutDto(settings.WorkspaceLayout.SidebarPaneSize, settings.WorkspaceLayout.DetailPaneSize);
+    }
+
     public async Task<BootstrapResponse> GetBootstrapAsync()
     {
+        var settings = await _applicationSettingsStore.LoadAsync();
         var connections = await _connectionStore.LoadAsync();
         var result = new List<ConnectionNodeDto>();
 
@@ -44,7 +84,7 @@ public sealed class ExplorerApiService
                     IReadOnlyList<DbTableInfo> tables = Array.Empty<DbTableInfo>();
                     try
                     {
-                        tables = await _metadataService.GetTablesAsync(connection, database);
+                        tables = await _metadataService.GetTablesAsync(connection, database, includeSystemObjects: false, settings.ShowTableRowCounts);
                         _tablesCache[BuildTablesCacheKey(connection.Id, database)] = tables;
                     }
                     catch
@@ -443,13 +483,14 @@ public sealed class ExplorerApiService
 
     public async Task<TablePageResponse> GetTablePageAsync(string tableKey, int offset, int pageSize, string? sortColumn, string? sortDirection)
     {
+        var settings = await _applicationSettingsStore.LoadAsync();
         var context = await ResolveContextAsync(tableKey);
         var schema = await GetSchemaAsync(context.Connection, context.Table);
         var resolvedSort = ResolveSort(schema, sortColumn, sortDirection);
         TableDataResult page;
         try
         {
-            page = await _queryService.GetTablePageAsync(context.Connection, schema, offset, pageSize, resolvedSort.Column, resolvedSort.Descending);
+            page = await _queryService.GetTablePageAsync(context.Connection, schema, offset, pageSize, resolvedSort.Column, resolvedSort.Descending, settings.ShowTableRowCounts);
         }
         catch (DbException ex)
         {
@@ -462,7 +503,7 @@ public sealed class ExplorerApiService
             schema.Table.SchemaName,
             schema.Table.TableName,
             schema.Table.Comment,
-            page.RowCount ?? schema.Table.RowCount,
+            settings.ShowTableRowCounts ? page.RowCount ?? schema.Table.RowCount : null,
             schema.PrimaryKeys,
             schema.Columns.Select(MapColumn).ToArray(),
             schema.Columns.Where(column => column.ForeignKey is not null).Select(column => new ForeignKeyDto(
@@ -1722,9 +1763,17 @@ public sealed class ExplorerApiService
             return cached;
         }
 
-        var tables = await _metadataService.GetTablesAsync(connection, database);
+        var settings = await _applicationSettingsStore.LoadAsync();
+        var tables = await _metadataService.GetTablesAsync(connection, database, includeSystemObjects: false, settings.ShowTableRowCounts);
         _tablesCache[cacheKey] = tables;
         return tables;
+    }
+
+    private void InvalidateMetadataCaches()
+    {
+        _schemaCache.Clear();
+        _tablesCache.Clear();
+        _viewsCache.Clear();
     }
     private async Task<IReadOnlyList<DbTableInfo>> EnsureViewsAsync(ConnectionDefinition connection, string database)
     {

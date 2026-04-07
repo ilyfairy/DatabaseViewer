@@ -18,43 +18,53 @@ public sealed class ConnectionPersistenceModel
 
     public string EncryptedPassword { get; set; } = string.Empty;
 
-    public bool SqliteCipherEnabled { get; set; }
-
-    public string EncryptedSqliteCipherPassword { get; set; } = string.Empty;
-
-    public SqliteCipherKeyFormat SqliteCipherKeyFormat { get; set; } = SqliteCipherKeyFormat.Passphrase;
-
-    public int? SqliteCipherPageSize { get; set; }
-
-    public int? SqliteCipherKdfIter { get; set; }
-
-    public int? SqliteCipherCompatibility { get; set; }
-
-    public int? SqliteCipherPlaintextHeaderSize { get; set; }
-
-    public int? SqliteCipherSkipBytes { get; set; }
-
-    public bool? SqliteCipherUseHmac { get; set; }
-
-    public string SqliteCipherKdfAlgorithm { get; set; } = string.Empty;
-
-    public string SqliteCipherHmacAlgorithm { get; set; } = string.Empty;
-
     public bool TrustServerCertificate { get; set; }
 
-    public bool SshEnabled { get; set; }
+    public ConnectionSqliteCipherPersistenceModel SqliteCipher { get; set; } = new();
 
-    public SshAuthenticationMode SshAuthenticationMode { get; set; }
+    public ConnectionSshPersistenceModel Ssh { get; set; } = new();
+}
 
-    public string SshHost { get; set; } = string.Empty;
+public sealed class ConnectionSqliteCipherPersistenceModel
+{
+    public bool Enabled { get; set; }
 
-    public int SshPort { get; set; } = 22;
+    public string EncryptedPassword { get; set; } = string.Empty;
 
-    public string SshUsername { get; set; } = string.Empty;
+    public SqliteCipherKeyFormat KeyFormat { get; set; } = SqliteCipherKeyFormat.Passphrase;
 
-    public string EncryptedSshPassword { get; set; } = string.Empty;
+    public int? PageSize { get; set; }
 
-    public string SshPrivateKeyPath { get; set; } = string.Empty;
+    public int? KdfIter { get; set; }
 
-    public string EncryptedSshPassphrase { get; set; } = string.Empty;
+    public int? CipherCompatibility { get; set; }
+
+    public int? PlaintextHeaderSize { get; set; }
+
+    public int? SkipBytes { get; set; }
+
+    public bool? UseHmac { get; set; }
+
+    public string KdfAlgorithm { get; set; } = string.Empty;
+
+    public string HmacAlgorithm { get; set; } = string.Empty;
+}
+
+public sealed class ConnectionSshPersistenceModel
+{
+    public bool Enabled { get; set; }
+
+    public SshAuthenticationMode AuthenticationMode { get; set; }
+
+    public string Host { get; set; } = string.Empty;
+
+    public int Port { get; set; } = 22;
+
+    public string Username { get; set; } = string.Empty;
+
+    public string EncryptedPassword { get; set; } = string.Empty;
+
+    public string PrivateKeyPath { get; set; } = string.Empty;
+
+    public string EncryptedPassphrase { get; set; } = string.Empty;
 }

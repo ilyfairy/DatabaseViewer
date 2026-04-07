@@ -46,13 +46,13 @@ public sealed class DatabaseQueryService
         await validateCommand.ExecuteScalarAsync();
     }
 
-    public async Task<TableDataResult> GetTablePageAsync(ConnectionDefinition definition, TableSchema schema, int offset, int pageSize, string? sortColumn = null, bool sortDescending = false)
+    public async Task<TableDataResult> GetTablePageAsync(ConnectionDefinition definition, TableSchema schema, int offset, int pageSize, string? sortColumn = null, bool sortDescending = false, bool includeRowCount = true)
     {
         await using var connection = DbConnectionFactory.Create(definition, schema.Table.DatabaseName);
         await connection.OpenAsync();
 
-        var resolvedRowCount = schema.Table.RowCount;
-        if (!resolvedRowCount.HasValue)
+        var resolvedRowCount = includeRowCount ? schema.Table.RowCount : null;
+        if (includeRowCount && !resolvedRowCount.HasValue)
         {
             resolvedRowCount = await GetTableRowCountAsync(connection, definition.ProviderType, schema.Table);
             schema.Table.RowCount = resolvedRowCount;

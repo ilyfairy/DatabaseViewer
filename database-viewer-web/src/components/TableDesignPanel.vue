@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ChevronDown, OverflowMenuHorizontal } from '@vicons/carbon';
-import { NAlert, NButton, NCheckbox, NEmpty, NIcon, NInput, NModal, NSelect, NSpin, NTag } from 'naive-ui';
+import { NAlert, NButton, NCheckbox, NEmpty, NIcon, NInput, NModal, NSelect, NSpin, NTabPane, NTabs, NTag } from 'naive-ui';
 import { useExplorerStore } from '../stores/explorer';
 import type { TableColumn, TableDesignSection, TableDesignWorkspaceTab, ProviderType } from '../types/explorer';
 
@@ -1197,19 +1197,23 @@ watch(sectionTabs, (tabs) => {
         当前对象是视图。这里提供对象结构浏览，不提供字段级修改。
       </NAlert>
 
-      <div v-if="sectionTabs.length" class="table-design-subtabs compact-panel">
-        <button
-          v-for="item in sectionTabs"
-          :key="item.key"
-          type="button"
-          class="table-design-subtab"
-          :class="{ 'table-design-subtab-active': selectedSection === item.key }"
-          @click="focusSection(item.key)"
-        >
-          <span>{{ item.label }}</span>
-          <span class="table-design-subtab-count">{{ item.count }}</span>
-        </button>
-      </div>
+      <NTabs
+        v-if="sectionTabs.length"
+        class="table-design-subtabs compact-panel"
+        type="line"
+        size="small"
+        :value="selectedSection"
+        @update:value="focusSection"
+      >
+        <NTabPane v-for="item in sectionTabs" :key="item.key" :name="item.key" display-directive="show:lazy">
+          <template #tab>
+            <span class="table-design-subtab-meta">
+              <span>{{ item.label }}</span>
+              <span class="table-design-subtab-count">{{ item.count }}</span>
+            </span>
+          </template>
+        </NTabPane>
+      </NTabs>
 
       <NAlert v-if="designStatus.error" type="warning" :show-icon="false" class="panel-inline-alert">
         {{ designStatus.error }}
@@ -1534,31 +1538,24 @@ watch(sectionTabs, (tabs) => {
 }
 
 .table-design-subtabs {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 6px;
-  overflow-x: auto;
+  padding: 2px 6px 0;
+
+  :deep(.n-tabs-nav) {
+    margin-bottom: 0;
+  }
+
+  :deep(.n-tabs-tab) {
+    padding-left: 4px;
+    padding-right: 4px;
+  }
 }
 
-.table-design-subtab {
+.table-design-subtab-meta {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 10px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 999px;
-  background: rgba(248, 250, 252, 0.96);
-  color: #334155;
   font-size: 11px;
   font-weight: 700;
-  cursor: pointer;
-}
-
-.table-design-subtab-active {
-  background: #ffffff;
-  border-color: rgba(37, 99, 235, 0.32);
-  color: #1d4ed8;
 }
 
 .table-design-subtab-count {

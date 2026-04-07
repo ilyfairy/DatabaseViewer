@@ -33,14 +33,15 @@ public sealed class DatabaseMetadataService
         };
     }
 
-    public async Task<IReadOnlyList<DbTableInfo>> GetTablesAsync(ConnectionDefinition connection, string databaseName, bool includeSystemObjects = false)
+    public async Task<IReadOnlyList<DbTableInfo>> GetTablesAsync(ConnectionDefinition connection, string databaseName, bool includeSystemObjects = false, bool includeRowCounts = true)
     {
         await using var db = DbConnectionFactory.Create(connection, databaseName);
         await db.OpenAsync();
 
         if (connection.ProviderType == DatabaseProviderType.SqlServer)
         {
-            var sql = @"
+            var sql = includeRowCounts
+                ? @"
                 SELECT
                     s.name AS SchemaName,
                     t.name AS TableName,
@@ -55,6 +56,20 @@ public sealed class DatabaseMetadataService
                 LEFT JOIN sys.partitions p ON p.object_id = t.object_id
                 WHERE (@includeSystemObjects = 1 OR t.is_ms_shipped = 0)
                 GROUP BY s.name, t.name, ep.value
+                ORDER BY s.name, t.name;"
+                : @"
+                SELECT
+                    s.name AS SchemaName,
+                    t.name AS TableName,
+                    CAST(ep.value AS nvarchar(4000)) AS Comment,
+                    CAST(NULL AS int) AS TableRowCount
+                FROM sys.tables t
+                INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
+                LEFT JOIN sys.extended_properties ep
+                    ON ep.major_id = t.object_id
+                    AND ep.minor_id = 0
+                    AND ep.name = 'MS_Description'
+                WHERE (@includeSystemObjects = 1 OR t.is_ms_shipped = 0)
                 ORDER BY s.name, t.name;";
 
             var rows = await db.QueryAsync(sql, new { includeSystemObjects });
@@ -71,7 +86,8 @@ public sealed class DatabaseMetadataService
 
         if (connection.ProviderType == DatabaseProviderType.PostgreSql)
         {
-            var postgreSqlRows = await db.QueryAsync(@"
+            var postgreSqlSql = includeRowCounts
+                ? @"
                 SELECT
                     t.table_schema AS ""SchemaName"",
                     t.table_name AS ""TableName"",
@@ -83,7 +99,22 @@ public sealed class DatabaseMetadataService
                 WHERE t.table_catalog = @databaseName
                   AND t.table_type = 'BASE TABLE'
                   AND t.table_schema NOT IN ('pg_catalog', 'information_schema')
-                ORDER BY t.table_schema, t.table_name;", new { databaseName });
+                                ORDER BY t.table_schema, t.table_name;"
+                                : @"
+                                SELECT
+                                        t.table_schema AS ""SchemaName"",
+                                        t.table_name AS ""TableName"",
+                                        obj_description(c.oid, 'pg_class') AS ""Comment"",
+                                        CAST(NULL AS integer) AS ""TableRowCount""
+                                FROM information_schema.tables t
+                                INNER JOIN pg_namespace n ON n.nspname = t.table_schema
+                                INNER JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = t.table_name
+                                WHERE t.table_catalog = @databaseName
+                                    AND t.table_type = 'BASE TABLE'
+                                    AND t.table_schema NOT IN ('pg_catalog', 'information_schema')
+                                ORDER BY t.table_schema, t.table_name;";
+
+                        var postgreSqlRows = await db.QueryAsync(postgreSqlSql, new { databaseName });
 
             return postgreSqlRows.Select(row => new DbTableInfo
             {
@@ -119,11 +150,19 @@ public sealed class DatabaseMetadataService
             }).ToArray();
         }
 
-        var mySqlRows = await db.QueryAsync(@"
+        var mySqlSql = includeRowCounts
+            ? @"
             SELECT TABLE_NAME AS TableName, TABLE_COMMENT AS Comment, TABLE_ROWS AS TableRowCount
             FROM information_schema.TABLES
             WHERE TABLE_SCHEMA = @databaseName
-            ORDER BY TABLE_NAME;", new { databaseName });
+            ORDER BY TABLE_NAME;"
+            : @"
+            SELECT TABLE_NAME AS TableName, TABLE_COMMENT AS Comment, NULL AS TableRowCount
+            FROM information_schema.TABLES
+            WHERE TABLE_SCHEMA = @databaseName
+            ORDER BY TABLE_NAME;";
+
+        var mySqlRows = await db.QueryAsync(mySqlSql, new { databaseName });
 
         return mySqlRows.Select(row => new DbTableInfo
         {

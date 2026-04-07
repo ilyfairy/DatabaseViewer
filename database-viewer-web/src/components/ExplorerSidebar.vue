@@ -467,7 +467,9 @@ function databaseObjectSummary(connectionId: string, database: string) {
 function objectRowMeta(object: TableSummary) {
   return object.objectType === 'view'
     ? '视图'
-    : `${store.tableRowCountLabel(object.key) ?? '未统计'} rows`;
+    : store.showTableRowCounts
+      ? `${store.tableRowCountLabel(object.key) ?? '未统计'} rows`
+      : null;
 }
 
 function showForeignKeyGroup(object: TableSummary) {
@@ -1481,7 +1483,7 @@ onBeforeUnmount(() => {
                           <NIcon class="tree-icon tree-icon-table" size="12"><component :is="objectTreeIcon(table)" /></NIcon>
                           <span class="tree-label-stack">
                             <span class="tree-label-main">{{ table.schema ? `${table.schema}.${table.name}` : table.name }}</span>
-                            <span class="tree-label-meta">{{ objectRowMeta(table) }}</span>
+                            <span v-if="objectRowMeta(table)" class="tree-label-meta">{{ objectRowMeta(table) }}</span>
                           </span>
                         </button>
                       </div>
@@ -1629,7 +1631,7 @@ onBeforeUnmount(() => {
                           <NIcon class="tree-icon tree-icon-table" size="12"><component :is="objectTreeIcon(view)" /></NIcon>
                           <span class="tree-label-stack">
                             <span class="tree-label-main">{{ view.schema ? `${view.schema}.${view.name}` : view.name }}</span>
-                            <span class="tree-label-meta">{{ objectRowMeta(view) }}</span>
+                            <span v-if="objectRowMeta(view)" class="tree-label-meta">{{ objectRowMeta(view) }}</span>
                           </span>
                         </button>
                       </div>
@@ -2606,12 +2608,12 @@ onBeforeUnmount(() => {
   border-radius: var(--radius-sm);
 
   &-active {
-    background: rgba(219, 234, 254, 0.28);
+    background: rgba(219, 234, 254, 0.35);
     border-radius: var(--radius-sm);
   }
 
   &:hover {
-    background: rgba(241, 245, 249, 0.72);
+    background: rgba(219, 234, 254, 0.35);
 
     .tree-node-main,
     .tree-toggle {
@@ -2700,7 +2702,7 @@ onBeforeUnmount(() => {
   transition: background 120ms ease, box-shadow 120ms ease, color 120ms ease;
 
   &:hover {
-    background: rgba(219, 234, 254, 0.7);
+    background: rgba(219, 234, 254, 0.35);
   }
 }
 

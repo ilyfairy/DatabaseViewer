@@ -34,6 +34,7 @@ public static class DesktopApiHost
 
         builder.WebHost.UseUrls(baseUrl);
         builder.Services.AddSingleton<WindowsDataProtector>();
+        builder.Services.AddSingleton<ApplicationSettingsStore>();
         builder.Services.AddSingleton<ConnectionStore>();
         builder.Services.AddSingleton<DatabaseMetadataService>();
         builder.Services.AddSingleton<DatabaseQueryService>();
@@ -42,6 +43,10 @@ public static class DesktopApiHost
         var app = builder.Build();
         var explorer = app.Services.GetRequiredService<ExplorerApiService>();
 
+        app.MapGet("/api/explorer/settings", async () => await explorer.GetSettingsAsync());
+        app.MapPut("/api/explorer/settings", async (UpdateExplorerSettingsRequest request) => await explorer.UpdateSettingsAsync(request));
+        app.MapGet("/api/explorer/workspace-layout", async () => await explorer.GetWorkspaceLayoutAsync());
+        app.MapPut("/api/explorer/workspace-layout", async (UpdateWorkspaceLayoutRequest request) => await explorer.UpdateWorkspaceLayoutAsync(request));
         app.MapGet("/api/explorer/bootstrap", async () => await explorer.GetBootstrapAsync());
         app.MapGet("/api/explorer/connections/{connectionId:guid}", async (Guid connectionId) => await explorer.GetConnectionConfigAsync(connectionId));
         app.MapGet("/api/explorer/database-graph", async (Guid connectionId, string database) =>

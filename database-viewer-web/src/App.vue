@@ -8,6 +8,7 @@ import 'splitpanes/dist/splitpanes.css';
 // Heavy components loaded lazily — not rendered on initial paint
 const DatabaseOverviewGraph = defineAsyncComponent(() => import('./components/DatabaseOverviewGraph.vue'));
 const CatalogObjectPanel = defineAsyncComponent(() => import('./components/CatalogObjectPanel.vue'));
+const SettingsPanel = defineAsyncComponent(() => import('./components/SettingsPanel.vue'));
 const SqlPanel = defineAsyncComponent(() => import('./components/SqlPanel.vue'));
 const TableMockDataPanel = defineAsyncComponent(() => import('./components/TableMockDataPanel.vue'));
 const TableDesignPanel = defineAsyncComponent(() => import('./components/TableDesignPanel.vue'));
@@ -35,6 +36,7 @@ const activeSqlTab = computed(() => store.activeSqlTab);
 const activeGraphTab = computed(() => store.activeGraphTab);
 const activeCatalogTab = computed(() => store.activeCatalogTab);
 const activeMockTab = computed(() => store.activeMockTab);
+const activeSettingsTab = computed(() => store.activeSettingsTab);
 const pendingSqlCloseTab = computed(() => {
   const pending = store.pendingSqlClose;
   if (!pending) {
@@ -52,10 +54,63 @@ const activeDetailPanel = computed(() => {
 const detailRailRef = ref<HTMLElement | null>(null);
 const closeAppPromptVisible = ref(false);
 const closeAppPromptSaving = ref(false);
+const sidebarPaneSize = ref(22);
+const detailPaneSize = ref(32);
+let workspaceLayoutPersistTimer: ReturnType<typeof setTimeout> | null = null;
 const hostWindow = window as typeof window & {
   __dbvHasDirtySqlTabs?: () => boolean
   __dbvSaveAllDirtySqlTabs?: () => Promise<boolean>
 };
+
+type SplitpanesResizePayload = {
+  panes?: Array<{ size: number }>
+};
+
+function clampPaneSize(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+const resolvedSidebarPaneSize = computed(() => clampPaneSize(Number(sidebarPaneSize.value) || 22, 14, 38));
+const resolvedDetailPaneSize = computed(() => clampPaneSize(Number(detailPaneSize.value) || 32, 22, 64));
+
+watch(() => store.workspaceLayout, (value) => {
+  sidebarPaneSize.value = value.sidebarPaneSize;
+  detailPaneSize.value = value.detailPaneSize;
+}, { deep: true, immediate: true });
+
+function scheduleWorkspaceLayoutPersistence() {
+  if (workspaceLayoutPersistTimer) {
+    clearTimeout(workspaceLayoutPersistTimer);
+  }
+
+  workspaceLayoutPersistTimer = setTimeout(() => {
+    workspaceLayoutPersistTimer = null;
+    void store.saveWorkspaceLayout({
+      sidebarPaneSize: resolvedSidebarPaneSize.value,
+      detailPaneSize: resolvedDetailPaneSize.value,
+    });
+  }, 160);
+}
+
+function handleWorkspaceResized(payload: SplitpanesResizePayload) {
+  const nextSidebarSize = Number(payload.panes?.[0]?.size);
+  if (Number.isNaN(nextSidebarSize)) {
+    return;
+  }
+
+  sidebarPaneSize.value = clampPaneSize(nextSidebarSize, 14, 38);
+  scheduleWorkspaceLayoutPersistence();
+}
+
+function handleDetailResized(payload: SplitpanesResizePayload) {
+  const nextDetailSize = Number(payload.panes?.[1]?.size);
+  if (Number.isNaN(nextDetailSize)) {
+    return;
+  }
+
+  detailPaneSize.value = clampPaneSize(nextDetailSize, 22, 64);
+  scheduleWorkspaceLayoutPersistence();
+}
 
 watch(
   () => detailPanels.value.map((panel) => panel.id).join('|'),
@@ -256,6 +311,11 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  if (workspaceLayoutPersistTimer) {
+    clearTimeout(workspaceLayoutPersistTimer);
+    workspaceLayoutPersistTimer = null;
+  }
+
   delete hostWindow.__dbvHasDirtySqlTabs;
   delete hostWindow.__dbvSaveAllDirtySqlTabs;
   window.removeEventListener('keydown', handleGlobalKeydown, { capture: true });
@@ -272,25 +332,25 @@ onBeforeUnmount(() => {
     <NDialogProvider>
       <NLayout class="app-shell">
         <NLayoutContent class="content-shell">
-          <Splitpanes class="workspace-layout workspace-layout-split">
-            <Pane :size="22" :min-size="14" :max-size="38">
+          <Splitpanes class="workspace-layout workspace-layout-split" @resize="handleWorkspaceResized" @resized="handleWorkspaceResized">
+            <Pane :size="resolvedSidebarPaneSize" :min-size="14" :max-size="38">
               <aside class="sidebar-column">
                 <ExplorerSidebar />
               </aside>
             </Pane>
-            <Pane :size="78" :min-size="62">
+            <Pane :size="100 - resolvedSidebarPaneSize" :min-size="62">
               <section class="workspace-column">
                 <div class="workspace-shell">
                 <WorkspaceTabsBar />
 
                 <template v-if="gridPanel && activeTableTab">
-                  <Splitpanes v-if="activeDetailPanel" class="workspace-split workspace-body">
-                    <Pane :size="68" :min-size="36">
+                  <Splitpanes v-if="activeDetailPanel" class="workspace-split workspace-body" @resize="handleDetailResized" @resized="handleDetailResized">
+                    <Pane :size="100 - resolvedDetailPaneSize" :min-size="36">
                       <div class="workspace-main">
                         <GridPanel :key="activeTableTab.id" :table-key="gridPanel.tableKey" />
                       </div>
                     </Pane>
-                    <Pane :size="32" :min-size="22">
+                    <Pane :size="resolvedDetailPaneSize" :min-size="22">
                       <aside ref="detailRailRef" class="detail-rail">
                         <div class="detail-panel-shell">
                           <DetailPanel :panel="activeDetailPanel" :chain-panels="detailPanels" />
@@ -322,6 +382,11 @@ onBeforeUnmount(() => {
                 <div v-else-if="activeMockTab" class="workspace-body">
                   <div class="workspace-main">
                     <TableMockDataPanel :tab="activeMockTab" />
+                  </div>
+                </div>
+                <div v-else-if="activeSettingsTab" class="workspace-body">
+                  <div class="workspace-main">
+                    <SettingsPanel />
                   </div>
                 </div>
                 <div v-else-if="activeGraphTab" class="workspace-body graph-workspace-body">

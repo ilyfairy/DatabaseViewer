@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Component } from 'vue';
 import { computed, ref } from 'vue';
-import { IconFlask2, IconListDetails, IconSchema, IconSql, IconTable, IconTableOptions } from '@tabler/icons-vue';
+import { IconFlask2, IconListDetails, IconSchema, IconSettings, IconSql, IconTable, IconTableOptions } from '@tabler/icons-vue';
 import { Close } from '@vicons/carbon';
 import { NButton, NIcon } from 'naive-ui';
 import { useExplorerStore } from '../stores/explorer';
@@ -43,6 +43,8 @@ function tabKindIcon(tab: WorkspaceTab): Component {
       return IconListDetails;
     case 'mock':
       return IconFlask2;
+    case 'settings':
+      return IconSettings;
     case 'sql':
     default:
       return IconSql;
@@ -102,7 +104,7 @@ function handleTabDragEnd() {
         @dragend="handleTabDragEnd"
       >
         <span class="workspace-tab-chip-kind"><NIcon size="14"><component :is="tabKindIcon(tab)" /></NIcon></span>
-        <span v-if="tab.type === 'sql' && store.isSqlTabDirty(tab.id)" class="workspace-tab-chip-dirty" title="未保存">●</span>
+        <span v-if="(tab.type === 'sql' && store.isSqlTabDirty(tab.id)) || (tab.type === 'settings' && store.isSettingsDirty)" class="workspace-tab-chip-dirty" title="未保存">●</span>
         <span class="workspace-tab-chip-label">{{ store.getWorkspaceTabLabel(tab) }}</span>
         <span class="workspace-tab-chip-close" @click.stop="store.closeWorkspaceTab(tab.id)">
           <NIcon size="12"><Close /></NIcon>
@@ -112,6 +114,9 @@ function handleTabDragEnd() {
     </div>
     <div class="workspace-tabs-actions">
       <NButton size="small" tertiary type="primary" @click="store.openSqlTab()">新建 SQL</NButton>
+      <NButton size="small" tertiary @click="store.openSettingsTab()">
+        <NIcon size="14"><IconSettings /></NIcon>
+      </NButton>
     </div>
   </div>
 </template>
@@ -145,6 +150,10 @@ function handleTabDragEnd() {
 
 .workspace-tabs-actions {
   flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: $gap-sm;
 }
 
 .workspace-tab-chip {

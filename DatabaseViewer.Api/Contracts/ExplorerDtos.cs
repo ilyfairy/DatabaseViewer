@@ -2,6 +2,14 @@ namespace DatabaseViewer.Api.Contracts;
 
 public sealed record BootstrapResponse(IReadOnlyList<ConnectionNodeDto> Connections);
 
+public sealed record ExplorerSettingsDto(bool ShowTableRowCounts);
+
+public sealed record UpdateExplorerSettingsRequest(bool ShowTableRowCounts);
+
+public sealed record WorkspaceLayoutDto(double SidebarPaneSize, double DetailPaneSize);
+
+public sealed record UpdateWorkspaceLayoutRequest(double SidebarPaneSize, double DetailPaneSize);
+
 public sealed record ConnectionNodeDto(
     Guid Id,
     string Name,

@@ -10,6 +10,7 @@ import type {
   ConnectionConfig,
   ConnectionInfo,
   CreateConnectionRequest,
+  ExplorerSettings,
   GraphWorkspaceTab,
   ProviderType,
   ExplorerDetailPanel,
@@ -32,12 +33,14 @@ import type {
   SqlExecutionResponse,
   SqliteRekeyRequest,
   SqlWorkspaceTab,
+  SettingsWorkspaceTab,
   TableDefinition,
   TableMockWorkspaceTab,
   TableWorkspaceTab,
   TableSearchResponse,
   TableRow,
   TestConnectionRequest,
+  WorkspaceLayout,
   WorkspaceTab,
 } from '../types/explorer';
 
@@ -219,6 +222,12 @@ export const useExplorerStore = defineStore('explorer', () => {
   const detailCache = ref<Record<string, RecordDetail>>({});
   const activeConnectionId = useLocalStorage<string | null>('dbv-active-connection', null);
   const activeTabId = useLocalStorage<string | null>('dbv-active-tab', null);
+  const explorerSettings = ref<ExplorerSettings>({ showTableRowCounts: true });
+  const settingsDraft = ref<ExplorerSettings>({ showTableRowCounts: true });
+  const explorerSettingsLoaded = ref(false);
+  const workspaceLayout = ref<WorkspaceLayout>({ sidebarPaneSize: 22, detailPaneSize: 32 });
+  const workspaceLayoutLoaded = ref(false);
+  const settingsSaving = ref(false);
   const pendingSqlEditorFocusTabId = ref<string | null>(null);
   const sidebarQuery = useLocalStorage('dbv-sidebar-query', '');
   const globalSearch = useLocalStorage('dbv-global-search', '');
@@ -288,6 +297,9 @@ export const useExplorerStore = defineStore('explorer', () => {
   const activeGraphTab = computed(() => activeTab.value?.type === 'graph' ? activeTab.value as GraphWorkspaceTab : undefined);
   const activeCatalogTab = computed(() => activeTab.value?.type === 'catalog' ? activeTab.value as CatalogObjectWorkspaceTab : undefined);
   const activeMockTab = computed(() => activeTab.value?.type === 'mock' ? activeTab.value as TableMockWorkspaceTab : undefined);
+  const activeSettingsTab = computed(() => activeTab.value?.type === 'settings' ? activeTab.value as SettingsWorkspaceTab : undefined);
+  const showTableRowCounts = computed(() => explorerSettings.value.showTableRowCounts);
+  const isSettingsDirty = computed(() => explorerSettingsLoaded.value && settingsDraft.value.showTableRowCounts !== explorerSettings.value.showTableRowCounts);
   const gridPanel = computed(() => openPanels.value.find((panel) => panel.type === 'grid') as ExplorerGridPanel | undefined);
   const detailPanels = computed(() => openPanels.value.filter((panel) => panel.type === 'detail') as ExplorerDetailPanel[]);
   const activeTable = computed(() => (gridPanel.value ? getTable(gridPanel.value.tableKey) : undefined));
@@ -314,6 +326,10 @@ export const useExplorerStore = defineStore('explorer', () => {
 
   function buildMockTabId(tableKey: string) {
     return `mock:${tableKey}`;
+  }
+
+  function buildSettingsTabId() {
+    return 'settings';
   }
 
   function persistActiveTablePanels() {
@@ -407,6 +423,10 @@ export const useExplorerStore = defineStore('explorer', () => {
         return connections.value.some((connection) => connection.id === tab.connectionId);
       }
 
+      if (tab.type === 'settings') {
+        return true;
+      }
+
       if (tab.type === 'catalog') {
         const databaseStillExists = getConnectionDatabases(tab.connectionId).some((entry) => entry.name === tab.database);
         return databaseStillExists;
@@ -441,6 +461,10 @@ export const useExplorerStore = defineStore('explorer', () => {
       if (tab.type === 'graph') {
         const databaseStillExists = getConnectionDatabases(tab.connectionId).some((entry) => entry.name === tab.database);
         return databaseStillExists ? tab : null;
+      }
+
+      if (tab.type === 'settings') {
+        return tab;
       }
 
       if (tab.type === 'catalog') {
@@ -560,7 +584,32 @@ export const useExplorerStore = defineStore('explorer', () => {
     }
 
     initialized.value = true;
+    await ensureExplorerSettingsLoaded();
+    await ensureWorkspaceLayoutLoaded();
     await refreshBootstrap();
+  }
+
+  async function ensureExplorerSettingsLoaded(forceReload = false) {
+    if (explorerSettingsLoaded.value && !forceReload) {
+      return explorerSettings.value;
+    }
+
+    const settings = await requestJson<ExplorerSettings>('/api/explorer/settings');
+    explorerSettings.value = settings;
+    settingsDraft.value = { ...settings };
+    explorerSettingsLoaded.value = true;
+    return settings;
+  }
+
+  async function ensureWorkspaceLayoutLoaded(forceReload = false) {
+    if (workspaceLayoutLoaded.value && !forceReload) {
+      return workspaceLayout.value;
+    }
+
+    const layout = await requestJson<WorkspaceLayout>('/api/explorer/workspace-layout');
+    workspaceLayout.value = layout;
+    workspaceLayoutLoaded.value = true;
+    return layout;
   }
 
   async function refreshBootstrap() {
@@ -984,6 +1033,10 @@ export const useExplorerStore = defineStore('explorer', () => {
   }
 
   function tableRowCountLabel(tableKey: string) {
+    if (!showTableRowCounts.value) {
+      return null;
+    }
+
     return getTable(tableKey)?.rowCount ?? loadedTables.value[tableKey]?.rows.length ?? null;
   }
 
@@ -1590,6 +1643,10 @@ export const useExplorerStore = defineStore('explorer', () => {
   }
 
   function getWorkspaceTabLabel(tab: WorkspaceTab) {
+    if (tab.type === 'settings') {
+      return '设置';
+    }
+
     if (tab.type === 'table') {
       const table = getTable(tab.tableKey);
       return table ? (table.schema ? `${table.schema}.${table.name}` : table.name) : tab.tableKey;
@@ -1671,6 +1728,51 @@ export const useExplorerStore = defineStore('explorer', () => {
 
   function openSqlTab() {
     void openSqlTabWithContext();
+  }
+
+  function openSettingsTab() {
+    const tabId = buildSettingsTabId();
+    upsertWorkspaceTab({
+      id: tabId,
+      type: 'settings',
+    });
+    setActiveTab(tabId);
+  }
+
+  function resetExplorerSettingsDraft() {
+    settingsDraft.value = { ...explorerSettings.value };
+  }
+
+  async function saveWorkspaceLayout(nextLayout: WorkspaceLayout) {
+    const saved = await requestJson<WorkspaceLayout>('/api/explorer/workspace-layout', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(nextLayout),
+    });
+    workspaceLayout.value = saved;
+    workspaceLayoutLoaded.value = true;
+  }
+
+  async function saveExplorerSettings(nextSettings: ExplorerSettings = settingsDraft.value) {
+    settingsSaving.value = true;
+    try {
+      const saved = await requestJson<ExplorerSettings>('/api/explorer/settings', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(nextSettings),
+      });
+      explorerSettings.value = saved;
+      settingsDraft.value = { ...saved };
+      explorerSettingsLoaded.value = true;
+      await refreshBootstrap();
+    }
+    finally {
+      settingsSaving.value = false;
+    }
   }
 
   async function openCatalogObject(connectionId: string, database: string, objectType: CatalogObjectType, schema: string | null, name: string) {
@@ -2352,6 +2454,15 @@ export const useExplorerStore = defineStore('explorer', () => {
     activeGraphTab,
     activeCatalogTab,
     activeMockTab,
+    activeSettingsTab,
+    explorerSettings,
+    settingsDraft,
+    explorerSettingsLoaded,
+    workspaceLayout,
+    workspaceLayoutLoaded,
+    isSettingsDirty,
+    settingsSaving,
+    showTableRowCounts,
     sidebarQuery,
     globalSearch,
     searchColumns,
@@ -2427,6 +2538,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     openCatalogObject,
     openTableMockTab,
     openSqlTab,
+    openSettingsTab,
     openSqlTabWithContext,
     openSqlFileTab,
     openRoutineSource,
@@ -2483,6 +2595,11 @@ export const useExplorerStore = defineStore('explorer', () => {
     testConnection,
     updateConnection,
     rekeySqliteDatabase,
+    ensureExplorerSettingsLoaded,
+    ensureWorkspaceLayoutLoaded,
+    resetExplorerSettingsDraft,
+    saveWorkspaceLayout,
+    saveExplorerSettings,
     deleteConnection,
     showNotice,
     dismissNotice,

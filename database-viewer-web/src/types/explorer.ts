@@ -16,6 +16,15 @@ export interface ConnectionInfo {
   databases: DatabaseInfo[]
 }
 
+export interface ExplorerSettings {
+  showTableRowCounts: boolean
+}
+
+export interface WorkspaceLayout {
+  sidebarPaneSize: number
+  detailPaneSize: number
+}
+
 export interface CreateConnectionRequest {
   name: string
   provider: ProviderType
@@ -447,7 +456,12 @@ export interface TableMockWorkspaceTab {
   tableKey: string
 }
 
-export type WorkspaceTab = TableWorkspaceTab | TableDesignWorkspaceTab | SqlWorkspaceTab | GraphWorkspaceTab | CatalogObjectWorkspaceTab | TableMockWorkspaceTab
+export interface SettingsWorkspaceTab {
+  id: string
+  type: 'settings'
+}
+
+export type WorkspaceTab = TableWorkspaceTab | TableDesignWorkspaceTab | SqlWorkspaceTab | GraphWorkspaceTab | CatalogObjectWorkspaceTab | TableMockWorkspaceTab | SettingsWorkspaceTab
 
 export interface ReverseReferenceRow {
   rowKey: string

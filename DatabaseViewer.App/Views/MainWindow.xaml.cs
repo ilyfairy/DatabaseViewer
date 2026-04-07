@@ -11,6 +11,10 @@ public partial class MainWindow : Window
 {
     private readonly string _baseUrl;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly string WindowStateFilePath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "DatabaseViewer",
+        "window-state.json");
     private readonly List<string> _pendingSqlFiles = [];
     private bool _webAppNavigationCompleted;
     private bool _closeConfirmed;
@@ -21,6 +25,7 @@ public partial class MainWindow : Window
     {
         _baseUrl = baseUrl;
         InitializeComponent();
+        RestoreWindowState();
         AllowDrop = true;
         Loaded += OnLoaded;
         Closing += OnClosing;
@@ -72,12 +77,6 @@ public partial class MainWindow : Window
             "WebView2Data");
 
         Directory.CreateDirectory(userDataFolder);
-
-        if (browserExecutableFolder is null)
-        {
-            return null;
-        }
-
         return await CoreWebView2Environment.CreateAsync(browserExecutableFolder: browserExecutableFolder, userDataFolder: userDataFolder);
     }
 
@@ -181,6 +180,7 @@ public partial class MainWindow : Window
         {
             if (Browser.CoreWebView2 is null || !_webAppNavigationCompleted)
             {
+                PersistWindowState();
                 _closeConfirmed = true;
                 Close();
                 return;
@@ -189,6 +189,7 @@ public partial class MainWindow : Window
             var hasDirtySqlTabs = await ExecuteWebBooleanAsync("window.__dbvHasDirtySqlTabs ? window.__dbvHasDirtySqlTabs() : false");
             if (!hasDirtySqlTabs)
             {
+                PersistWindowState();
                 _closeConfirmed = true;
                 Close();
                 return;
@@ -200,6 +201,7 @@ public partial class MainWindow : Window
                 return;
             }
 
+            PersistWindowState();
             _closeConfirmed = true;
             Close();
         }
@@ -223,6 +225,63 @@ public partial class MainWindow : Window
             await OpenSqlFilesInAppAsync([filePath]);
         }
     }
+
+    private void RestoreWindowState()
+    {
+        try
+        {
+            if (!File.Exists(WindowStateFilePath))
+            {
+                return;
+            }
+
+            var json = File.ReadAllText(WindowStateFilePath);
+            var state = JsonSerializer.Deserialize<WindowStateSnapshot>(json, JsonOptions);
+            if (state is null)
+            {
+                return;
+            }
+
+            Width = Math.Max(MinWidth, state.Width);
+            Height = Math.Max(MinHeight, state.Height);
+
+            if (state.Left.HasValue && state.Top.HasValue)
+            {
+                WindowStartupLocation = WindowStartupLocation.Manual;
+                Left = state.Left.Value;
+                Top = state.Top.Value;
+            }
+
+            if (state.IsMaximized)
+            {
+                WindowState = WindowState.Maximized;
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private void PersistWindowState()
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(WindowStateFilePath)!);
+            var bounds = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
+            var snapshot = new WindowStateSnapshot(
+                bounds.Width,
+                bounds.Height,
+                bounds.Left,
+                bounds.Top,
+                WindowState == WindowState.Maximized);
+            File.WriteAllText(WindowStateFilePath, JsonSerializer.Serialize(snapshot, JsonOptions));
+        }
+        catch
+        {
+        }
+    }
+
+    private sealed record WindowStateSnapshot(double Width, double Height, double? Left, double? Top, bool IsMaximized);
 
     private async void OnNewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs e)
     {
