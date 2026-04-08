@@ -6,12 +6,12 @@ namespace DatabaseViewer.Core.Services;
 
 public sealed class ConnectionStore
 {
-    private readonly WindowsDataProtector _protector;
+    private readonly Base64DataCodec _codec;
     private readonly string _filePath;
 
-    public ConnectionStore(WindowsDataProtector protector)
+    public ConnectionStore(Base64DataCodec codec)
     {
-        _protector = protector;
+        _codec = codec;
 
         var dataDirectory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -41,11 +41,11 @@ public sealed class ConnectionStore
             Host = item.Host,
             Port = item.Port,
             Username = item.Username,
-            Password = _protector.Unprotect(item.EncryptedPassword),
+            Password = _codec.Decode(item.EncryptedPassword),
             SqliteCipher = new SqliteCipherOptions
             {
                 Enabled = item.SqliteCipher.Enabled,
-                Password = string.IsNullOrWhiteSpace(item.SqliteCipher.EncryptedPassword) ? string.Empty : _protector.Unprotect(item.SqliteCipher.EncryptedPassword),
+                Password = string.IsNullOrWhiteSpace(item.SqliteCipher.EncryptedPassword) ? string.Empty : _codec.Decode(item.SqliteCipher.EncryptedPassword),
                 KeyFormat = item.SqliteCipher.KeyFormat,
                 PageSize = item.SqliteCipher.PageSize,
                 KdfIter = item.SqliteCipher.KdfIter,
@@ -64,9 +64,9 @@ public sealed class ConnectionStore
                 Host = item.Ssh.Host,
                 Port = item.Ssh.Port > 0 ? item.Ssh.Port : 22,
                 Username = item.Ssh.Username,
-                Password = string.IsNullOrWhiteSpace(item.Ssh.EncryptedPassword) ? string.Empty : _protector.Unprotect(item.Ssh.EncryptedPassword),
+                Password = string.IsNullOrWhiteSpace(item.Ssh.EncryptedPassword) ? string.Empty : _codec.Decode(item.Ssh.EncryptedPassword),
                 PrivateKeyPath = item.Ssh.PrivateKeyPath,
-                Passphrase = string.IsNullOrWhiteSpace(item.Ssh.EncryptedPassphrase) ? string.Empty : _protector.Unprotect(item.Ssh.EncryptedPassphrase),
+                Passphrase = string.IsNullOrWhiteSpace(item.Ssh.EncryptedPassphrase) ? string.Empty : _codec.Decode(item.Ssh.EncryptedPassphrase),
             },
         }).ToArray();
     }
@@ -82,12 +82,12 @@ public sealed class ConnectionStore
             Host = item.Host,
             Port = item.Port,
             Username = item.Username,
-            EncryptedPassword = _protector.Protect(item.Password),
+            EncryptedPassword = _codec.Encode(item.Password),
             TrustServerCertificate = item.TrustServerCertificate,
             SqliteCipher = new ConnectionSqliteCipherPersistenceModel
             {
                 Enabled = item.SqliteCipher.Enabled,
-                EncryptedPassword = string.IsNullOrWhiteSpace(item.SqliteCipher.Password) ? string.Empty : _protector.Protect(item.SqliteCipher.Password),
+                EncryptedPassword = string.IsNullOrWhiteSpace(item.SqliteCipher.Password) ? string.Empty : _codec.Encode(item.SqliteCipher.Password),
                 KeyFormat = item.SqliteCipher.KeyFormat,
                 PageSize = item.SqliteCipher.PageSize,
                 KdfIter = item.SqliteCipher.KdfIter,
@@ -105,9 +105,9 @@ public sealed class ConnectionStore
                 Host = item.SshTunnel.Host,
                 Port = item.SshTunnel.Port,
                 Username = item.SshTunnel.Username,
-                EncryptedPassword = string.IsNullOrWhiteSpace(item.SshTunnel.Password) ? string.Empty : _protector.Protect(item.SshTunnel.Password),
+                EncryptedPassword = string.IsNullOrWhiteSpace(item.SshTunnel.Password) ? string.Empty : _codec.Encode(item.SshTunnel.Password),
                 PrivateKeyPath = item.SshTunnel.PrivateKeyPath,
-                EncryptedPassphrase = string.IsNullOrWhiteSpace(item.SshTunnel.Passphrase) ? string.Empty : _protector.Protect(item.SshTunnel.Passphrase),
+                EncryptedPassphrase = string.IsNullOrWhiteSpace(item.SshTunnel.Passphrase) ? string.Empty : _codec.Encode(item.SshTunnel.Passphrase),
             },
         }).ToArray();
 

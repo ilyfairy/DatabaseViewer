@@ -2,12 +2,15 @@
   <PropertyGroup>
     <OutputType Condition="'$(Standalone)' == 'true'">Exe</OutputType>
     <OutputType Condition="'$(Standalone)' != 'true'">Library</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <!-- 前端依赖恢复和构建输入，任何一个文件变化后都会重新执行对应目标。 -->
   <ItemGroup>
+    <FrontendRestoreInputs Include="..\database-viewer-web\package.json" />
+    <FrontendRestoreInputs Include="..\database-viewer-web\pnpm-lock.yaml" />
     <FrontendBuildInputs Include="..\database-viewer-web\index.html" />
     <FrontendBuildInputs Include="..\database-viewer-web\package.json" />
     <FrontendBuildInputs Include="..\database-viewer-web\pnpm-lock.yaml" />
@@ -18,6 +21,17 @@
     <FrontendBuildInputs Include="..\database-viewer-web\public\**\*" />
   </ItemGroup>
 
+  <!-- 当 node_modules 缺失或锁文件变化时，先自动恢复前端依赖。 -->
+  <Target Name="RestoreFrontendDependencies"
+          BeforeTargets="BuildFrontend"
+          Condition="'$(DesignTimeBuild)' != 'true'"
+          Inputs="@(FrontendRestoreInputs)"
+          Outputs="..\database-viewer-web\node_modules\.pnpm\lock.yaml">
+    <Message Text="Restoring database-viewer-web frontend dependencies..." Importance="high" />
+    <Exec WorkingDirectory="..\database-viewer-web" Command="pnpm install --frozen-lockfile" />
+  </Target>
+
+  <!-- 生成前端静态资源，产物仍然先落在源码目录下的 database-viewer-web/dist。 -->
   <Target Name="BuildFrontend"
           BeforeTargets="AssignTargetPaths"
           Condition="'$(DesignTimeBuild)' != 'true'"
@@ -27,16 +41,30 @@
     <Exec WorkingDirectory="..\database-viewer-web" Command="pnpm build" />
   </Target>
 
-  <Target Name="IncludeFrontendDistFiles"
+  <!-- build 时把前端产物复制到 API 输出目录下的 wwwroot。 -->
+  <Target Name="CopyFrontendDistToBuildOutput"
           AfterTargets="BuildFrontend"
-          BeforeTargets="AssignTargetPaths;GetCopyToOutputDirectoryItems">
+          Condition="'$(DesignTimeBuild)' != 'true' and Exists('..\database-viewer-web\dist\index.html')">
     <ItemGroup>
-      <Content Include="..\database-viewer-web\dist\**\*">
-        <Link>dist\%(RecursiveDir)%(Filename)%(Extension)</Link>
-        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-      </Content>
+      <FrontendDistFiles Include="..\database-viewer-web\dist\**\*" />
     </ItemGroup>
+
+    <Copy SourceFiles="@(FrontendDistFiles)"
+    DestinationFiles="@(FrontendDistFiles->'$(OutDir)wwwroot\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- publish 时把前端产物复制到 API 发布目录下的 wwwroot。 -->
+  <Target Name="CopyFrontendDistToPublishOutput"
+          AfterTargets="Publish"
+          Condition="'$(DesignTimeBuild)' != 'true' and Exists('..\database-viewer-web\dist\index.html')">
+    <ItemGroup>
+      <FrontendDistFiles Include="..\database-viewer-web\dist\**\*" />
+    </ItemGroup>
+
+    <Copy SourceFiles="@(FrontendDistFiles)"
+      DestinationFiles="@(FrontendDistFiles->'$(PublishDir)wwwroot\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
   </Target>
 
   <ItemGroup>

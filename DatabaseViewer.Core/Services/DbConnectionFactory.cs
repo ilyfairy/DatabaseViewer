@@ -1,5 +1,6 @@
 using System.Data;
 using System.Data.Common;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 using Microsoft.Data.Sqlite;
@@ -277,10 +278,11 @@ public static class DbConnectionFactory
             _cipherOptions = cipherOptions;
         }
 
+        [AllowNull]
         public override string ConnectionString
         {
             get => _innerConnection.ConnectionString;
-            set => _innerConnection.ConnectionString = value;
+            set => _innerConnection.ConnectionString = value ?? string.Empty;
         }
 
         public override string Database => _innerConnection.Database;

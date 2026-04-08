@@ -12,6 +12,7 @@ public sealed class DesktopApiRuntime : IAsyncDisposable
 {
     public required WebApplication App { get; init; }
     public required string BaseUrl { get; init; }
+    public required string ListenUrl { get; init; }
 
     public async ValueTask DisposeAsync()
     {
@@ -22,9 +23,11 @@ public sealed class DesktopApiRuntime : IAsyncDisposable
 
 public static class DesktopApiHost
 {
+    private static readonly AllowedNetwork DefaultLoopbackNetwork = AllowedNetwork.Parse("127.0.0.1/32");
+    private static readonly AllowedNetwork DefaultIpv6LoopbackNetwork = AllowedNetwork.Parse("::1/128");
+
     public static async Task<DesktopApiRuntime> StartAsync(string? overrideBaseUrl = null, CancellationToken cancellationToken = default)
     {
-        var baseUrl = overrideBaseUrl ?? GetAvailableBaseUrl();
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
             ApplicationName = typeof(DesktopApiHost).Assembly.FullName,
@@ -32,8 +35,17 @@ public static class DesktopApiHost
             Args = Array.Empty<string>(),
         });
 
-        builder.WebHost.UseUrls(baseUrl);
-        builder.Services.AddSingleton<WindowsDataProtector>();
+        var hostSettings = builder.Configuration
+            .GetSection(DesktopApiHostSettings.SectionName)
+            .Get<DesktopApiHostSettings>()
+            ?? new DesktopApiHostSettings();
+
+        var listenUrl = overrideBaseUrl ?? ResolveListenUrl(hostSettings);
+        var baseUrl = ResolveClientBaseUrl(listenUrl);
+        var allowedNetworks = ResolveAllowedNetworks(hostSettings);
+
+        builder.WebHost.UseUrls(listenUrl);
+        builder.Services.AddSingleton<Base64DataCodec>();
         builder.Services.AddSingleton<ApplicationSettingsStore>();
         builder.Services.AddSingleton<ConnectionStore>();
         builder.Services.AddSingleton<DatabaseMetadataService>();
@@ -42,6 +54,18 @@ public static class DesktopApiHost
 
         var app = builder.Build();
         var explorer = app.Services.GetRequiredService<ExplorerApiService>();
+
+        app.Use(async (context, next) =>
+        {
+            if (!IsRequestAllowed(context.Connection.RemoteIpAddress, allowedNetworks))
+            {
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                await context.Response.WriteAsync("Forbidden");
+                return;
+            }
+
+            await next();
+        });
 
         app.MapGet("/api/explorer/settings", async () => await explorer.GetSettingsAsync());
         app.MapPut("/api/explorer/settings", async (UpdateExplorerSettingsRequest request) => await explorer.UpdateSettingsAsync(request));
@@ -258,10 +282,10 @@ public static class DesktopApiHost
         });
         app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
 
-        var distPath = FrontendLocator.FindDistDirectory();
-        if (!string.IsNullOrWhiteSpace(distPath))
+        var frontendPath = FrontendLocator.FindWwwRootDirectory();
+        if (!string.IsNullOrWhiteSpace(frontendPath))
         {
-            var provider = new PhysicalFileProvider(distPath);
+            var provider = new PhysicalFileProvider(frontendPath);
             app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = provider });
             app.UseStaticFiles(new StaticFileOptions
             {
@@ -280,16 +304,234 @@ public static class DesktopApiHost
                 context.Response.Headers.CacheControl = "no-store, no-cache, max-age=0";
                 context.Response.Headers.Pragma = "no-cache";
                 context.Response.Headers.Expires = "0";
-                await context.Response.SendFileAsync(Path.Combine(distPath, "index.html"));
+                await context.Response.SendFileAsync(Path.Combine(frontendPath, "index.html"));
             });
         }
         else
         {
-            app.MapGet("/", () => Results.Content("Frontend dist not found. Run 'pnpm build' in database-viewer-web.", "text/plain"));
+            app.MapGet("/", () => Results.Content("Frontend wwwroot not found. Run 'dotnet build' or 'pnpm build' first.", "text/plain"));
         }
 
         await app.StartAsync(cancellationToken);
-        return new DesktopApiRuntime { App = app, BaseUrl = baseUrl };
+        return new DesktopApiRuntime { App = app, BaseUrl = baseUrl, ListenUrl = listenUrl };
+    }
+
+    /// <summary>
+    /// Resolves the configured allowed networks, or defaults to 127.0.0.1 only.
+    /// </summary>
+    private static IReadOnlyList<AllowedNetwork> ResolveAllowedNetworks(DesktopApiHostSettings hostSettings)
+    {
+        var configuredNetworks = hostSettings.AllowedNetworks?
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(AllowedNetwork.Parse)
+            .ToArray();
+
+        if (configuredNetworks is { Length: > 0 })
+        {
+            return configuredNetworks;
+        }
+
+        return new[] { DefaultLoopbackNetwork, DefaultIpv6LoopbackNetwork };
+    }
+
+    /// <summary>
+    /// Checks whether the request remote address matches one of the configured networks.
+    /// </summary>
+    private static bool IsRequestAllowed(IPAddress? remoteAddress, IReadOnlyList<AllowedNetwork> allowedNetworks)
+    {
+        if (remoteAddress is null)
+        {
+            return false;
+        }
+
+        return allowedNetworks.Any(network => network.Contains(remoteAddress));
+    }
+
+    /// <summary>
+    /// Resolves the configured listen URL, or falls back to an ephemeral loopback port.
+    /// </summary>
+    private static string ResolveListenUrl(DesktopApiHostSettings hostSettings)
+    {
+        if (string.IsNullOrWhiteSpace(hostSettings.ListenUrl))
+        {
+            return GetAvailableBaseUrl();
+        }
+
+        return NormalizeUrl(hostSettings.ListenUrl);
+    }
+
+    /// <summary>
+    /// Converts wildcard or any-address listen URLs into a browser-safe local URL for the embedded client.
+    /// </summary>
+    private static string ResolveClientBaseUrl(string listenUrl)
+    {
+        var normalizedUrl = NormalizeUrl(listenUrl);
+        var wildcardUrl = TryResolveWildcardClientUrl(normalizedUrl);
+        if (!string.IsNullOrWhiteSpace(wildcardUrl))
+        {
+            return wildcardUrl;
+        }
+
+        if (!Uri.TryCreate(normalizedUrl, UriKind.Absolute, out var uri))
+        {
+            throw new InvalidOperationException($"Invalid listen URL '{listenUrl}'.");
+        }
+
+        var clientHost = uri.Host switch
+        {
+            "0.0.0.0" => "127.0.0.1",
+            "::" => "localhost",
+            "[::]" => "localhost",
+            _ => uri.Host,
+        };
+
+        var builder = new UriBuilder(uri)
+        {
+            Host = clientHost,
+            Path = string.Empty,
+            Query = string.Empty,
+            Fragment = string.Empty,
+        };
+
+        return builder.Uri.GetLeftPart(UriPartial.Authority);
+    }
+
+    /// <summary>
+    /// Normalizes configured URLs so downstream parsing and logging stay consistent.
+    /// </summary>
+    private static string NormalizeUrl(string url)
+    {
+        var normalizedUrl = url.Trim();
+        if (!normalizedUrl.Contains("://", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"Configured listen URL '{url}' must be an absolute http or https URL.");
+        }
+
+        return normalizedUrl.TrimEnd('/');
+    }
+
+    /// <summary>
+    /// Resolves wildcard Kestrel URL syntax to a local loopback address for the embedded browser.
+    /// </summary>
+    private static string? TryResolveWildcardClientUrl(string listenUrl)
+    {
+        var schemeSeparatorIndex = listenUrl.IndexOf("://", StringComparison.Ordinal);
+        if (schemeSeparatorIndex < 0)
+        {
+            return null;
+        }
+
+        var scheme = listenUrl[..schemeSeparatorIndex];
+        var authority = listenUrl[(schemeSeparatorIndex + 3)..];
+        var pathSeparatorIndex = authority.IndexOf('/');
+        if (pathSeparatorIndex >= 0)
+        {
+            authority = authority[..pathSeparatorIndex];
+        }
+
+        if (authority == "*" || authority == "+")
+        {
+            return $"{scheme}://127.0.0.1";
+        }
+
+        if (authority.StartsWith("*:", StringComparison.Ordinal) || authority.StartsWith("+:", StringComparison.Ordinal))
+        {
+            return $"{scheme}://127.0.0.1{authority[1..]}";
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Represents one configured IP address or CIDR network rule.
+    /// </summary>
+    private sealed class AllowedNetwork
+    {
+        private AllowedNetwork(IPAddress networkAddress, int prefixLength)
+        {
+            NetworkAddress = NormalizeAddress(networkAddress);
+            PrefixLength = prefixLength;
+        }
+
+        private IPAddress NetworkAddress { get; }
+
+        private int PrefixLength { get; }
+
+        /// <summary>
+        /// Parses a single IP or CIDR expression such as 127.0.0.1, 192.168.0.0/16, or 10.1.1.1/8.
+        /// </summary>
+        public static AllowedNetwork Parse(string value)
+        {
+            var trimmedValue = value.Trim();
+            var separatorIndex = trimmedValue.IndexOf('/');
+            var addressText = separatorIndex >= 0 ? trimmedValue[..separatorIndex] : trimmedValue;
+            var prefixText = separatorIndex >= 0 ? trimmedValue[(separatorIndex + 1)..] : null;
+
+            if (!IPAddress.TryParse(addressText, out var parsedAddress))
+            {
+                throw new InvalidOperationException($"Invalid allowed network '{value}'.");
+            }
+
+            var normalizedAddress = NormalizeAddress(parsedAddress);
+            var maxPrefixLength = normalizedAddress.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork ? 32 : 128;
+            var prefixLength = prefixText is null ? maxPrefixLength : ParsePrefixLength(prefixText, maxPrefixLength, value);
+
+            return new AllowedNetwork(normalizedAddress, prefixLength);
+        }
+
+        /// <summary>
+        /// Returns true when the candidate address is inside this network.
+        /// </summary>
+        public bool Contains(IPAddress address)
+        {
+            var normalizedAddress = NormalizeAddress(address);
+            if (normalizedAddress.AddressFamily != NetworkAddress.AddressFamily)
+            {
+                return false;
+            }
+
+            var candidateBytes = normalizedAddress.GetAddressBytes();
+            var networkBytes = NetworkAddress.GetAddressBytes();
+            var wholeByteCount = PrefixLength / 8;
+            var remainingBitCount = PrefixLength % 8;
+
+            for (var index = 0; index < wholeByteCount; index++)
+            {
+                if (candidateBytes[index] != networkBytes[index])
+                {
+                    return false;
+                }
+            }
+
+            if (remainingBitCount == 0)
+            {
+                return true;
+            }
+
+            var bitMask = (byte)(0xFF << (8 - remainingBitCount));
+            return (candidateBytes[wholeByteCount] & bitMask) == (networkBytes[wholeByteCount] & bitMask);
+        }
+
+        /// <summary>
+        /// Normalizes IPv4-mapped IPv6 addresses into plain IPv4 so comparisons stay consistent.
+        /// </summary>
+        private static IPAddress NormalizeAddress(IPAddress address)
+        {
+            return address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address;
+        }
+
+        /// <summary>
+        /// Parses and validates a CIDR prefix length for one network entry.
+        /// </summary>
+        private static int ParsePrefixLength(string value, int maxPrefixLength, string originalRule)
+        {
+            if (!int.TryParse(value, out var prefixLength) || prefixLength < 0 || prefixLength > maxPrefixLength)
+            {
+                throw new InvalidOperationException($"Invalid allowed network '{originalRule}'.");
+            }
+
+            return prefixLength;
+        }
     }
 
     private static string GetAvailableBaseUrl()

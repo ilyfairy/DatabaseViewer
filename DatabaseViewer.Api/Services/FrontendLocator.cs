@@ -2,24 +2,12 @@ namespace DatabaseViewer.Api.Services;
 
 public static class FrontendLocator
 {
-    public static string? FindDistDirectory()
+    public static string? FindWwwRootDirectory()
     {
-        var publishedDist = Path.Combine(AppContext.BaseDirectory, "dist");
-        if (File.Exists(Path.Combine(publishedDist, "index.html")))
+        var publishedWwwRoot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
+        if (File.Exists(Path.Combine(publishedWwwRoot, "index.html")))
         {
-            return publishedDist;
-        }
-
-        var current = new DirectoryInfo(AppContext.BaseDirectory);
-        while (current is not null)
-        {
-            var candidate = Path.Combine(current.FullName, "database-viewer-web", "dist");
-            if (File.Exists(Path.Combine(candidate, "index.html")))
-            {
-                return candidate;
-            }
-
-            current = current.Parent;
+            return publishedWwwRoot;
         }
 
         return null;
