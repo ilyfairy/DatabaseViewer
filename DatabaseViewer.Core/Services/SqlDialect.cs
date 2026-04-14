@@ -34,10 +34,11 @@ public static class SqlDialect
         };
     }
 
-    public static string BuildPagedQuery(DatabaseProviderType providerType, DbTableInfo table, IReadOnlyList<string> orderColumns, int pageSize, string? sortColumn = null, bool sortDescending = false)
+    public static string BuildPagedQuery(DatabaseProviderType providerType, DbTableInfo table, IReadOnlyList<string> orderColumns, int pageSize, string? sortColumn = null, bool sortDescending = false, bool includeRowId = false)
     {
         var orderBy = BuildOrderByClause(providerType, orderColumns, sortColumn, sortDescending);
         var qualifiedTable = GetQualifiedTableName(providerType, table);
+        var sqliteSelect = includeRowId ? "SELECT rowid, *" : "SELECT *";
 
         return providerType switch
         {
@@ -52,7 +53,7 @@ public static class SqlDialect
                 ORDER BY [__RowNum]",
             DatabaseProviderType.MySql => $"SELECT * FROM {qualifiedTable} ORDER BY {orderBy} LIMIT @Take OFFSET @Offset",
             DatabaseProviderType.PostgreSql => $"SELECT * FROM {qualifiedTable} ORDER BY {orderBy} LIMIT @Take OFFSET @Offset",
-            DatabaseProviderType.Sqlite => $"SELECT * FROM {qualifiedTable} ORDER BY {orderBy} LIMIT @Take OFFSET @Offset",
+            DatabaseProviderType.Sqlite => $"{sqliteSelect} FROM {qualifiedTable} ORDER BY {orderBy} LIMIT @Take OFFSET @Offset",
             _ => throw new NotSupportedException(),
         };
     }
@@ -71,17 +72,18 @@ public static class SqlDialect
         return (whereClause, parameterNames);
     }
 
-    public static string BuildSingleRecordQuery(DatabaseProviderType providerType, DbTableInfo table, IReadOnlyList<string> keyColumns)
+    public static string BuildSingleRecordQuery(DatabaseProviderType providerType, DbTableInfo table, IReadOnlyList<string> keyColumns, bool includeRowId = false)
     {
         var (whereClause, _) = BuildKeyWhereClause(providerType, keyColumns);
         var qualifiedTable = GetQualifiedTableName(providerType, table);
+        var sqliteSelect = includeRowId ? "SELECT rowid, *" : "SELECT *";
 
         return providerType switch
         {
             DatabaseProviderType.SqlServer => $"SELECT TOP 1 * FROM {qualifiedTable} WHERE {whereClause}",
             DatabaseProviderType.MySql => $"SELECT * FROM {qualifiedTable} WHERE {whereClause} LIMIT 1",
             DatabaseProviderType.PostgreSql => $"SELECT * FROM {qualifiedTable} WHERE {whereClause} LIMIT 1",
-            DatabaseProviderType.Sqlite => $"SELECT * FROM {qualifiedTable} WHERE {whereClause} LIMIT 1",
+            DatabaseProviderType.Sqlite => $"{sqliteSelect} FROM {qualifiedTable} WHERE {whereClause} LIMIT 1",
             _ => throw new NotSupportedException(),
         };
     }
@@ -101,7 +103,7 @@ public static class SqlDialect
         return $"DELETE FROM {qualifiedTable} WHERE {whereClause}";
     }
 
-    public static string BuildInsertRowQuery(DatabaseProviderType providerType, DbTableInfo table, IReadOnlyList<string> columnNames, IReadOnlyList<string> parameterNames)
+    public static string BuildInsertRowQuery(DatabaseProviderType providerType, DbTableInfo table, IReadOnlyList<string> columnNames, IReadOnlyList<string> parameterNames, bool includeRowId = false)
     {
         if (columnNames.Count == 0 || columnNames.Count != parameterNames.Count)
         {
@@ -111,38 +113,41 @@ public static class SqlDialect
         var qualifiedTable = GetQualifiedTableName(providerType, table);
         var columns = string.Join(", ", columnNames.Select(column => QuoteIdentifier(providerType, column)));
         var values = string.Join(", ", parameterNames.Select(name => $"@{name}"));
+        var sqliteReturning = includeRowId ? "RETURNING rowid, *" : "RETURNING *";
 
         return providerType switch
         {
             DatabaseProviderType.SqlServer => $"INSERT INTO {qualifiedTable} ({columns}) OUTPUT INSERTED.* VALUES ({values})",
             DatabaseProviderType.MySql => $"INSERT INTO {qualifiedTable} ({columns}) VALUES ({values})",
             DatabaseProviderType.PostgreSql => $"INSERT INTO {qualifiedTable} ({columns}) VALUES ({values}) RETURNING *",
-            DatabaseProviderType.Sqlite => $"INSERT INTO {qualifiedTable} ({columns}) VALUES ({values}) RETURNING *",
+            DatabaseProviderType.Sqlite => $"INSERT INTO {qualifiedTable} ({columns}) VALUES ({values}) {sqliteReturning}",
             _ => throw new NotSupportedException(),
         };
     }
 
-    public static string BuildPreviewByColumnQuery(DatabaseProviderType providerType, DbTableInfo table, string filterColumn, IReadOnlyList<string> orderColumns)
+    public static string BuildPreviewByColumnQuery(DatabaseProviderType providerType, DbTableInfo table, string filterColumn, IReadOnlyList<string> orderColumns, bool includeRowId = false)
     {
         var qualifiedTable = GetQualifiedTableName(providerType, table);
         var whereClause = $"{QuoteIdentifier(providerType, filterColumn)} = @FilterValue";
         var orderBy = string.Join(", ", orderColumns.Select(column => QuoteIdentifier(providerType, column)));
+        var sqliteSelect = includeRowId ? "SELECT rowid, *" : "SELECT *";
 
         return providerType switch
         {
             DatabaseProviderType.SqlServer => $"SELECT TOP (@Take) * FROM {qualifiedTable} WHERE {whereClause} ORDER BY {orderBy}",
             DatabaseProviderType.MySql => $"SELECT * FROM {qualifiedTable} WHERE {whereClause} ORDER BY {orderBy} LIMIT @Take",
             DatabaseProviderType.PostgreSql => $"SELECT * FROM {qualifiedTable} WHERE {whereClause} ORDER BY {orderBy} LIMIT @Take",
-            DatabaseProviderType.Sqlite => $"SELECT * FROM {qualifiedTable} WHERE {whereClause} ORDER BY {orderBy} LIMIT @Take",
+            DatabaseProviderType.Sqlite => $"{sqliteSelect} FROM {qualifiedTable} WHERE {whereClause} ORDER BY {orderBy} LIMIT @Take",
             _ => throw new NotSupportedException(),
         };
     }
 
-    public static string BuildSearchPagedQuery(DatabaseProviderType providerType, DbTableInfo table, IReadOnlyList<string> orderColumns, IReadOnlyList<string> searchColumns, string? sortColumn = null, bool sortDescending = false)
+    public static string BuildSearchPagedQuery(DatabaseProviderType providerType, DbTableInfo table, IReadOnlyList<string> orderColumns, IReadOnlyList<string> searchColumns, string? sortColumn = null, bool sortDescending = false, bool includeRowId = false)
     {
         var qualifiedTable = GetQualifiedTableName(providerType, table);
         var orderBy = BuildOrderByClause(providerType, orderColumns, sortColumn, sortDescending);
         var whereClause = BuildSearchWhereClause(providerType, searchColumns);
+        var sqliteSelect = includeRowId ? "SELECT rowid, *" : "SELECT *";
 
         return providerType switch
         {
@@ -158,7 +163,7 @@ public static class SqlDialect
                 ORDER BY [__RowNum]",
             DatabaseProviderType.MySql => $"SELECT * FROM {qualifiedTable} WHERE {whereClause} ORDER BY {orderBy} LIMIT @Take OFFSET @Offset",
             DatabaseProviderType.PostgreSql => $"SELECT * FROM {qualifiedTable} WHERE {whereClause} ORDER BY {orderBy} LIMIT @Take OFFSET @Offset",
-            DatabaseProviderType.Sqlite => $"SELECT * FROM {qualifiedTable} WHERE {whereClause} ORDER BY {orderBy} LIMIT @Take OFFSET @Offset",
+            DatabaseProviderType.Sqlite => $"{sqliteSelect} FROM {qualifiedTable} WHERE {whereClause} ORDER BY {orderBy} LIMIT @Take OFFSET @Offset",
             _ => throw new NotSupportedException(),
         };
     }

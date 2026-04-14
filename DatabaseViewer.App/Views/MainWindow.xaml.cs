@@ -9,7 +9,7 @@ namespace DatabaseViewer.App.Views;
 
 public partial class MainWindow : Window
 {
-    private readonly string _baseUrl;
+    private readonly string _frontendUrl;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly string WindowStateFilePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -21,9 +21,9 @@ public partial class MainWindow : Window
     private bool _closeCheckInProgress;
     private TaskCompletionSource<string>? _closeRequestCompletionSource;
 
-    public MainWindow(string baseUrl)
+    public MainWindow(string frontendUrl)
     {
-        _baseUrl = baseUrl;
+        _frontendUrl = frontendUrl;
         InitializeComponent();
         RestoreWindowState();
         AllowDrop = true;
@@ -52,7 +52,7 @@ public partial class MainWindow : Window
             Browser.CoreWebView2.Settings.AreBrowserAcceleratorKeysEnabled = false;
             Browser.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
             Browser.CoreWebView2.Settings.IsStatusBarEnabled = false;
-            Browser.Source = new Uri(_baseUrl);
+            Browser.Source = new Uri(_frontendUrl);
         }
         catch (WebView2RuntimeNotFoundException)
         {

@@ -6,14 +6,14 @@ namespace DatabaseViewer.App;
 
 public partial class App : Application
 {
-    private DesktopApiRuntime? _apiRuntime;
+    private ApiRuntime? _apiRuntime;
 
     protected override void OnStartup(StartupEventArgs e)
     {
         Startup += async (_, _) =>
         {
-            _apiRuntime = await DesktopApiHost.StartAsync();
-            var window = new MainWindow(_apiRuntime.BaseUrl);
+            _apiRuntime = await ApiHost.StartAsync();
+            var window = new MainWindow(_apiRuntime.FrontendUrl);
             MainWindow = window;
             window.Show();
         };

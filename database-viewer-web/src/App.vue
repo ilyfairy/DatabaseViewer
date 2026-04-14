@@ -9,6 +9,8 @@ import 'splitpanes/dist/splitpanes.css';
 const DatabaseOverviewGraph = defineAsyncComponent(() => import('./components/DatabaseOverviewGraph.vue'));
 const CatalogObjectPanel = defineAsyncComponent(() => import('./components/CatalogObjectPanel.vue'));
 const SettingsPanel = defineAsyncComponent(() => import('./components/SettingsPanel.vue'));
+const SqlServerLoginEditorPanel = defineAsyncComponent(() => import('./components/SqlServerLoginEditorPanel.vue'));
+const SqlServerLoginManagerPanel = defineAsyncComponent(() => import('./components/SqlServerLoginManagerPanel.vue'));
 const SqlPanel = defineAsyncComponent(() => import('./components/SqlPanel.vue'));
 const TableMockDataPanel = defineAsyncComponent(() => import('./components/TableMockDataPanel.vue'));
 const TableDesignPanel = defineAsyncComponent(() => import('./components/TableDesignPanel.vue'));
@@ -37,6 +39,8 @@ const activeGraphTab = computed(() => store.activeGraphTab);
 const activeCatalogTab = computed(() => store.activeCatalogTab);
 const activeMockTab = computed(() => store.activeMockTab);
 const activeSettingsTab = computed(() => store.activeSettingsTab);
+const activeSqlServerLoginManagerTab = computed(() => store.activeSqlServerLoginManagerTab);
+const activeSqlServerLoginEditorTab = computed(() => store.activeSqlServerLoginEditorTab);
 const pendingSqlCloseTab = computed(() => {
   const pending = store.pendingSqlClose;
   if (!pending) {
@@ -44,6 +48,14 @@ const pendingSqlCloseTab = computed(() => {
   }
 
   return store.workspaceTabs.find((tab) => tab.id === pending.tabId && tab.type === 'sql') ?? null;
+});
+const pendingDesignCloseTab = computed(() => {
+  const pending = store.pendingDesignClose;
+  if (!pending) {
+    return null;
+  }
+
+  return store.workspaceTabs.find((tab) => tab.id === pending.tabId && tab.type === 'design') ?? null;
 });
 const gridPanel = computed(() => store.gridPanel);
 const detailPanels = computed(() => store.detailPanels);
@@ -389,6 +401,16 @@ onBeforeUnmount(() => {
                     <SettingsPanel />
                   </div>
                 </div>
+                <div v-else-if="activeSqlServerLoginManagerTab" class="workspace-body">
+                  <div class="workspace-main">
+                    <SqlServerLoginManagerPanel :tab="activeSqlServerLoginManagerTab" />
+                  </div>
+                </div>
+                <div v-else-if="activeSqlServerLoginEditorTab" class="workspace-body">
+                  <div class="workspace-main">
+                    <SqlServerLoginEditorPanel :tab="activeSqlServerLoginEditorTab" />
+                  </div>
+                </div>
                 <div v-else-if="activeGraphTab" class="workspace-body graph-workspace-body">
                   <div class="workspace-main graph-workspace-main">
                     <div v-if="activeGraphTab.error" class="database-overview-empty">{{ activeGraphTab.error }}</div>
@@ -432,6 +454,24 @@ onBeforeUnmount(() => {
                 <NButton tertiary @click="store.cancelPendingSqlClose()">取消</NButton>
                 <NButton tertiary @click="store.discardPendingSqlClose()">不保存</NButton>
                 <NButton type="primary" @click="store.savePendingSqlClose()">保存</NButton>
+              </div>
+            </div>
+          </NModal>
+
+          <NModal
+            :show="!!pendingDesignCloseTab"
+            preset="card"
+            style="width: min(460px, 92vw)"
+            title="关闭建表设计"
+            @update:show="(show) => { if (!show) store.cancelPendingDesignClose() }"
+          >
+            <div class="connection-dialog-form">
+              <NAlert type="warning" :show-icon="false">
+                {{ pendingDesignCloseTab ? `"${store.getWorkspaceTabLabel(pendingDesignCloseTab)}" 尚未创建，确定要放弃吗？` : '' }}
+              </NAlert>
+              <div class="connection-dialog-actions">
+                <NButton tertiary @click="store.cancelPendingDesignClose()">取消</NButton>
+                <NButton type="error" @click="store.discardPendingDesignClose()">放弃</NButton>
               </div>
             </div>
           </NModal>

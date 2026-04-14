@@ -34,6 +34,8 @@ import type {
   SqliteRekeyRequest,
   SqlWorkspaceTab,
   SettingsWorkspaceTab,
+  SqlServerLoginEditorWorkspaceTab,
+  SqlServerLoginManagerWorkspaceTab,
   TableDefinition,
   TableMockWorkspaceTab,
   TableWorkspaceTab,
@@ -57,6 +59,10 @@ type OpenSqlTabOptions = {
   execute?: boolean
 }
 type PendingSqlCloseState = {
+  tabId: string
+}
+
+type PendingDesignCloseState = {
   tabId: string
 }
 let noticeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -286,6 +292,7 @@ export const useExplorerStore = defineStore('explorer', () => {
   const tableDesignState = ref<Record<string, { loading: boolean; error: string | null; value: TableDesign | null }>>({});
   const catalogObjectState = ref<Record<string, { loading: boolean; error: string | null; value: CatalogObjectDetail | null }>>({});
   const pendingSqlClose = ref<PendingSqlCloseState | null>(null);
+  const pendingDesignClose = ref<PendingDesignCloseState | null>(null);
 
   const allTables = computed(() => connections.value.flatMap((connection) => connection.databases.flatMap((database) => database.tables)));
   const allDataObjects = computed(() => connections.value.flatMap((connection) => connection.databases.flatMap((database) => [...database.tables, ...database.views])));
@@ -298,6 +305,8 @@ export const useExplorerStore = defineStore('explorer', () => {
   const activeCatalogTab = computed(() => activeTab.value?.type === 'catalog' ? activeTab.value as CatalogObjectWorkspaceTab : undefined);
   const activeMockTab = computed(() => activeTab.value?.type === 'mock' ? activeTab.value as TableMockWorkspaceTab : undefined);
   const activeSettingsTab = computed(() => activeTab.value?.type === 'settings' ? activeTab.value as SettingsWorkspaceTab : undefined);
+  const activeSqlServerLoginManagerTab = computed(() => activeTab.value?.type === 'sqlserver-login-manager' ? activeTab.value as SqlServerLoginManagerWorkspaceTab : undefined);
+  const activeSqlServerLoginEditorTab = computed(() => activeTab.value?.type === 'sqlserver-login-editor' ? activeTab.value as SqlServerLoginEditorWorkspaceTab : undefined);
   const showTableRowCounts = computed(() => explorerSettings.value.showTableRowCounts);
   const isSettingsDirty = computed(() => explorerSettingsLoaded.value && settingsDraft.value.showTableRowCounts !== explorerSettings.value.showTableRowCounts);
   const gridPanel = computed(() => openPanels.value.find((panel) => panel.type === 'grid') as ExplorerGridPanel | undefined);
@@ -316,6 +325,10 @@ export const useExplorerStore = defineStore('explorer', () => {
     return `design:${tableKey}`;
   }
 
+  function buildCreateDesignTabId() {
+    return `design-create:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+  }
+
   function buildCatalogTabId(connectionId: string, database: string, objectType: CatalogObjectType, schema: string | null | undefined, name: string) {
     return `catalog:${connectionId}:${database}:${objectType}:${schema ?? ''}:${name}`;
   }
@@ -330,6 +343,16 @@ export const useExplorerStore = defineStore('explorer', () => {
 
   function buildSettingsTabId() {
     return 'settings';
+  }
+
+  function buildSqlServerLoginManagerTabId(connectionId: string) {
+    return `sqlserver-login-manager:${connectionId}`;
+  }
+
+  function buildSqlServerLoginEditorTabId(connectionId: string, loginName: string | null, mode: 'browse' | 'create') {
+    return mode === 'create'
+      ? `sqlserver-login-editor:${connectionId}:__new__`
+      : `sqlserver-login-editor:${connectionId}:${loginName ?? '__unknown__'}`
   }
 
   function persistActiveTablePanels() {
@@ -406,17 +429,29 @@ export const useExplorerStore = defineStore('explorer', () => {
   }
 
   function reconcileWorkspaceTabs() {
-    workspaceTabs.value = workspaceTabs.value.filter((tab) => {
+    const nextWorkspaceTabs = workspaceTabs.value.filter((tab) => {
       if (tab.type === 'table') {
         return allDataObjects.value.some((table) => table.key === tab.tableKey);
       }
 
       if (tab.type === 'design') {
-        return allDataObjects.value.some((table) => table.key === tab.tableKey);
+        return !!tab.createContext || allDataObjects.value.some((table) => table.key === tab.tableKey);
       }
 
       if (tab.type === 'mock') {
         return allTables.value.some((table) => table.key === tab.tableKey);
+      }
+
+      if (tab.type === 'sqlserver-login-manager') {
+        return connections.value.some((connection) => connection.id === tab.connectionId && connection.provider === 'sqlserver');
+      }
+
+      if (tab.type === 'sqlserver-login-editor') {
+        if (tab.mode === 'browse' && !tab.loginName) {
+          return false
+        }
+
+        return connections.value.some((connection) => connection.id === tab.connectionId && connection.provider === 'sqlserver')
       }
 
       if (tab.type === 'graph') {
@@ -471,6 +506,16 @@ export const useExplorerStore = defineStore('explorer', () => {
         return tab;
       }
 
+      if (tab.type === 'sqlserver-login-manager') {
+        const connectionStillExists = connections.value.some((connection) => connection.id === tab.connectionId && connection.provider === 'sqlserver')
+        return connectionStillExists ? tab : null
+      }
+
+      if (tab.type === 'sqlserver-login-editor') {
+        const connectionStillExists = connections.value.some((connection) => connection.id === tab.connectionId && connection.provider === 'sqlserver')
+        return connectionStillExists ? tab : null
+      }
+
       const connectionId = tab.connectionId && connections.value.some((connection) => connection.id === tab.connectionId)
         ? tab.connectionId
         : (connections.value[0]?.id ?? null);
@@ -485,7 +530,9 @@ export const useExplorerStore = defineStore('explorer', () => {
         savedSqlText: tab.savedSqlText ?? tab.sqlText,
         filePath: tab.filePath ?? null,
       };
-    }).filter((tab): tab is WorkspaceTab => !!tab);
+    }).filter((tab): tab is Exclude<typeof tab, null> => tab !== null);
+
+    workspaceTabs.value = nextWorkspaceTabs;
 
     ensureActiveTabSelection();
   }
@@ -1611,10 +1658,20 @@ export const useExplorerStore = defineStore('explorer', () => {
     return tab.sqlText !== tab.savedSqlText;
   }
 
+  function isCreateDesignTabDirty(tabId: string) {
+    const tab = workspaceTabs.value.find((entry) => entry.id === tabId && entry.type === 'design') as TableDesignWorkspaceTab | undefined;
+    return !!tab?.createContext;
+  }
+
   function closeWorkspaceTab(tabId: string) {
     const sqlTab = workspaceTabs.value.find((entry) => entry.id === tabId && entry.type === 'sql') as SqlWorkspaceTab | undefined;
     if (sqlTab && isSqlTabDirty(tabId)) {
       pendingSqlClose.value = { tabId };
+      return;
+    }
+
+    if (isCreateDesignTabDirty(tabId)) {
+      pendingDesignClose.value = { tabId };
       return;
     }
 
@@ -1647,12 +1704,29 @@ export const useExplorerStore = defineStore('explorer', () => {
       return '设置';
     }
 
+    if (tab.type === 'sqlserver-login-manager') {
+      const connection = connections.value.find((entry) => entry.id === tab.connectionId)
+      return connection ? `${connection.name} · 用户管理` : '用户管理'
+    }
+
+    if (tab.type === 'sqlserver-login-editor') {
+      const connection = connections.value.find((entry) => entry.id === tab.connectionId)
+      const prefix = connection?.name ? `${connection.name} / ` : ''
+      return tab.mode === 'create'
+        ? `${prefix}新建登录`
+        : `${prefix}${tab.loginName ?? '登录'}`
+    }
+
     if (tab.type === 'table') {
       const table = getTable(tab.tableKey);
       return table ? (table.schema ? `${table.schema}.${table.name}` : table.name) : tab.tableKey;
     }
 
     if (tab.type === 'design') {
+      if (tab.createContext) {
+        return `${tab.createContext.database} / 新建表设计`;
+      }
+
       const table = getTable(tab.tableKey);
       const label = table ? (table.schema ? `${table.schema}.${table.name}` : table.name) : tab.tableKey;
       return table ? `${table.database} / ${label} 设计` : `${label} 设计`;
@@ -1737,6 +1811,60 @@ export const useExplorerStore = defineStore('explorer', () => {
       type: 'settings',
     });
     setActiveTab(tabId);
+  }
+
+  function openSqlServerLoginManager(connectionId: string, selectedLoginName: string | null = null, mode: 'browse' | 'create' = 'browse') {
+    const tabId = buildSqlServerLoginManagerTabId(connectionId)
+    upsertWorkspaceTab({
+      id: tabId,
+      type: 'sqlserver-login-manager',
+      connectionId,
+      selectedLoginName,
+      mode,
+    })
+    setActiveTab(tabId)
+  }
+
+  function openSqlServerLoginEditor(connectionId: string, loginName: string | null, mode: 'browse' | 'create' = loginName ? 'browse' : 'create') {
+    const tabId = buildSqlServerLoginEditorTabId(connectionId, loginName, mode)
+    upsertWorkspaceTab({
+      id: tabId,
+      type: 'sqlserver-login-editor',
+      connectionId,
+      loginName,
+      mode,
+    })
+    setActiveTab(tabId)
+  }
+
+  function updateSqlServerLoginManagerState(tabId: string, selectedLoginName: string | null, mode: 'browse' | 'create') {
+    const currentTab = workspaceTabs.value.find((tab): tab is SqlServerLoginManagerWorkspaceTab => tab.id === tabId && tab.type === 'sqlserver-login-manager')
+    if (currentTab && currentTab.selectedLoginName === selectedLoginName && currentTab.mode === mode) {
+      return
+    }
+
+    workspaceTabs.value = workspaceTabs.value.map((tab) => tab.id === tabId && tab.type === 'sqlserver-login-manager'
+      ? {
+          ...tab,
+          selectedLoginName,
+          mode,
+        }
+      : tab)
+  }
+
+  function updateSqlServerLoginEditorState(tabId: string, loginName: string | null, mode: 'browse' | 'create') {
+    const currentTab = workspaceTabs.value.find((tab): tab is SqlServerLoginEditorWorkspaceTab => tab.id === tabId && tab.type === 'sqlserver-login-editor')
+    if (currentTab && currentTab.loginName === loginName && currentTab.mode === mode) {
+      return
+    }
+
+    workspaceTabs.value = workspaceTabs.value.map((tab) => tab.id === tabId && tab.type === 'sqlserver-login-editor'
+      ? {
+          ...tab,
+          loginName,
+          mode,
+        }
+      : tab)
   }
 
   function resetExplorerSettingsDraft() {
@@ -2002,6 +2130,20 @@ export const useExplorerStore = defineStore('explorer', () => {
     pendingSqlClose.value = null;
   }
 
+  function discardPendingDesignClose() {
+    if (!pendingDesignClose.value) {
+      return;
+    }
+
+    const tabId = pendingDesignClose.value.tabId;
+    pendingDesignClose.value = null;
+    performCloseWorkspaceTab(tabId);
+  }
+
+  function cancelPendingDesignClose() {
+    pendingDesignClose.value = null;
+  }
+
   async function openSqlFileTab(filePath: string, content: string) {
     await openSqlTabWithContext({
       filePath,
@@ -2157,6 +2299,36 @@ export const useExplorerStore = defineStore('explorer', () => {
       });
     }
 
+    setActiveTab(tabId);
+  }
+
+  function openCreateTableDesign(connectionId: string, database: string) {
+    const connection = getConnectionInfo(connectionId);
+    if (!connection) {
+      showNotice('warning', '连接不存在，无法打开建表设计器');
+      return;
+    }
+
+    const tabId = buildCreateDesignTabId();
+    upsertWorkspaceTab({
+      id: tabId,
+      type: 'design',
+      tableKey: `__create__:${tabId}`,
+      selectedSection: 'properties',
+      selectedEntry: null,
+      createContext: {
+        connectionId,
+        database,
+        provider: connection.provider,
+        schema: connection.provider === 'sqlserver'
+          ? 'dbo'
+          : connection.provider === 'postgresql'
+            ? 'public'
+            : null,
+        tableName: 'new_table',
+      },
+    });
+    activeConnectionId.value = connectionId;
     setActiveTab(tabId);
   }
 
@@ -2455,6 +2627,8 @@ export const useExplorerStore = defineStore('explorer', () => {
     activeCatalogTab,
     activeMockTab,
     activeSettingsTab,
+    activeSqlServerLoginManagerTab,
+    activeSqlServerLoginEditorTab,
     explorerSettings,
     settingsDraft,
     explorerSettingsLoaded,
@@ -2468,6 +2642,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     searchColumns,
     tableSortState,
     pendingSqlClose,
+    pendingDesignClose,
     visibleConnections,
     activeConnectionId,
     openPanels,
@@ -2535,10 +2710,15 @@ export const useExplorerStore = defineStore('explorer', () => {
     moveWorkspaceTab,
     openTable,
     openTableDesign,
+    openCreateTableDesign,
     openCatalogObject,
+    openSqlServerLoginManager,
+    openSqlServerLoginEditor,
     openTableMockTab,
     openSqlTab,
     openSettingsTab,
+    updateSqlServerLoginManagerState,
+    updateSqlServerLoginEditorState,
     openSqlTabWithContext,
     openSqlFileTab,
     openRoutineSource,
@@ -2550,11 +2730,14 @@ export const useExplorerStore = defineStore('explorer', () => {
     clearSqlTabError,
     markSqlTabSaved,
     isSqlTabDirty,
+    isCreateDesignTabDirty,
     saveSqlTab,
     saveTextFile,
     savePendingSqlClose,
     discardPendingSqlClose,
     cancelPendingSqlClose,
+    discardPendingDesignClose,
+    cancelPendingDesignClose,
     selectSqlResultSet,
     executeSqlTab,
     updateDesignTabSelection,

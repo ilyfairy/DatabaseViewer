@@ -8,11 +8,13 @@ using System.Net.Sockets;
 
 namespace DatabaseViewer.Api;
 
-public sealed class DesktopApiRuntime : IAsyncDisposable
+public sealed class ApiRuntime : IAsyncDisposable
 {
     public required WebApplication App { get; init; }
     public required string BaseUrl { get; init; }
     public required string ListenUrl { get; init; }
+    public required string FrontendUrl { get; init; }
+    public required bool UsesFrontendDevServer { get; init; }
 
     public async ValueTask DisposeAsync()
     {
@@ -21,27 +23,30 @@ public sealed class DesktopApiRuntime : IAsyncDisposable
     }
 }
 
-public static class DesktopApiHost
+public static class ApiHost
 {
+    private const string DefaultFrontendDevServerUrl = "http://127.0.0.1:5173";
     private static readonly AllowedNetwork DefaultLoopbackNetwork = AllowedNetwork.Parse("127.0.0.1/32");
     private static readonly AllowedNetwork DefaultIpv6LoopbackNetwork = AllowedNetwork.Parse("::1/128");
 
-    public static async Task<DesktopApiRuntime> StartAsync(string? overrideBaseUrl = null, CancellationToken cancellationToken = default)
+    public static async Task<ApiRuntime> StartAsync(string? overrideBaseUrl = null, CancellationToken cancellationToken = default)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
-            ApplicationName = typeof(DesktopApiHost).Assembly.FullName,
+            ApplicationName = typeof(ApiHost).Assembly.FullName,
             ContentRootPath = AppContext.BaseDirectory,
             Args = Array.Empty<string>(),
         });
 
         var hostSettings = builder.Configuration
-            .GetSection(DesktopApiHostSettings.SectionName)
-            .Get<DesktopApiHostSettings>()
-            ?? new DesktopApiHostSettings();
+            .GetSection(ApiHostSettings.SectionName)
+            .Get<ApiHostSettings>()
+            ?? new ApiHostSettings();
 
         var listenUrl = overrideBaseUrl ?? ResolveListenUrl(hostSettings);
         var baseUrl = ResolveClientBaseUrl(listenUrl);
+        var usesFrontendDevServer = ShouldUseFrontendDevServer();
+        var frontendUrl = ResolveFrontendUrl(baseUrl, usesFrontendDevServer);
         var allowedNetworks = ResolveAllowedNetworks(hostSettings);
 
         builder.WebHost.UseUrls(listenUrl);
@@ -51,9 +56,12 @@ public static class DesktopApiHost
         builder.Services.AddSingleton<DatabaseMetadataService>();
         builder.Services.AddSingleton<DatabaseQueryService>();
         builder.Services.AddSingleton<ExplorerApiService>();
+        builder.Services.AddSingleton<SqlServerLoginManagementService>();
+        builder.Services.AddSingleton<SqlServerLoginAdminService>();
 
         var app = builder.Build();
         var explorer = app.Services.GetRequiredService<ExplorerApiService>();
+        var sqlServerLogins = app.Services.GetRequiredService<SqlServerLoginAdminService>();
 
         app.Use(async (context, next) =>
         {
@@ -73,6 +81,17 @@ public static class DesktopApiHost
         app.MapPut("/api/explorer/workspace-layout", async (UpdateWorkspaceLayoutRequest request) => await explorer.UpdateWorkspaceLayoutAsync(request));
         app.MapGet("/api/explorer/bootstrap", async () => await explorer.GetBootstrapAsync());
         app.MapGet("/api/explorer/connections/{connectionId:guid}", async (Guid connectionId) => await explorer.GetConnectionConfigAsync(connectionId));
+        app.MapGet("/api/explorer/collations", async (Guid connectionId, string database) =>
+        {
+            try
+            {
+                return Results.Ok(await explorer.GetCollationsAsync(connectionId, database));
+            }
+            catch (Exception ex)
+            {
+                return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
+        });
         app.MapGet("/api/explorer/database-graph", async (Guid connectionId, string database) =>
         {
             try
@@ -133,6 +152,74 @@ public static class DesktopApiHost
             try
             {
                 return Results.Ok(await explorer.GetCatalogObjectDetailAsync(connectionId, database, objectType, schema, name));
+            }
+            catch (Exception ex)
+            {
+                return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
+        });
+        app.MapGet("/api/explorer/sqlserver-logins", async (Guid connectionId) =>
+        {
+            try
+            {
+                return Results.Ok(await sqlServerLogins.GetLoginsAsync(connectionId));
+            }
+            catch (Exception ex)
+            {
+                return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
+        });
+        app.MapGet("/api/explorer/sqlserver-logins/editor-options", async (Guid connectionId) =>
+        {
+            try
+            {
+                return Results.Ok(await sqlServerLogins.GetEditorOptionsAsync(connectionId));
+            }
+            catch (Exception ex)
+            {
+                return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
+        });
+        app.MapGet("/api/explorer/sqlserver-logins/{loginName}", async (Guid connectionId, string loginName) =>
+        {
+            try
+            {
+                return Results.Ok(await sqlServerLogins.GetLoginDetailAsync(connectionId, loginName));
+            }
+            catch (Exception ex)
+            {
+                return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
+        });
+        app.MapPost("/api/explorer/sqlserver-logins/sql-preview", async (SaveSqlServerLoginRequest request) =>
+        {
+            try
+            {
+                return Results.Ok(await sqlServerLogins.PreviewSaveSqlAsync(request));
+            }
+            catch (Exception ex)
+            {
+                return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
+        });
+        app.MapPut("/api/explorer/sqlserver-logins", async (SaveSqlServerLoginRequest request) =>
+        {
+            try
+            {
+                await sqlServerLogins.SaveAsync(request);
+                return Results.NoContent();
+            }
+            catch (Exception ex)
+            {
+                return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
+        });
+        app.MapDelete("/api/explorer/sqlserver-logins/{loginName}", async (Guid connectionId, string loginName) =>
+        {
+            try
+            {
+                await sqlServerLogins.DeleteAsync(connectionId, loginName);
+                return Results.NoContent();
             }
             catch (Exception ex)
             {
@@ -283,7 +370,16 @@ public static class DesktopApiHost
         app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
 
         var frontendPath = FrontendLocator.FindWwwRootDirectory();
-        if (!string.IsNullOrWhiteSpace(frontendPath))
+        if (usesFrontendDevServer)
+        {
+            app.MapGet("/", () => Results.Redirect(frontendUrl));
+            app.MapFallback(context =>
+            {
+                context.Response.Redirect(BuildFrontendRedirectUrl(frontendUrl, context.Request.Path, context.Request.QueryString.Value), permanent: false);
+                return Task.CompletedTask;
+            });
+        }
+        else if (!string.IsNullOrWhiteSpace(frontendPath))
         {
             var provider = new PhysicalFileProvider(frontendPath);
             app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = provider });
@@ -309,17 +405,59 @@ public static class DesktopApiHost
         }
         else
         {
-            app.MapGet("/", () => Results.Content("Frontend wwwroot not found. Run 'dotnet build' or 'pnpm build' first.", "text/plain"));
+            app.MapGet("/", () => Results.Content("Frontend wwwroot not found. Run 'pnpm dev' for debug mode or 'pnpm build' for static mode.", "text/plain"));
         }
 
         await app.StartAsync(cancellationToken);
-        return new DesktopApiRuntime { App = app, BaseUrl = baseUrl, ListenUrl = listenUrl };
+        return new ApiRuntime
+        {
+            App = app,
+            BaseUrl = baseUrl,
+            ListenUrl = listenUrl,
+            FrontendUrl = frontendUrl,
+            UsesFrontendDevServer = usesFrontendDevServer,
+        };
+    }
+
+    /// <summary>
+    /// Resolves which frontend URL the client should open for the current host mode.
+    /// </summary>
+    private static string ResolveFrontendUrl(string baseUrl, bool usesFrontendDevServer)
+    {
+        if (!usesFrontendDevServer)
+        {
+            return baseUrl;
+        }
+
+        return NormalizeUrl(DefaultFrontendDevServerUrl);
+    }
+
+    /// <summary>
+    /// Enables the Vite dev server workflow for debug builds only.
+    /// </summary>
+    private static bool ShouldUseFrontendDevServer()
+    {
+#if DEBUG
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    /// <summary>
+    /// Preserves the requested path/query when redirecting API-root navigation to the Vite dev server.
+    /// </summary>
+    private static string BuildFrontendRedirectUrl(string frontendUrl, PathString path, string? queryString)
+    {
+        var normalizedFrontendUrl = frontendUrl.TrimEnd('/');
+        var requestedPath = path.HasValue && path.Value != "/" ? path.Value : string.Empty;
+        return $"{normalizedFrontendUrl}{requestedPath}{queryString}";
     }
 
     /// <summary>
     /// Resolves the configured allowed networks, or defaults to 127.0.0.1 only.
     /// </summary>
-    private static IReadOnlyList<AllowedNetwork> ResolveAllowedNetworks(DesktopApiHostSettings hostSettings)
+    private static IReadOnlyList<AllowedNetwork> ResolveAllowedNetworks(ApiHostSettings hostSettings)
     {
         var configuredNetworks = hostSettings.AllowedNetworks?
             .Where(value => !string.IsNullOrWhiteSpace(value))
@@ -350,7 +488,7 @@ public static class DesktopApiHost
     /// <summary>
     /// Resolves the configured listen URL, or falls back to an ephemeral loopback port.
     /// </summary>
-    private static string ResolveListenUrl(DesktopApiHostSettings hostSettings)
+    private static string ResolveListenUrl(ApiHostSettings hostSettings)
     {
         if (string.IsNullOrWhiteSpace(hostSettings.ListenUrl))
         {

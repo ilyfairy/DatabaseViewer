@@ -9,6 +9,8 @@ import '@vue-flow/core/dist/theme-default.css';
 import '@vue-flow/controls/dist/style.css';
 import '@vue-flow/minimap/dist/style.css';
 import { NButton, NCheckbox, NInput } from 'naive-ui';
+import type { DropdownOption } from 'naive-ui';
+import ContextDropdown from './ContextDropdown.vue';
 import { buildDatabaseOverviewLayout, type DatabaseOverviewEdgeData, type DatabaseOverviewLayoutOptions, type DatabaseOverviewNodeData } from '../lib/databaseOverviewLayout';
 import { useExplorerStore } from '../stores/explorer';
 import type { DatabaseGraph } from '../types/explorer';
@@ -58,6 +60,12 @@ const layoutError = ref<string | null>(null);
 const searchQuery = ref('');
 const focusedTableKey = ref<string | null>(null);
 const contextMenu = ref<OverviewContextMenuState | null>(null);
+const contextMenuOptions = computed<DropdownOption[]>(() => contextMenu.value
+  ? [
+      { label: '查看主表数据', key: 'open-table' },
+      { label: '表设计', key: 'open-table-design' },
+    ]
+  : []);
 const expandAllFields = ref(false);
 const showNotNull = ref(false);
 const showTableIcons = ref(true);
@@ -390,6 +398,25 @@ function closeContextMenu() {
   contextMenu.value = null;
 }
 
+function handleContextMenuShow(value: boolean) {
+  if (!value) {
+    closeContextMenu();
+  }
+}
+
+function handleContextMenuSelect(key: string | number) {
+  switch (key) {
+    case 'open-table':
+      openContextTable();
+      return;
+    case 'open-table-design':
+      openContextTableDesign();
+      return;
+    default:
+      return;
+  }
+}
+
 onMounted(() => {
   window.addEventListener('click', closeContextMenu);
   window.addEventListener('contextmenu', closeContextMenu, true);
@@ -524,14 +551,14 @@ function edgePath(props: EdgeProps<DatabaseOverviewEdgeData>) {
         <div class="database-overview-options-note">默认每张表最多显示 10 个字段，超过时可在节点底部点“更多”。</div>
       </aside>
 
-      <div
-        v-if="contextMenu"
-        class="database-overview-context-menu"
-        :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
-      >
-        <button type="button" class="database-overview-context-menu-item" @click="openContextTable">查看主表数据</button>
-        <button type="button" class="database-overview-context-menu-item" @click="openContextTableDesign">表设计</button>
-      </div>
+      <ContextDropdown
+        :show="!!contextMenu"
+        :x="contextMenu?.x ?? 0"
+        :y="contextMenu?.y ?? 0"
+        :options="contextMenuOptions"
+        @update:show="handleContextMenuShow"
+        @select="handleContextMenuSelect"
+      />
     </div>
 
     <div v-if="layoutPending" class="database-overview-loading">正在整理关系图...</div>
@@ -582,37 +609,7 @@ function edgePath(props: EdgeProps<DatabaseOverviewEdgeData>) {
   width: min(360px, 34vw);
 }
 
-.database-overview-depth-select {
-  width: 104px;
-}
-
-.database-overview-search-input {
-  width: min(260px, 24vw);
-}
-
-.database-overview-stage {
-  position: relative;
-  min-height: 0;
-  height: 100%;
-  flex: 1 1 auto;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 250px;
-  gap: $gap-xl;
-  overflow: hidden;
-}
-
-.database-overview-canvas-wrap {
-  min-width: 0;
-  min-height: 0;
-  height: 100%;
-  overflow: hidden;
-  border-radius: calc(var(--radius-xl) - 2px);
-}
-
 .database-overview-flow {
-  width: 100%;
-  height: 100%;
-
   :deep(.vue-flow__node),
   :deep(.vue-flow__node-default) {
     width: 172px;
@@ -872,40 +869,6 @@ function edgePath(props: EdgeProps<DatabaseOverviewEdgeData>) {
   color: rgba(255, 255, 255, 0.94);
   font-size: 11px;
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18);
-}
-
-// ── Overview context menu ──
-.database-overview-context-menu {
-  position: fixed;
-  z-index: 20;
-  min-width: 148px;
-  padding: 4px;
-  border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.98);
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  box-shadow: 0 16px 36px $shadow-strong;
-  transform-origin: top left;
-  animation: context-menu-enter 140ms ease;
-
-  &-item {
-    width: 100%;
-    padding: 6px 10px;
-    border: 0;
-    outline: 0;
-    box-shadow: none;
-    appearance: none;
-    border-radius: var(--radius-sm);
-    text-align: left;
-    color: $color-text-primary;
-    background: transparent;
-    font-size: 12px;
-    line-height: 1.25;
-    cursor: pointer;
-
-    &:hover {
-      background: rgba(239, 246, 255, 0.92);
-    }
-  }
 }
 
 @media (max-width: 1120px) {

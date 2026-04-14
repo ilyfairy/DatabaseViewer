@@ -3,9 +3,9 @@ namespace DatabaseViewer.Api;
 /// <summary>
 /// Defines the optional host settings loaded from the program directory.
 /// </summary>
-public sealed class DesktopApiHostSettings
+public sealed class ApiHostSettings
 {
-    public const string SectionName = "DesktopApiHost";
+    public const string SectionName = "ApiHost";
 
     /// <summary>
     /// Configures the Kestrel listen URL, for example http://127.0.0.1:5027 or http://*:5027.

@@ -99,7 +99,8 @@ public sealed record ColumnDto(
     int? MaxLength,
     string? Comment,
     int? NumericPrecision,
-    int? NumericScale);
+    int? NumericScale,
+    bool IsHiddenRowId = false);
 
 public sealed record ForeignKeyDto(string SourceColumn, string TargetTableKey, string TargetColumn, bool Logical);
 

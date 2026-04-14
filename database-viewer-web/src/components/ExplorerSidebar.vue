@@ -3,6 +3,9 @@ import type { Component } from 'vue';
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { IconBolt, IconChevronDown, IconChevronRight, IconColumns3, IconDatabase, IconEye, IconFunction, IconLink, IconListDetails, IconScript, IconServer, IconTable, IconTableColumn, IconVariable } from '@tabler/icons-vue';
 import { NAlert, NButton, NCheckbox, NEmpty, NIcon, NInput, NModal, NSelect, NSpin, NTabPane, NTabs, NText } from 'naive-ui';
+import type { DropdownOption } from 'naive-ui';
+import ContextDropdown from './ContextDropdown.vue';
+import StoredMaskedPasswordInput from './StoredMaskedPasswordInput.vue';
 import { useExplorerStore } from '../stores/explorer';
 import type { AuthenticationMode, ProviderType, RoutineInfo, SynonymInfo, TableColumn, TableDesignSection, TableSummary } from '../types/explorer';
 
@@ -14,9 +17,16 @@ const expandedRoutineGroups = ref<string[]>([]);
 const expandedRoutines = ref<string[]>([]);
 const expandedRoutineParamGroups = ref<string[]>([]);
 const expandedTableGroups = ref<string[]>([]);
-const connectionContextMenu = ref<{ x: number; y: number; connectionId: string; connectionName: string; provider: ProviderType } | null>(null);
+const connectionContextMenu = ref<{
+  x: number;
+  y: number;
+  connectionId: string;
+  connectionName: string;
+  provider: ProviderType;
+  sqliteEncrypted: boolean | null;
+} | null>(null);
 const databaseContextMenu = ref<{ x: number; y: number; connectionId: string; database: string } | null>(null);
-const tableContextMenu = ref<{ x: number; y: number; connectionId: string; database: string; table: TableSummary; showScriptSubmenu: boolean } | null>(null);
+const tableContextMenu = ref<{ x: number; y: number; connectionId: string; database: string; table: TableSummary } | null>(null);
 const routineContextMenu = ref<{ x: number; y: number; connectionId: string; database: string; provider: ProviderType; routine: RoutineInfo } | null>(null);
 const designEntryContextMenu = ref<{ x: number; y: number; tableKey: string; kind: 'column' | 'index'; name: string } | null>(null);
 const deleteConnectionConfirm = ref<{ connectionId: string; connectionName: string } | null>(null);
@@ -77,6 +87,7 @@ const sqliteRekeyForm = reactive({
   newPassword: '',
   newKeyFormat: 'passphrase' as 'passphrase' | 'hex',
 });
+const sqliteCipherPasswordEdited = ref(false);
 const closeAllContextMenus = () => {
   closeConnectionContextMenu();
   closeDatabaseContextMenu();
@@ -86,6 +97,98 @@ const closeAllContextMenus = () => {
 };
 
 const visibleConnections = computed(() => store.visibleConnections);
+const showStoredSqliteCipherPasswordMask = computed(() => !!editingConnectionId.value
+  && createConnectionForm.sqliteCipherHasStoredPassword
+  && !sqliteCipherPasswordEdited.value
+  && !createConnectionForm.sqliteCipherPassword);
+const lockExistingUnencryptedSqliteCipherSettings = computed(() => !!editingConnectionId.value
+  && createConnectionForm.provider === 'sqlite'
+  && !createConnectionForm.sqliteCipherEnabled);
+const connectionContextMenuOptions = computed<DropdownOption[]>(() => {
+  if (!connectionContextMenu.value) {
+    return [];
+  }
+
+  const options: DropdownOption[] = [
+    { label: '编辑连接', key: 'edit' },
+  ];
+
+  if (connectionContextMenu.value.provider === 'sqlserver') {
+    options.push({ label: '用户管理', key: 'sqlserver-login-manager' });
+  }
+
+  if (connectionContextMenu.value.provider === 'sqlite' && connectionContextMenu.value.sqliteEncrypted !== false) {
+    options.push({ label: '修改加密密码', key: 'sqlite-rekey' });
+  }
+
+  options.push({ label: '删除连接', key: 'delete' });
+  return options;
+});
+const databaseContextMenuOptions = computed<DropdownOption[]>(() => {
+  if (!databaseContextMenu.value) {
+    return [];
+  }
+
+  return [
+    { label: '新建查询', key: 'new-query' },
+    { label: '新建表...', key: 'new-table' },
+    { label: '刷新数据库', key: 'refresh-database' },
+    { label: '查看关系总览', key: 'graph-overview' },
+  ];
+});
+const tableContextMenuOptions = computed<DropdownOption[]>(() => {
+  if (!tableContextMenu.value) {
+    return [];
+  }
+
+  return [
+    { label: '表设计...', key: 'table-design' },
+    { label: '生成 Mock 数据...', key: 'mock-data' },
+    { label: '重命名表...', key: 'rename-table' },
+    {
+      label: '编写脚本为',
+      key: 'table-script',
+      children: [
+        { label: 'CREATE 到', key: 'script:create' },
+        { label: 'DROP 到', key: 'script:drop' },
+        { label: 'SELECT 到', key: 'script:select' },
+        { label: 'INSERT 到', key: 'script:insert' },
+        { label: 'UPDATE 到', key: 'script:update' },
+        { label: 'DELETE 到', key: 'script:delete' },
+      ],
+    },
+  ];
+});
+const routineContextMenuOptions = computed<DropdownOption[]>(() => {
+  if (!routineContextMenu.value) {
+    return [];
+  }
+
+  return [
+    { label: '修改...', key: 'edit-routine' },
+    { label: '重命名...', key: 'rename-routine' },
+    { label: '删除', key: 'delete-routine' },
+  ];
+});
+const designEntryContextMenuOptions = computed<DropdownOption[]>(() => {
+  if (!designEntryContextMenu.value) {
+    return [];
+  }
+
+  return [
+    { label: designEntryContextMenu.value.kind === 'column' ? '删除字段' : '删除索引', key: 'delete-design-entry' },
+  ];
+});
+
+function beginSqliteCipherPasswordEdit() {
+  if (!showStoredSqliteCipherPasswordMask.value) {
+    return;
+  }
+
+  sqliteCipherPasswordEdited.value = true;
+  createConnectionForm.sqliteCipherPassword = '';
+}
+
 const providerOptions = [
   { label: 'SQL Server', value: 'sqlserver' },
   { label: 'MySQL', value: 'mysql' },
@@ -152,7 +255,7 @@ async function toggleTableNode(tableKey: string) {
   }
   catch {
     expandedTables.value = [...expandedTables.value, tableKey];
-    // Design status is surfaced by the store; tree stays expanded so the user can retry.
+    // 设计加载错误会由 store 展示；这里保留展开态，方便用户直接重试。
   }
 }
 
@@ -354,14 +457,6 @@ function routineTreeIcon(routineType: RoutineInfo['routineType']): Component {
   return routineType === 'Procedure' ? IconScript : IconFunction;
 }
 
-function getViewportSafeMenuPosition(event: MouseEvent, menuWidth: number, menuHeight: number) {
-  const viewportPadding = 12;
-  return {
-    x: Math.max(viewportPadding, Math.min(event.clientX, window.innerWidth - menuWidth - viewportPadding)),
-    y: Math.max(viewportPadding, Math.min(event.clientY, window.innerHeight - menuHeight - viewportPadding)),
-  };
-}
-
 function isTableFocused(tableKey: string) {
   return store.activeTableTab?.tableKey === tableKey || store.activeDesignTab?.tableKey === tableKey;
 }
@@ -371,13 +466,14 @@ async function openDesignSection(tableKey: string, section: TableDesignSection, 
   store.updateDesignTabSelection(`design:${tableKey}`, section, entry);
 }
 
+/** 打开设计树节点右键菜单，并在渲染后按真实尺寸修正位置。 */
 function openDesignEntryContextMenu(event: MouseEvent, kind: 'column' | 'index', tableKey: string, name: string) {
   event.preventDefault();
   event.stopPropagation();
   closeAllContextMenus();
   designEntryContextMenu.value = {
-    x: Math.max(8, Math.min(event.clientX, window.innerWidth - 168)),
-    y: Math.max(8, Math.min(event.clientY, window.innerHeight - 72)),
+    x: event.clientX,
+    y: event.clientY,
     tableKey,
     kind,
     name,
@@ -492,21 +588,45 @@ async function confirmDeleteConnection(connectionId: string) {
   }
 }
 
-function openConnectionContextMenu(event: MouseEvent, connectionId: string, connectionName: string, provider: ProviderType) {
+/** 打开连接右键菜单，并在渲染后按真实菜单尺寸回夹到视口内。 */
+async function openConnectionContextMenu(event: MouseEvent, connectionId: string, connectionName: string, provider: ProviderType) {
   closeDatabaseContextMenu();
   closeTableContextMenu();
-  const menuPosition = getViewportSafeMenuPosition(event, 220, provider === 'sqlite' ? 156 : 120);
+  const clickX = event.clientX;
+  const clickY = event.clientY;
+
+  let sqliteEncrypted: boolean | null = null;
+  if (provider === 'sqlite') {
+    try {
+      const config = await store.getConnectionConfig(connectionId);
+      sqliteEncrypted = config.sqliteCipher.enabled;
+    }
+    catch {
+      sqliteEncrypted = null;
+    }
+  }
+
   connectionContextMenu.value = {
-    x: menuPosition.x,
-    y: menuPosition.y,
+    x: clickX,
+    y: clickY,
     connectionId,
     connectionName,
     provider,
+    sqliteEncrypted,
   };
 }
 
 function closeConnectionContextMenu() {
   connectionContextMenu.value = null;
+}
+
+function openSqlServerLoginManager() {
+  if (!connectionContextMenu.value || connectionContextMenu.value.provider !== 'sqlserver') {
+    return;
+  }
+
+  store.openSqlServerLoginManager(connectionContextMenu.value.connectionId);
+  closeConnectionContextMenu();
 }
 
 function openDeleteConnectionConfirm() {
@@ -549,6 +669,7 @@ async function openEditConnectionDialog() {
     createConnectionForm.sshPassphrase = '';
     createConnectionForm.sqliteCipherEnabled = config.sqliteCipher.enabled;
     createConnectionForm.sqliteCipherHasStoredPassword = config.sqliteCipher.hasPassword;
+    sqliteCipherPasswordEdited.value = false;
     createConnectionForm.sqliteCipherPassword = '';
     createConnectionForm.sqliteCipherKeyFormat = config.sqliteCipher.keyFormat;
     createConnectionForm.sqliteCipherPageSize = config.sqliteCipher.pageSize ? String(config.sqliteCipher.pageSize) : '';
@@ -589,6 +710,11 @@ async function openSqliteRekeyDialog() {
 
   try {
     const config = await store.getConnectionConfig(connectionContextMenu.value.connectionId);
+    if (!config.sqliteCipher.enabled) {
+      store.showNotice('warning', '当前实现仅支持修改已加密 SQLite 数据库的密码。明文库加密/解密需要导出重写，暂未实现。');
+      return;
+    }
+
     sqliteRekeyTarget.value = {
       connectionId: config.id,
       connectionName: config.name,
@@ -656,13 +782,13 @@ function closeDeleteConnectionConfirm() {
   deleteConnectionConfirm.value = null;
 }
 
+/** 打开数据库右键菜单，并在渲染后按真实菜单尺寸修正位置。 */
 function openDatabaseContextMenu(event: MouseEvent, connectionId: string, database: string) {
   closeConnectionContextMenu();
   closeTableContextMenu();
-  const menuPosition = getViewportSafeMenuPosition(event, 240, 180);
   databaseContextMenu.value = {
-    x: menuPosition.x,
-    y: menuPosition.y,
+    x: event.clientX,
+    y: event.clientY,
     connectionId,
     database,
   };
@@ -672,17 +798,16 @@ function closeDatabaseContextMenu() {
   databaseContextMenu.value = null;
 }
 
+/** 打开表右键菜单，并在渲染后按真实菜单尺寸修正位置。 */
 function openTableContextMenu(event: MouseEvent, connectionId: string, database: string, table: TableSummary) {
   closeConnectionContextMenu();
   closeDatabaseContextMenu();
-  const menuPosition = getViewportSafeMenuPosition(event, 250, 220);
   tableContextMenu.value = {
-    x: menuPosition.x,
-    y: menuPosition.y,
+    x: event.clientX,
+    y: event.clientY,
     connectionId,
     database,
     table,
-    showScriptSubmenu: false,
   };
 }
 
@@ -690,12 +815,12 @@ function closeTableContextMenu() {
   tableContextMenu.value = null;
 }
 
+/** 打开例程右键菜单，并在渲染后按真实菜单尺寸修正位置。 */
 function openRoutineContextMenu(event: MouseEvent, connectionId: string, database: string, provider: ProviderType, routine: RoutineInfo) {
   closeAllContextMenus();
-  const menuPosition = getViewportSafeMenuPosition(event, 220, 150);
   routineContextMenu.value = {
-    x: menuPosition.x,
-    y: menuPosition.y,
+    x: event.clientX,
+    y: event.clientY,
     connectionId,
     database,
     provider,
@@ -775,7 +900,7 @@ function buildRenameRoutineScript(provider: ProviderType, routine: RoutineInfo, 
   }
 
   if (provider === 'mysql') {
-    // MySQL 不支持直接重命名存储过程/函数
+    // MySQL 不支持直接重命名存储过程或函数。
     return '';
   }
 
@@ -837,19 +962,165 @@ async function submitRenameRoutine() {
   }
 }
 
-function setTableScriptSubmenu(open: boolean) {
+function providerForConnection(connectionId: string): ProviderType {
+  return store.getConnectionInfo(connectionId)?.provider ?? 'sqlserver';
+}
+
+function openTableDesignFromContextMenu() {
   if (!tableContextMenu.value) {
     return;
   }
 
-  tableContextMenu.value = {
-    ...tableContextMenu.value,
-    showScriptSubmenu: open,
-  };
+  store.openTableDesign(tableContextMenu.value.table.key);
+  closeTableContextMenu();
 }
 
-function providerForConnection(connectionId: string): ProviderType {
-  return store.getConnectionInfo(connectionId)?.provider ?? 'sqlserver';
+function openRoutineSourceFromContextMenu() {
+  if (!routineContextMenu.value) {
+    return;
+  }
+
+  store.openRoutineSource(
+    routineContextMenu.value.connectionId,
+    routineContextMenu.value.database,
+    routineContextMenu.value.routine.schema ?? null,
+    routineContextMenu.value.routine.name,
+    routineContextMenu.value.routine.routineType,
+  );
+  closeRoutineContextMenu();
+}
+
+function openDeleteRoutineConfirm() {
+  if (!routineContextMenu.value) {
+    return;
+  }
+
+  deleteRoutineConfirm.value = { ...routineContextMenu.value };
+  closeRoutineContextMenu();
+}
+
+function handleConnectionContextMenuShow(value: boolean) {
+  if (!value) {
+    closeConnectionContextMenu();
+  }
+}
+
+function handleDatabaseContextMenuShow(value: boolean) {
+  if (!value) {
+    closeDatabaseContextMenu();
+  }
+}
+
+function handleTableContextMenuShow(value: boolean) {
+  if (!value) {
+    closeTableContextMenu();
+  }
+}
+
+function handleRoutineContextMenuShow(value: boolean) {
+  if (!value) {
+    closeRoutineContextMenu();
+  }
+}
+
+function handleDesignEntryContextMenuShow(value: boolean) {
+  if (!value) {
+    closeDesignEntryContextMenu();
+  }
+}
+
+function handleConnectionContextMenuSelect(key: string | number) {
+  switch (key) {
+    case 'edit':
+      void openEditConnectionDialog();
+      return;
+    case 'sqlserver-login-manager':
+      openSqlServerLoginManager();
+      return;
+    case 'sqlite-rekey':
+      void openSqliteRekeyDialog();
+      return;
+    case 'delete':
+      openDeleteConnectionConfirm();
+      return;
+    default:
+      return;
+  }
+}
+
+function handleDatabaseContextMenuSelect(key: string | number) {
+  switch (key) {
+    case 'new-query':
+      openDatabaseSqlQuery();
+      return;
+    case 'new-table':
+      openCreateTableQuery();
+      return;
+    case 'refresh-database':
+      refreshDatabaseFromMenu();
+      return;
+    case 'graph-overview':
+      openDatabaseGraphOverview();
+      return;
+    default:
+      return;
+  }
+}
+
+function handleTableContextMenuSelect(key: string | number) {
+  switch (key) {
+    case 'table-design':
+      openTableDesignFromContextMenu();
+      return;
+    case 'mock-data':
+      void openTableMockDataDialog();
+      return;
+    case 'rename-table':
+      openRenameTableQuery();
+      return;
+    case 'script:create':
+      void openTableScript('create');
+      return;
+    case 'script:drop':
+      void openTableScript('drop');
+      return;
+    case 'script:select':
+      void openTableScript('select');
+      return;
+    case 'script:insert':
+      void openTableScript('insert');
+      return;
+    case 'script:update':
+      void openTableScript('update');
+      return;
+    case 'script:delete':
+      void openTableScript('delete');
+      return;
+    default:
+      return;
+  }
+}
+
+function handleRoutineContextMenuSelect(key: string | number) {
+  switch (key) {
+    case 'edit-routine':
+      openRoutineSourceFromContextMenu();
+      return;
+    case 'rename-routine':
+      openRenameRoutineDialog();
+      return;
+    case 'delete-routine':
+      openDeleteRoutineConfirm();
+      return;
+    default:
+      return;
+  }
+}
+
+function handleDesignEntryContextMenuSelect(key: string | number) {
+  if (key === 'delete-design-entry') {
+    void deleteDesignEntryFromSidebar();
+  }
 }
 
 function quoteIdentifier(provider: ProviderType, value: string) {
@@ -911,7 +1182,7 @@ async function getTableColumns(connectionId: string, database: string, table: Ta
     }
   }
   catch {
-    // Fall back to SQL context columns when table schema is not loaded.
+    // 表结构尚未加载时，回退到 SQL 上下文里的列信息。
   }
 
   return (sqlContextTable?.columns ?? []).map((column) => ({
@@ -969,28 +1240,6 @@ function buildRenameTableScript(provider: ProviderType, database: string, table:
   return `${buildBatchPrefix(provider, database)}RENAME TABLE ${currentName}\n         TO ${table.schema ? `${quoteIdentifier(provider, table.schema)}.` : ''}${quoteIdentifier(provider, targetName)}${buildBatchSuffix(provider)}`;
 }
 
-function buildCreateTableTemplate(provider: ProviderType, database: string) {
-  const idColumn = provider === 'sqlite'
-    ? `${quoteIdentifier(provider, 'id')} INTEGER PRIMARY KEY AUTOINCREMENT`
-    : provider === 'postgresql'
-      ? `${quoteIdentifier(provider, 'id')} bigint generated by default as identity primary key`
-      : provider === 'mysql'
-        ? `${quoteIdentifier(provider, 'id')} bigint not null auto_increment primary key`
-        : `${quoteIdentifier(provider, 'id')} bigint identity(1,1) not null primary key`;
-  const nameColumn = provider === 'sqlite'
-    ? `${quoteIdentifier(provider, 'name')} TEXT NOT NULL`
-    : `${quoteIdentifier(provider, 'name')} varchar(255) NOT NULL`;
-  const createdAtColumn = provider === 'sqlite'
-    ? `${quoteIdentifier(provider, 'created_at')} TEXT NULL DEFAULT CURRENT_TIMESTAMP`
-    : provider === 'postgresql'
-      ? `${quoteIdentifier(provider, 'created_at')} timestamp NULL DEFAULT CURRENT_TIMESTAMP`
-      : provider === 'mysql'
-        ? `${quoteIdentifier(provider, 'created_at')} datetime NULL DEFAULT CURRENT_TIMESTAMP`
-        : `${quoteIdentifier(provider, 'created_at')} datetime2 NULL DEFAULT sysdatetime()`;
-
-  return `${buildBatchPrefix(provider, database)}CREATE TABLE ${quoteIdentifier(provider, 'new_table')}\n(\n    ${idColumn}\n   ,${nameColumn}\n   ,${createdAtColumn}\n)${buildBatchSuffix(provider)}`;
-}
-
 async function openDatabaseSqlQuery() {
   if (!databaseContextMenu.value) {
     return;
@@ -1008,12 +1257,7 @@ async function openCreateTableQuery() {
 
   const { connectionId, database } = databaseContextMenu.value;
   closeDatabaseContextMenu();
-  const provider = providerForConnection(connectionId);
-  await store.openSqlTabWithContext({
-    connectionId,
-    database,
-    sqlText: buildCreateTableTemplate(provider, database),
-  });
+  store.openCreateTableDesign(connectionId, database);
 }
 
 async function openTableScript(kind: 'create' | 'drop' | 'select' | 'insert' | 'update' | 'delete') {
@@ -1162,6 +1406,7 @@ function resetCreateConnectionForm() {
   createConnectionForm.sshPassphrase = '';
   createConnectionForm.sqliteCipherEnabled = false;
   createConnectionForm.sqliteCipherHasStoredPassword = false;
+  sqliteCipherPasswordEdited.value = false;
   createConnectionForm.sqliteCipherPassword = '';
   createConnectionForm.sqliteCipherKeyFormat = 'passphrase';
   createConnectionForm.sqliteCipherPageSize = '';
@@ -2017,76 +2262,32 @@ onBeforeUnmount(() => {
       </NSpin>
     </div>
 
-    <div
-      v-if="connectionContextMenu"
-      class="database-context-menu"
-      :style="{ left: `${connectionContextMenu.x}px`, top: `${connectionContextMenu.y}px` }"
-      @click.stop
-      @mousedown.stop
-    >
-      <button type="button" class="database-context-menu-item" @click.stop="openEditConnectionDialog()">
-        编辑连接
-      </button>
-      <button v-if="connectionContextMenu.provider === 'sqlite'" type="button" class="database-context-menu-item" @click.stop="openSqliteRekeyDialog()">
-        修改加密密码
-      </button>
-      <button type="button" class="database-context-menu-item" @click.stop="openDeleteConnectionConfirm()">
-        删除连接
-      </button>
-    </div>
+    <ContextDropdown
+      :show="!!connectionContextMenu"
+      :x="connectionContextMenu?.x ?? 0"
+      :y="connectionContextMenu?.y ?? 0"
+      :options="connectionContextMenuOptions"
+      @update:show="handleConnectionContextMenuShow"
+      @select="handleConnectionContextMenuSelect"
+    />
 
-    <div
-      v-if="databaseContextMenu"
-      class="database-context-menu"
-      :style="{ left: `${databaseContextMenu.x}px`, top: `${databaseContextMenu.y}px` }"
-      @click.stop
-      @mousedown.stop
-    >
-      <button type="button" class="database-context-menu-item" @click="openDatabaseSqlQuery()">
-        新建查询
-      </button>
-      <button type="button" class="database-context-menu-item" @click="openCreateTableQuery">
-        新建表...
-      </button>
-      <button type="button" class="database-context-menu-item" @click="refreshDatabaseFromMenu">
-        刷新数据库
-      </button>
-      <button type="button" class="database-context-menu-item" @click="openDatabaseGraphOverview">
-        查看关系总览
-      </button>
-    </div>
+    <ContextDropdown
+      :show="!!databaseContextMenu"
+      :x="databaseContextMenu?.x ?? 0"
+      :y="databaseContextMenu?.y ?? 0"
+      :options="databaseContextMenuOptions"
+      @update:show="handleDatabaseContextMenuShow"
+      @select="handleDatabaseContextMenuSelect"
+    />
 
-    <div
-      v-if="tableContextMenu"
-      class="database-context-menu"
-      :style="{ left: `${tableContextMenu.x}px`, top: `${tableContextMenu.y}px` }"
-      @click.stop
-      @mousedown.stop
-      @mouseleave="setTableScriptSubmenu(false)"
-    >
-      <button type="button" class="database-context-menu-item" @click="store.openTableDesign(tableContextMenu.table.key); closeTableContextMenu()">表设计...</button>
-      <button type="button" class="database-context-menu-item" @click="openTableMockDataDialog">生成 Mock 数据...</button>
-      <button type="button" class="database-context-menu-item" @click="openRenameTableQuery">重命名表...</button>
-      <div class="database-context-submenu-anchor" @mouseenter="setTableScriptSubmenu(true)" @mouseleave="setTableScriptSubmenu(false)">
-        <button
-          type="button"
-          class="database-context-menu-item database-context-menu-item-arrow"
-          @click="setTableScriptSubmenu(!tableContextMenu.showScriptSubmenu)"
-        >
-          <span>编写脚本为</span>
-          <NIcon size="12" class="database-context-menu-item-arrow-icon"><IconChevronRight /></NIcon>
-        </button>
-
-        <div v-if="tableContextMenu.showScriptSubmenu" class="database-context-menu database-context-submenu">
-          <button type="button" class="database-context-menu-item" @click="openTableScript('create')">CREATE 到</button>
-          <button type="button" class="database-context-menu-item" @click="openTableScript('drop')">DROP 到</button>
-          <button type="button" class="database-context-menu-item" @click="openTableScript('select')">SELECT 到</button>
-          <button type="button" class="database-context-menu-item" @click="openTableScript('insert')">INSERT 到</button>
-          <button type="button" class="database-context-menu-item" @click="openTableScript('update')">UPDATE 到</button>
-          <button type="button" class="database-context-menu-item" @click="openTableScript('delete')">DELETE 到</button>
-        </div>
-      </div>
-    </div>
+    <ContextDropdown
+      :show="!!tableContextMenu"
+      :x="tableContextMenu?.x ?? 0"
+      :y="tableContextMenu?.y ?? 0"
+      :options="tableContextMenuOptions"
+      @update:show="handleTableContextMenuShow"
+      @select="handleTableContextMenuSelect"
+    />
 
     <NModal v-model:show="createConnectionVisible" preset="card" style="width: min(500px, 94vw)" :title="editingConnectionId ? '编辑连接' : '新建连接'">
       <div class="connection-dialog-form">
@@ -2167,15 +2368,18 @@ onBeforeUnmount(() => {
           </NTabPane>
           <NTabPane v-if="createConnectionForm.provider === 'sqlite'" name="cipher" tab="加密">
             <div class="connection-dialog-form connection-dialog-form-section">
+              <NAlert v-if="lockExistingUnencryptedSqliteCipherSettings" type="info" :show-icon="false">
+                当前 SQLite 数据库尚未加密。SQLCipher 对明文库加密/解密需要导出并重写数据库文件，当前应用暂未提供这条流程，因此这里只允许编辑已经加密好的 SQLite 参数。
+              </NAlert>
               <div class="connection-parameter-row connection-parameter-row-toggle">
                 <div class="connection-parameter-meta" title="开启后按下面的参数使用 SQLCipher 打开或创建数据库。">
                   <span class="connection-parameter-label">启用加密</span>
                   <span class="connection-parameter-key">enabled</span>
                 </div>
-                <NCheckbox v-model:checked="createConnectionForm.sqliteCipherEnabled">启用 SQLCipher 加密</NCheckbox>
+                <NCheckbox v-model:checked="createConnectionForm.sqliteCipherEnabled" :disabled="lockExistingUnencryptedSqliteCipherSettings">启用 SQLCipher 加密</NCheckbox>
               </div>
               <NText depth="3">留空表示跟随默认值。</NText>
-              <template v-if="createConnectionForm.sqliteCipherEnabled">
+              <template v-if="createConnectionForm.sqliteCipherEnabled && !lockExistingUnencryptedSqliteCipherSettings">
                 <div class="connection-parameter-grid">
                   <div class="connection-parameter-row">
                     <div class="connection-parameter-meta" title="选择口令或十六进制原始密钥格式。">
@@ -2190,12 +2394,13 @@ onBeforeUnmount(() => {
                       <span class="connection-parameter-label">密钥</span>
                       <span class="connection-parameter-key">key</span>
                     </div>
-                    <NInput
-                      v-model:value="createConnectionForm.sqliteCipherPassword"
-                      type="password"
-                      show-password-on="click"
+                    <StoredMaskedPasswordInput
+                      :model-value="createConnectionForm.sqliteCipherPassword"
+                      :has-stored-value="showStoredSqliteCipherPasswordMask"
                       class="connection-parameter-control"
                       :placeholder="editingConnectionId && createConnectionForm.sqliteCipherHasStoredPassword ? '留空则保持当前密钥' : createConnectionForm.sqliteCipherKeyFormat === 'hex' ? '例如 0011AABB' : '输入 SQLCipher 密码'"
+                      @begin-edit="beginSqliteCipherPasswordEdit"
+                      @update:model-value="(value) => { createConnectionForm.sqliteCipherPassword = value }"
                     />
                   </div>
 
@@ -2383,32 +2588,30 @@ onBeforeUnmount(() => {
 
     <NModal v-model:show="sqliteRekeyVisible" preset="card" style="width: min(460px, 92vw)" title="修改 SQLite 加密密码" @update:show="handleSqliteRekeyVisibleChange">
       <div class="connection-dialog-form connection-dialog-form-section">
-        <NText depth="3">{{ sqliteRekeyTarget?.currentEncrypted ? '留空当前密码时会使用已保存密钥。' : '提交后会把当前 SQLite 数据库转换成 SQLCipher。' }}</NText>
-        <template v-if="sqliteRekeyTarget?.currentEncrypted">
-          <div class="connection-parameter-grid">
-            <div class="connection-parameter-row">
-              <div class="connection-parameter-meta" title="当前数据库使用的密钥格式。">
-                <span class="connection-parameter-label">当前密钥格式</span>
-                <span class="connection-parameter-key">current.key_format</span>
-              </div>
-              <NSelect v-model:value="sqliteRekeyForm.currentKeyFormat" :options="sqliteCipherKeyFormatOptions" class="connection-parameter-control" />
+        <NText depth="3">留空当前密码时会使用连接里已保存的密钥。</NText>
+        <div class="connection-parameter-grid">
+          <div class="connection-parameter-row">
+            <div class="connection-parameter-meta" title="当前数据库使用的密钥格式。">
+              <span class="connection-parameter-label">当前密钥格式</span>
+              <span class="connection-parameter-key">current.key_format</span>
             </div>
-
-            <div class="connection-parameter-row">
-              <div class="connection-parameter-meta" title="当前数据库密码；留空时使用连接里已保存的密钥。">
-                <span class="connection-parameter-label">当前密码</span>
-                <span class="connection-parameter-key">current.key</span>
-              </div>
-              <NInput
-                v-model:value="sqliteRekeyForm.currentPassword"
-                class="connection-parameter-control"
-                type="password"
-                show-password-on="click"
-                placeholder="留空则使用已保存密钥"
-              />
-            </div>
+            <NSelect v-model:value="sqliteRekeyForm.currentKeyFormat" :options="sqliteCipherKeyFormatOptions" class="connection-parameter-control" />
           </div>
-        </template>
+
+          <div class="connection-parameter-row">
+            <div class="connection-parameter-meta" title="当前数据库密码；留空时使用连接里已保存的密钥。">
+              <span class="connection-parameter-label">当前密码</span>
+              <span class="connection-parameter-key">current.key</span>
+            </div>
+            <NInput
+              v-model:value="sqliteRekeyForm.currentPassword"
+              class="connection-parameter-control"
+              type="password"
+              show-password-on="click"
+              placeholder="留空则使用已保存密钥"
+            />
+          </div>
+        </div>
         <div class="connection-parameter-grid">
           <div class="connection-parameter-row">
             <div class="connection-parameter-meta" title="新的密钥格式。">
@@ -2440,36 +2643,23 @@ onBeforeUnmount(() => {
       </div>
     </NModal>
 
-    <!-- routine context menu -->
-    <div
-      v-if="routineContextMenu"
-      class="database-context-menu"
-      :style="{ left: `${routineContextMenu.x}px`, top: `${routineContextMenu.y}px` }"
-      @click.stop
-      @mousedown.stop
-    >
-      <button type="button" class="database-context-menu-item" @click="store.openRoutineSource(routineContextMenu.connectionId, routineContextMenu.database, routineContextMenu.routine.schema ?? null, routineContextMenu.routine.name, routineContextMenu.routine.routineType); closeRoutineContextMenu()">
-        修改...
-      </button>
-      <button type="button" class="database-context-menu-item" @click="openRenameRoutineDialog()">
-        重命名...
-      </button>
-      <button type="button" class="database-context-menu-item database-context-menu-item-danger" @click="deleteRoutineConfirm = { ...routineContextMenu }; closeRoutineContextMenu()">
-        删除
-      </button>
-    </div>
+    <ContextDropdown
+      :show="!!routineContextMenu"
+      :x="routineContextMenu?.x ?? 0"
+      :y="routineContextMenu?.y ?? 0"
+      :options="routineContextMenuOptions"
+      @update:show="handleRoutineContextMenuShow"
+      @select="handleRoutineContextMenuSelect"
+    />
 
-    <div
-      v-if="designEntryContextMenu"
-      class="database-context-menu"
-      :style="{ left: `${designEntryContextMenu.x}px`, top: `${designEntryContextMenu.y}px` }"
-      @click.stop
-      @mousedown.stop
-    >
-      <button type="button" class="database-context-menu-item database-context-menu-item-danger" @click.stop="deleteDesignEntryFromSidebar()">
-        {{ designEntryContextMenu.kind === 'column' ? '删除字段' : '删除索引' }}
-      </button>
-    </div>
+    <ContextDropdown
+      :show="!!designEntryContextMenu"
+      :x="designEntryContextMenu?.x ?? 0"
+      :y="designEntryContextMenu?.y ?? 0"
+      :options="designEntryContextMenuOptions"
+      @update:show="handleDesignEntryContextMenuShow"
+      @select="handleDesignEntryContextMenuSelect"
+    />
 
     <!-- delete routine confirm -->
     <NModal
@@ -2512,7 +2702,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped lang="scss">
-// ── Sidebar shell ──
+// ── 侧边栏外壳 ──
 .sidebar-shell {
   display: flex;
   flex-direction: column;
@@ -2550,7 +2740,7 @@ onBeforeUnmount(() => {
   margin-bottom: $gap-md;
 }
 
-// ── Connection card ──
+// ── 连接卡片 ──
 .connection-card {
   margin-bottom: $gap-sm;
   padding: $gap-sm;
@@ -2564,7 +2754,7 @@ onBeforeUnmount(() => {
   }
 }
 
-// ── Tree structure ──
+// ── 树结构 ──
 .tree-root,
 .tree-node,
 .tree-children {
@@ -2717,7 +2907,7 @@ onBeforeUnmount(() => {
   padding-left: 0;
 }
 
-// ── Tree icons ──
+// ── 树节点图标 ──
 .tree-icon {
   :deep(svg) {
     width: 12px;
@@ -2809,7 +2999,7 @@ onBeforeUnmount(() => {
   }
 }
 
-// ── Tree labels ──
+// ── 树节点文本 ──
 .tree-label-stack {
   display: grid;
   gap: 1px;
@@ -2914,61 +3104,6 @@ onBeforeUnmount(() => {
 
 .tree-inline-alert {
   margin: 2px 0 4px 0;
-}
-
-// ── Database context menu ──
-.database-context-menu {
-  position: fixed;
-  z-index: 90;
-  min-width: 156px;
-  padding: 4px;
-  border: 1px solid $color-border-strong;
-  border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.98);
-  box-shadow: 0 16px 40px $shadow-strong;
-  transform-origin: top left;
-  animation: context-menu-enter 140ms ease;
-
-  .database-context-menu {
-    position: absolute;
-  }
-}
-
-.database-context-menu-item {
-  width: 100%;
-  padding: 6px 10px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  text-align: left;
-  font-size: 12px;
-  line-height: 1.25;
-  cursor: pointer;
-
-  &:hover {
-    background: $color-bg-hover;
-  }
-
-  &-arrow {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-
-    .database-context-menu-item-arrow-icon {
-      color: #64748b;
-    }
-  }
-}
-
-.database-context-submenu-anchor {
-  position: relative;
-}
-
-.database-context-submenu {
-  min-width: 138px;
-  position: absolute;
-  top: -4px;
-  left: calc(100% + 6px);
 }
 
 .connection-dialog-form-section {

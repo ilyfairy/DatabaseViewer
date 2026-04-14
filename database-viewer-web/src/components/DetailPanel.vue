@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { NAlert, NButton, NCard, NEmpty, NModal, NSpin, NTag } from 'naive-ui';
+import type { DropdownOption } from 'naive-ui';
+import ContextDropdown from './ContextDropdown.vue';
 import RelationGraph from './RelationGraph.vue';
 import { useExplorerStore } from '../stores/explorer';
 import type { CellContentPreview, ExplorerDetailPanel, ReverseReferenceRow, TableColumn } from '../types/explorer';
@@ -39,11 +41,13 @@ const previewState = ref<{
   error: null,
 });
 const contextMenu = ref<{
-  show: boolean
   x: number
   y: number
   columnName: string
 } | null>(null);
+const contextMenuOptions = computed<DropdownOption[]>(() => contextMenu.value
+  ? [{ label: '保存二进制到文件...', key: 'save-binary' }]
+  : []);
 const outgoingRelations = computed(() => {
   if (!detail.value) {
     return [];
@@ -213,7 +217,6 @@ async function openBinaryPreview(columnName: string) {
 
 function openBinaryContextMenu(event: MouseEvent, columnName: string) {
   contextMenu.value = {
-    show: true,
     x: event.clientX,
     y: event.clientY,
     columnName,
@@ -222,6 +225,18 @@ function openBinaryContextMenu(event: MouseEvent, columnName: string) {
 
 function closeContextMenu() {
   contextMenu.value = null;
+}
+
+function handleContextMenuShow(value: boolean) {
+  if (!value) {
+    closeContextMenu();
+  }
+}
+
+function handleContextMenuSelect(key: string | number) {
+  if (key === 'save-binary' && contextMenu.value) {
+    void saveCellContent(contextMenu.value.columnName);
+  }
 }
 
 function handleFieldClick(event: MouseEvent, columnName: string, columnType: string) {
@@ -425,15 +440,14 @@ onBeforeUnmount(() => {
       <NEmpty v-else description="正在加载记录详情" />
     </NSpin>
 
-    <div
-      v-if="contextMenu"
-      class="grid-context-menu"
-      :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
-    >
-      <button type="button" class="grid-context-menu-item" @click="saveCellContent(contextMenu.columnName)">
-        保存二进制到文件...
-      </button>
-    </div>
+    <ContextDropdown
+      :show="!!contextMenu"
+      :x="contextMenu?.x ?? 0"
+      :y="contextMenu?.y ?? 0"
+      :options="contextMenuOptions"
+      @update:show="handleContextMenuShow"
+      @select="handleContextMenuSelect"
+    />
 
     <NModal v-model:show="previewState.show" class="binary-preview-modal" preset="card" style="width: min(960px, 92vw)" :title="previewState.title">
       <NSpin :show="previewState.loading">

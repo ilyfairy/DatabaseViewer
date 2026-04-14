@@ -5,6 +5,8 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <SkipFrontendBuildForDebug Condition="'$(SkipFrontendBuildForDebug)' == '' and '$(Configuration)' == 'Debug'">true</SkipFrontendBuildForDebug>
+    <SkipFrontendBuildForDebug Condition="'$(SkipFrontendBuildForDebug)' == ''">false</SkipFrontendBuildForDebug>
   </PropertyGroup>
 
   <!-- 前端依赖恢复和构建输入，任何一个文件变化后都会重新执行对应目标。 -->
@@ -24,7 +26,7 @@
   <!-- 当 node_modules 缺失或锁文件变化时，先自动恢复前端依赖。 -->
   <Target Name="RestoreFrontendDependencies"
           BeforeTargets="BuildFrontend"
-          Condition="'$(DesignTimeBuild)' != 'true'"
+      Condition="'$(DesignTimeBuild)' != 'true' and '$(SkipFrontendBuildForDebug)' != 'true'"
           Inputs="@(FrontendRestoreInputs)"
           Outputs="..\database-viewer-web\node_modules\.pnpm\lock.yaml">
     <Message Text="Restoring database-viewer-web frontend dependencies..." Importance="high" />
@@ -34,7 +36,7 @@
   <!-- 生成前端静态资源，产物仍然先落在源码目录下的 database-viewer-web/dist。 -->
   <Target Name="BuildFrontend"
           BeforeTargets="AssignTargetPaths"
-          Condition="'$(DesignTimeBuild)' != 'true'"
+      Condition="'$(DesignTimeBuild)' != 'true' and '$(SkipFrontendBuildForDebug)' != 'true'"
           Inputs="@(FrontendBuildInputs)"
           Outputs="..\database-viewer-web\dist\index.html">
     <Message Text="Building database-viewer-web frontend..." Importance="high" />
@@ -44,7 +46,7 @@
   <!-- build 时把前端产物复制到 API 输出目录下的 wwwroot。 -->
   <Target Name="CopyFrontendDistToBuildOutput"
           AfterTargets="BuildFrontend"
-          Condition="'$(DesignTimeBuild)' != 'true' and Exists('..\database-viewer-web\dist\index.html')">
+      Condition="'$(DesignTimeBuild)' != 'true' and '$(SkipFrontendBuildForDebug)' != 'true' and Exists('..\database-viewer-web\dist\index.html')">
     <ItemGroup>
       <FrontendDistFiles Include="..\database-viewer-web\dist\**\*" />
     </ItemGroup>

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { NAlert, NButton, NCard, NInput, NModal, NSelect, NSpin, NTag, useDialog } from 'naive-ui';
+import { NAlert, NButton, NCard, NEmpty, NInput, NModal, NSelect, NSpin, NTag, useDialog } from 'naive-ui';
+import type { DropdownOption } from 'naive-ui';
+import ContextDropdown from './ContextDropdown.vue';
 import GridCellEditorModal from './GridCellEditorModal.vue';
 import { useExplorerStore } from '../stores/explorer';
 import type { CellContentPreview, CellValue, ForeignKeyRef, TableColumn, TableRow, TableRowWriteValueRequest } from '../types/explorer';
@@ -52,7 +54,6 @@ type EditorPayload = {
 }
 
 const contextMenu = ref<{
-  show: boolean
   x: number
   y: number
   rowKey: string
@@ -87,6 +88,7 @@ const activeEditorBinaryFileName = ref('');
 const activeEditorInputRef = ref<HTMLInputElement | null>(null);
 const activeEditorTextareaRef = ref<HTMLTextAreaElement | null>(null);
 const suppressWindowClickUntil = ref(0);
+const editorMouseDownActive = ref(false);
 const draftRowValues = ref<Record<string, DraftCellState>>({});
 const selectedRowKeys = ref<string[]>([]);
 const dragSelectionMode = ref<'select' | 'unselect' | null>(null);
@@ -111,17 +113,21 @@ const visibleColumns = computed<VisibleColumn[]>(() => {
     return [];
   }
 
-  return table.value.columns.map((column) => {
-    const fk = store.getForeignKey(props.tableKey, column.name);
-    return {
-      ...column,
-      isPrimaryKey: !!column.isPrimaryKey,
-      fk,
-    };
-  });
+  return table.value.columns
+    .filter((column) => !column.isHiddenRowId)
+    .map((column) => {
+      const fk = store.getForeignKey(props.tableKey, column.name);
+      return {
+        ...column,
+        isPrimaryKey: !!column.isPrimaryKey,
+        fk,
+      };
+    });
 });
 
-const hasPrimaryKeyColumns = computed(() => visibleColumns.value.some((column) => column.isPrimaryKey));
+const hasPrimaryKeyColumns = computed(() =>
+  (table.value?.columns ?? []).some((column) => column.isPrimaryKey),
+);
 
 function cellValue(row: TableRow, columnName: string, columnType: string | undefined) {
   return store.formatFieldValue(columnName, columnType, row[columnName] ?? null);
@@ -261,8 +267,40 @@ const contextMenuDeleteRowCount = computed(() => {
     : 1;
 });
 const contextMenuDeleteLabel = computed(() => contextMenuDeleteRowCount.value > 1 ? `删除所选 ${contextMenuDeleteRowCount.value} 行` : '删除行');
+const contextMenuOptions = computed<DropdownOption[]>(() => {
+  const menu = contextMenu.value;
+  if (!menu) {
+    return [];
+  }
 
-// ── Filter / search ──
+  const options: DropdownOption[] = [];
+  if (isBinaryColumn(menu.column.name, menu.column.type)) {
+    options.push(
+      { label: '替换二进制文件...', key: 'replace-binary' },
+      { label: '预览二进制', key: 'preview-binary' },
+      { label: '保存二进制到文件...', key: 'save-binary' },
+    );
+  }
+
+  if (isEditableColumn(menu.column)) {
+    options.push({ label: '编辑单元格...', key: 'edit-cell' });
+    if (!editMode.value) {
+      options.push({ label: '进入编辑模式', key: 'enter-edit-mode' });
+    }
+  }
+
+  if (menu.column.isNullable && (menu.draft ? isWritableOnInsert(menu.column) : isEditableColumn(menu.column))) {
+    options.push({ label: '设为 NULL', key: 'set-null' });
+  }
+
+  if (!menu.draft) {
+    options.push({ label: contextMenuDeleteLabel.value, key: 'delete-row' });
+  }
+
+  return options;
+});
+
+// ── 筛选 / 搜索 ──
 const filterOpen = ref(false);
 const tableStats = computed(() => store.tableStats(props.tableKey));
 const searchColumnOptions = computed(() =>
@@ -398,6 +436,7 @@ function resetActiveEditor() {
   activeEditorSetNull.value = false;
   activeEditorBinaryBase64.value = null;
   activeEditorBinaryFileName.value = '';
+  editorMouseDownActive.value = false;
 }
 
 function toggleEditMode() {
@@ -770,7 +809,7 @@ async function insertDraftRow() {
     resetActiveEditor();
   }
   catch {
-    // Store already surfaces the failure.
+    // 错误提示由 store 统一展示，这里不重复处理。
   }
 }
 
@@ -935,6 +974,7 @@ function hasCellContextActions(column: VisibleColumn, draft: boolean) {
     || isBinaryColumn(column.name, column.type);
 }
 
+/** 打开单元格右键菜单。 */
 function openCellContextMenu(event: MouseEvent, rowKey: string, column: VisibleColumn, value: CellValue | undefined, draft = false) {
   if (!hasCellContextActions(column, draft)) {
     closeContextMenu();
@@ -946,7 +986,6 @@ function openCellContextMenu(event: MouseEvent, rowKey: string, column: VisibleC
     selectedRowKeys.value = [rowKey];
   }
   contextMenu.value = {
-    show: true,
     x: event.clientX,
     y: event.clientY,
     rowKey,
@@ -954,6 +993,48 @@ function openCellContextMenu(event: MouseEvent, rowKey: string, column: VisibleC
     value,
     draft,
   };
+}
+
+function handleContextMenuShow(value: boolean) {
+  if (!value) {
+    closeContextMenu();
+  }
+}
+
+function handleContextMenuSelect(key: string | number) {
+  switch (key) {
+    case 'replace-binary':
+      pickBinaryReplacement();
+      return;
+    case 'preview-binary':
+      if (contextMenu.value) {
+        void openBinaryPreview(contextMenu.value.rowKey, contextMenu.value.column.name);
+        closeContextMenu();
+      }
+      return;
+    case 'save-binary':
+      if (contextMenu.value) {
+        void saveCellContent(contextMenu.value.rowKey, contextMenu.value.column.name);
+      }
+      return;
+    case 'edit-cell':
+      if (contextMenu.value) {
+        openCellEditor(contextMenu.value.rowKey, contextMenu.value.column, contextMenu.value.value);
+      }
+      return;
+    case 'enter-edit-mode':
+      editMode.value = true;
+      closeContextMenu();
+      return;
+    case 'set-null':
+      void setContextMenuValueNull();
+      return;
+    case 'delete-row':
+      confirmDeleteRow();
+      return;
+    default:
+      return;
+  }
 }
 
 function openCellEditor(rowKey: string, column: VisibleColumn, value: CellValue | undefined) {
@@ -1111,7 +1192,7 @@ async function handleContextBinaryFileSelected(event: Event) {
       previewCache.value = nextCache;
     }
     catch {
-      // Store already surfaced the error.
+      // 错误提示已经由 store 展示，这里不重复处理。
     }
   }
 
@@ -1203,7 +1284,7 @@ async function setContextMenuValueNull() {
     previewCache.value = nextCache;
   }
   catch {
-    // Store already surfaced the error.
+    // 错误提示已经由 store 展示，这里不重复处理。
   }
 }
 
@@ -1231,7 +1312,7 @@ function confirmDeleteRow() {
         clearSelectedRows();
       }
       catch {
-        // Store already surfaced the error.
+        // 错误提示已经由 store 展示，这里不重复处理。
       }
     },
   });
@@ -1240,6 +1321,11 @@ function confirmDeleteRow() {
 function handleWindowClick() {
   closeContextMenu();
   if (Date.now() < suppressWindowClickUntil.value) {
+    return;
+  }
+
+  if (editorMouseDownActive.value) {
+    editorMouseDownActive.value = false;
     return;
   }
 
@@ -1512,70 +1598,14 @@ watch(dragSelectionMode, (mode, _, onCleanup) => {
       </div>
     </div>
 
-    <div
-      v-if="contextMenu?.show"
-      class="grid-context-menu"
-      :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
-      @click.stop
-      @mousedown.stop
-    >
-      <button
-        v-if="isBinaryColumn(contextMenu.column.name, contextMenu.column.type)"
-        type="button"
-        class="grid-context-menu-item"
-        @click="pickBinaryReplacement"
-      >
-        替换二进制文件...
-      </button>
-      <button
-        v-if="isBinaryColumn(contextMenu.column.name, contextMenu.column.type)"
-        type="button"
-        class="grid-context-menu-item"
-        @click="openBinaryPreview(contextMenu.rowKey, contextMenu.column.name); closeContextMenu()"
-      >
-        预览二进制
-      </button>
-      <button
-        v-if="isBinaryColumn(contextMenu.column.name, contextMenu.column.type)"
-        type="button"
-        class="grid-context-menu-item"
-        @click="saveCellContent(contextMenu.rowKey, contextMenu.column.name)"
-      >
-        保存二进制到文件...
-      </button>
-      <button
-        v-if="isEditableColumn(contextMenu.column)"
-        type="button"
-        class="grid-context-menu-item"
-        @click="openCellEditor(contextMenu.rowKey, contextMenu.column, contextMenu.value)"
-      >
-        编辑单元格...
-      </button>
-      <button
-        v-if="isEditableColumn(contextMenu.column) && !editMode"
-        type="button"
-        class="grid-context-menu-item"
-        @click="editMode = true; closeContextMenu()"
-      >
-        进入编辑模式
-      </button>
-      <button
-        v-if="contextMenu.column.isNullable && (contextMenu.draft ? isWritableOnInsert(contextMenu.column) : isEditableColumn(contextMenu.column))"
-        type="button"
-        class="grid-context-menu-item"
-        @click="setContextMenuValueNull"
-      >
-        设为 NULL
-      </button>
-      <button
-        v-if="!contextMenu.draft"
-        type="button"
-        class="grid-context-menu-item grid-context-menu-item-danger"
-        @click="confirmDeleteRow"
-      >
-        {{ contextMenuDeleteLabel }}
-      </button>
-    </div>
+    <ContextDropdown
+      :show="!!contextMenu"
+      :x="contextMenu?.x ?? 0"
+      :y="contextMenu?.y ?? 0"
+      :options="contextMenuOptions"
+      @update:show="handleContextMenuShow"
+      @select="handleContextMenuSelect"
+    />
 
     <input ref="binaryFileInputRef" type="file" class="grid-inline-file-input" @change="handleBinaryFileSelected" />
     <input ref="contextBinaryFileInputRef" type="file" class="grid-inline-file-input" @change="handleContextBinaryFileSelected" />
@@ -1618,7 +1648,7 @@ watch(dragSelectionMode, (mode, _, onCleanup) => {
         :class="{ 'grid-floating-editor-dirty': activeEditorDirty }"
         :style="activeEditorPopupStyle"
         @click.stop
-        @mousedown.stop
+        @mousedown.stop="editorMouseDownActive = true"
       >
         <div class="grid-inline-editor" :class="{ 'grid-inline-editor-multiline': activeEditorIsMultiline, 'grid-inline-editor-binary': activeEditorIsBinary }">
           <template v-if="activeEditorIsBinary">
@@ -1677,7 +1707,7 @@ watch(dragSelectionMode, (mode, _, onCleanup) => {
 </template>
 
 <style scoped lang="scss">
-// ── Grid panel ──
+// ── 数据网格面板 ──
 .grid-panel {
   display: flex;
   flex-direction: column;
@@ -1857,7 +1887,7 @@ watch(dragSelectionMode, (mode, _, onCleanup) => {
   }
 }
 
-// ── Grid table wrap + scrollbar ──
+// ── 数据网格容器与滚动条 ──
 .grid-table-wrap {
   display: block;
   flex: 1 1 auto;
@@ -1870,7 +1900,7 @@ watch(dragSelectionMode, (mode, _, onCleanup) => {
   overflow-y: auto;
 }
 
-// ── Grid table ──
+// ── 数据网格表格 ──
 .grid-table {
   border-collapse: collapse;
   table-layout: auto;
@@ -1932,7 +1962,7 @@ watch(dragSelectionMode, (mode, _, onCleanup) => {
   box-shadow: inset 0 -1px 0 rgba(59, 130, 246, 0.18);
 }
 
-// ── Grid rows ──
+// ── 数据网格行 ──
 .grid-row {
   &:hover td {
     background: rgba(239, 246, 255, 0.56);
@@ -1957,7 +1987,7 @@ watch(dragSelectionMode, (mode, _, onCleanup) => {
   background: rgba(255, 255, 255, 0.96);
 }
 
-// ── Grid header cells ──
+// ── 表头单元格 ──
 .grid-header-text,
 .grid-cell-text,
 .grid-link-button,
@@ -1993,7 +2023,7 @@ watch(dragSelectionMode, (mode, _, onCleanup) => {
   font-size: $font-size-sm;
 }
 
-// ── Grid cell values ──
+// ── 单元格内容 ──
 .grid-cell-text,
 .grid-primary-value,
 .grid-link-button {
@@ -2066,7 +2096,7 @@ watch(dragSelectionMode, (mode, _, onCleanup) => {
   color: $color-text-muted !important;
 }
 
-// ── Grid resize handle ──
+// ── 列宽拖拽手柄 ──
 .grid-resize-handle {
   position: absolute;
   top: 0;
@@ -2089,7 +2119,7 @@ watch(dragSelectionMode, (mode, _, onCleanup) => {
   }
 }
 
-// ── Grid floating editor ──
+// ── 浮动编辑器 ──
 .grid-floating-editor {
   position: fixed;
   z-index: 95;
@@ -2158,7 +2188,7 @@ watch(dragSelectionMode, (mode, _, onCleanup) => {
   height: 100%;
 }
 
-// ── Grid inline editor ──
+// ── 行内编辑器 ──
 .grid-inline-editor {
   display: grid;
   gap: 4px;
@@ -2197,7 +2227,7 @@ watch(dragSelectionMode, (mode, _, onCleanup) => {
   line-height: 1.3;
 }
 
-// ── Grid row actions ──
+// ── 行操作区 ──
 .grid-row-action-cell {
   min-width: 112px;
   width: 112px;
@@ -2213,7 +2243,7 @@ watch(dragSelectionMode, (mode, _, onCleanup) => {
   display: none;
 }
 
-// ── Grid footer ──
+// ── 网格底部区域 ──
 .grid-footer {
   display: flex;
   align-items: center;

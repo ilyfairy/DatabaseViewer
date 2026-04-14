@@ -61,7 +61,8 @@ public sealed class DatabaseQueryService
         var orderColumns = schema.PrimaryKeys.Count > 0
             ? schema.PrimaryKeys
             : new[] { schema.Columns.First().Name };
-        var sql = SqlDialect.BuildPagedQuery(definition.ProviderType, schema.Table, orderColumns, pageSize, sortColumn, sortDescending);
+        var hasHiddenRowId = schema.Columns.Any(column => column.IsHiddenRowId);
+        var sql = SqlDialect.BuildPagedQuery(definition.ProviderType, schema.Table, orderColumns, pageSize, sortColumn, sortDescending, includeRowId: hasHiddenRowId);
         await using var command = connection.CreateCommand();
         command.CommandText = sql;
         AddParameter(command, "Offset", offset);
@@ -217,11 +218,13 @@ public sealed class DatabaseQueryService
         await connection.OpenAsync();
         await using var transaction = await connection.BeginTransactionAsync();
 
+        var hasHiddenRowId = schema.Columns.Any(column => column.IsHiddenRowId);
         var insertSql = SqlDialect.BuildInsertRowQuery(
             definition.ProviderType,
             schema.Table,
             writableColumns.Select(column => column.Name).ToArray(),
-            parameterNames);
+            parameterNames,
+            includeRowId: hasHiddenRowId);
 
         await using var insertCommand = connection.CreateCommand();
         insertCommand.Transaction = transaction;
@@ -278,7 +281,7 @@ public sealed class DatabaseQueryService
             return null;
         }
 
-        var sql = SqlDialect.BuildSingleRecordQuery(providerType, schema.Table, keys);
+        var sql = SqlDialect.BuildSingleRecordQuery(providerType, schema.Table, keys, includeRowId: schema.Columns.Any(column => column.IsHiddenRowId));
         foreach (var key in keys)
         {
             if (!keyValues.TryGetValue(key, out _))
@@ -317,7 +320,8 @@ public sealed class DatabaseQueryService
         var orderColumns = schema.PrimaryKeys.Count > 0
             ? schema.PrimaryKeys
             : new[] { schema.Columns.First().Name };
-        var sql = SqlDialect.BuildPreviewByColumnQuery(definition.ProviderType, schema.Table, filterColumn, orderColumns);
+        var hasHiddenRowId = schema.Columns.Any(column => column.IsHiddenRowId);
+        var sql = SqlDialect.BuildPreviewByColumnQuery(definition.ProviderType, schema.Table, filterColumn, orderColumns, includeRowId: hasHiddenRowId);
 
         await using var command = connection.CreateCommand();
         command.CommandText = sql;
@@ -369,7 +373,7 @@ public sealed class DatabaseQueryService
         AddParameter(countCommand, "SearchPattern", $"%{query}%");
         var totalMatches = Convert.ToInt32(await countCommand.ExecuteScalarAsync() ?? 0);
 
-        var pagedSql = SqlDialect.BuildSearchPagedQuery(definition.ProviderType, schema.Table, orderColumns, searchColumns, sortColumn, sortDescending);
+        var pagedSql = SqlDialect.BuildSearchPagedQuery(definition.ProviderType, schema.Table, orderColumns, searchColumns, sortColumn, sortDescending, includeRowId: schema.Columns.Any(column => column.IsHiddenRowId));
         await using var dataCommand = connection.CreateCommand();
         dataCommand.CommandText = pagedSql;
         AddParameter(dataCommand, "SearchPattern", $"%{query}%");

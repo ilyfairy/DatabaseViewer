@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import type { Component } from 'vue';
-import { computed, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { IconFlask2, IconListDetails, IconSchema, IconSettings, IconSql, IconTable, IconTableOptions } from '@tabler/icons-vue';
 import { Close } from '@vicons/carbon';
 import { NButton, NIcon } from 'naive-ui';
 import { useExplorerStore } from '../stores/explorer';
+import { attachSmoothHorizontalWheelScroll } from '../lib/smooth-horizontal-wheel-scroll';
 import type { WorkspaceTab } from '../types/explorer';
 
 const store = useExplorerStore();
@@ -12,17 +13,61 @@ const tabs = computed(() => store.workspaceTabs);
 const activeTabId = computed(() => store.activeTabId);
 const draggingTabId = ref<string | null>(null);
 const tabsListRef = ref<HTMLDivElement | null>(null);
+let detachTabsWheelScroll: (() => void) | null = null;
+// 这里只保留最小视觉留白；真正的修复点在共享滚动器的整像素吸附。
+const tabScrollEdgePadding = 4;
 
-/** 将竖向滚轮转换为横向滚动 */
-function handleTabsWheel(event: WheelEvent) {
+function bindTabsWheelScroll() {
+  detachTabsWheelScroll?.();
+
+  if (!tabsListRef.value) {
+    detachTabsWheelScroll = null;
+    return;
+  }
+
+  detachTabsWheelScroll = attachSmoothHorizontalWheelScroll(tabsListRef.value);
+}
+
+/**
+ * 让激活 tab 始终完整落在可视区域内，并保留一个很小的视觉留白。
+ *
+ * tab 自带边框和圆角，只按原始可视区域计算时，边缘看起来仍然像被裁了一点。
+ */
+function scrollActiveTabIntoView(behavior: ScrollBehavior = 'smooth') {
   if (!tabsListRef.value) {
     return;
   }
 
-  if (event.deltaY !== 0) {
-    event.preventDefault();
-    tabsListRef.value.scrollLeft += event.deltaY;
+  const tabsListElement = tabsListRef.value;
+  const activeTabElement = tabsListElement.querySelector('.workspace-tab-chip-active');
+  if (!(activeTabElement instanceof HTMLElement)) {
+    return;
   }
+
+  const listRect = tabsListElement.getBoundingClientRect();
+  const activeRect = activeTabElement.getBoundingClientRect();
+  const visibleLeft = listRect.left + tabScrollEdgePadding;
+  const visibleRight = listRect.right - tabScrollEdgePadding;
+  const leftOverflow = activeRect.left - visibleLeft;
+  const rightOverflow = activeRect.right - visibleRight;
+
+  if (leftOverflow < 0) {
+    const targetScrollLeft = Math.max(0, Math.round(tabsListElement.scrollLeft + leftOverflow));
+    tabsListElement.scrollTo({ left: targetScrollLeft, behavior });
+    return;
+  }
+
+  if (rightOverflow > 0) {
+    const targetScrollLeft = Math.max(0, Math.round(tabsListElement.scrollLeft + rightOverflow));
+    tabsListElement.scrollTo({ left: targetScrollLeft, behavior });
+  }
+}
+
+/** 平滑滚动结束后再做一次无动画校正，去掉子像素裁边。 */
+function finalizeActiveTabVisibility() {
+  window.setTimeout(() => {
+    scrollActiveTabIntoView('auto');
+  }, 180);
 }
 
 function tabTitle(tab: typeof tabs.value[number]) {
@@ -61,6 +106,7 @@ function handleTabAuxClick(event: MouseEvent, tabId: string) {
   store.closeWorkspaceTab(tabId);
 }
 
+
 function handleTabDragStart(event: DragEvent, tabId: string) {
   draggingTabId.value = tabId;
   event.dataTransfer?.setData('text/plain', tabId);
@@ -82,11 +128,27 @@ function handleTabDrop(targetTabId: string) {
 function handleTabDragEnd() {
   draggingTabId.value = null;
 }
+
+onMounted(() => {
+  bindTabsWheelScroll();
+});
+
+onBeforeUnmount(() => {
+  detachTabsWheelScroll?.();
+  detachTabsWheelScroll = null;
+});
+
+watch(() => [tabs.value.length, activeTabId.value], async () => {
+  await nextTick();
+  bindTabsWheelScroll();
+  scrollActiveTabIntoView();
+  finalizeActiveTabVisibility();
+}, { immediate: true });
 </script>
 
 <template>
   <div class="workspace-tabs-shell compact-panel">
-    <div ref="tabsListRef" class="workspace-tabs-list" @wheel="handleTabsWheel">
+    <div ref="tabsListRef" class="workspace-tabs-list">
       <button
         v-for="tab in tabs"
         :key="tab.id"
@@ -104,7 +166,7 @@ function handleTabDragEnd() {
         @dragend="handleTabDragEnd"
       >
         <span class="workspace-tab-chip-kind"><NIcon size="14"><component :is="tabKindIcon(tab)" /></NIcon></span>
-        <span v-if="(tab.type === 'sql' && store.isSqlTabDirty(tab.id)) || (tab.type === 'settings' && store.isSettingsDirty)" class="workspace-tab-chip-dirty" title="未保存">●</span>
+        <span v-if="(tab.type === 'sql' && store.isSqlTabDirty(tab.id)) || (tab.type === 'design' && store.isCreateDesignTabDirty(tab.id)) || (tab.type === 'settings' && store.isSettingsDirty)" class="workspace-tab-chip-dirty" title="未保存">●</span>
         <span class="workspace-tab-chip-label">{{ store.getWorkspaceTabLabel(tab) }}</span>
         <span class="workspace-tab-chip-close" @click.stop="store.closeWorkspaceTab(tab.id)">
           <NIcon size="12"><Close /></NIcon>
@@ -139,6 +201,9 @@ function handleTabDragEnd() {
   min-width: 0;
   flex: 1;
   overflow-x: auto;
+  padding: 2px 4px;
+  box-sizing: border-box;
+  scroll-padding-inline: 4px;
 
   // 隐藏滚动条，保留鼠标滚动功能
   scrollbar-width: none;

@@ -71,7 +71,7 @@ pnpm dev
 
 - `DatabaseViewer.Api` 会在 .NET 构建前自动执行 `database-viewer-web` 下的 `pnpm build`
 - `DatabaseViewer.Api` 构建前会先执行 `database-viewer-web` 下的 `pnpm build`，然后把 `database-viewer-web/dist` 复制到 build/publish 输出目录中的 `wwwroot`
-- `DatabaseViewer.Api/appsettings.json` 中的 `DesktopApiHost:ListenUrl` 会复制到程序目录，用来固定监听地址，例如 `http://127.0.0.1:5027`、`http://*:5027` 或 `http://[::]:5027`
-- `DatabaseViewer.Api/appsettings.json` 中的 `DesktopApiHost:AllowedNetworks` 用来限制访问来源，支持多个 IP 或 CIDR，例如 `127.0.0.1/32`、`::1/128`、`192.168.0.0/16`、`10.1.1.1/8`；未配置时默认只允许本机回环地址 `127.0.0.1` 和 `::1`
+- `DatabaseViewer.Api/appsettings.json` 中的 `ApiHost:ListenUrl` 会复制到程序目录，用来固定监听地址，例如 `http://127.0.0.1:5027`、`http://*:5027` 或 `http://[::]:5027`
+- `DatabaseViewer.Api/appsettings.json` 中的 `ApiHost:AllowedNetworks` 用来限制访问来源，支持多个 IP 或 CIDR，例如 `127.0.0.1/32`、`::1/128`、`192.168.0.0/16`、`10.1.1.1/8`；未配置时默认只允许本机回环地址 `127.0.0.1` 和 `::1`
 - 当监听地址使用 `*`、`+`、`0.0.0.0` 或 `[::]` 这类通配/任意地址时，嵌入式 WPF 浏览器仍会自动通过本地回环地址访问 API
 - 如果后续再次调整仓库结构，请同步更新 `DatabaseViewer.slnx`、`DatabaseViewer.Api/DatabaseViewer.Api.csproj` 和 `DatabaseViewer.Api/Services/FrontendLocator.cs`

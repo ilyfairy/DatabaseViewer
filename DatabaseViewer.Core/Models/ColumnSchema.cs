@@ -22,5 +22,8 @@ public sealed class ColumnSchema
 
     public int? MaxLength { get; set; }
 
+    /// <summary>标记该列为 SQLite 隐式 rowid 列（表本身没有显式主键时注入）。</summary>
+    public bool IsHiddenRowId { get; set; }
+
     public ForeignKeyReference? ForeignKey { get; set; }
 }

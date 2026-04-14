@@ -271,6 +271,13 @@ public sealed class ExplorerApiService
         return new BootstrapResponse(result);
     }
 
+    public async Task<IReadOnlyList<string>> GetCollationsAsync(Guid connectionId, string database)
+    {
+        var connection = (await _connectionStore.LoadAsync()).FirstOrDefault(item => item.Id == connectionId)
+            ?? throw new InvalidOperationException("Connection not found.");
+        return await _metadataService.GetCollationsAsync(connection, database);
+    }
+
     public async Task<DatabaseGraphResponse> GetDatabaseGraphAsync(Guid connectionId, string database)
     {
         var connection = (await _connectionStore.LoadAsync()).FirstOrDefault(item => item.Id == connectionId)
@@ -405,6 +412,11 @@ public sealed class ExplorerApiService
         if (existing.ProviderType != DatabaseProviderType.Sqlite)
         {
             throw new InvalidOperationException("只有 SQLite 连接支持修改加密密钥。", null);
+        }
+
+        if (!existing.SqliteCipher.Enabled)
+        {
+            throw new InvalidOperationException("当前实现仅支持修改已加密 SQLite 数据库的密钥。明文库加密/解密需要 sqlcipher_export 导出重写，暂未实现。", null);
         }
 
         if (string.IsNullOrWhiteSpace(request.NewPassword))
@@ -1327,7 +1339,8 @@ public sealed class ExplorerApiService
         column.MaxLength,
         column.Comment,
         column.NumericPrecision,
-        column.NumericScale);
+        column.NumericScale,
+        column.IsHiddenRowId);
 
     private static TableStatisticDto MapStatistic(TableStatisticInfo statistic) => new(
         statistic.Name,
