@@ -70,6 +70,16 @@ type PendingSqlCloseState = {
 type PendingDesignCloseState = {
   tabId: string
 }
+
+type RefreshBootstrapOptions = {
+  rehydrateConnectionIds?: Iterable<string>
+}
+
+type ConnectConnectionOptions = {
+  forceReload?: boolean
+  preserveExistingDatabases?: boolean
+}
+
 let noticeTimer: ReturnType<typeof setTimeout> | null = null;
 
 type HostBridgeRequest = {
@@ -684,12 +694,51 @@ export const useExplorerStore = defineStore('explorer', () => {
     return layout;
   }
 
-  async function refreshBootstrap() {
+  /**
+   * 用最新的 bootstrap 定义替换连接基础信息，但保留已连接连接的运行态元数据。
+   * 这样在编辑连接、保存设置等场景下，不会把已经展开的数据库树瞬间清空成空壳。
+   */
+  function applyBootstrapSnapshot(nextConnections: ConnectionInfo[]) {
+    const existingConnectionsById = new Map(connections.value.map((connection) => [connection.id, connection]));
+    const nextConnectionIds = new Set(nextConnections.map((connection) => connection.id));
+
+    connectedConnectionIds.value = new Set([...connectedConnectionIds.value].filter((connectionId) => nextConnectionIds.has(connectionId)));
+    connectingConnectionIds.value = new Set([...connectingConnectionIds.value].filter((connectionId) => nextConnectionIds.has(connectionId)));
+
+    connections.value = nextConnections.map((connection) => {
+      const existingConnection = existingConnectionsById.get(connection.id);
+      if (!existingConnection || !connectedConnectionIds.value.has(connection.id)) {
+        return connection;
+      }
+
+      return {
+        ...connection,
+        databases: existingConnection.databases,
+        error: existingConnection.error,
+      };
+    });
+  }
+
+  async function rehydrateConnections(connectionIds: Iterable<string>) {
+    const uniqueConnectionIds = [...new Set(Array.from(connectionIds).filter((connectionId) => connections.value.some((connection) => connection.id === connectionId)))];
+    if (uniqueConnectionIds.length === 0) {
+      return;
+    }
+
+    await Promise.allSettled(uniqueConnectionIds.map(async (connectionId) => {
+      await connectConnection(connectionId, {
+        forceReload: true,
+        preserveExistingDatabases: true,
+      });
+    }));
+  }
+
+  async function refreshBootstrap(options: RefreshBootstrapOptions = {}) {
     isBootstrapping.value = true;
     bootstrapError.value = null;
     try {
       const payload = await requestJson<{ connections: ConnectionInfo[] }>('/api/explorer/bootstrap');
-      connections.value = payload.connections;
+      applyBootstrapSnapshot(payload.connections);
 
       for (const connection of connections.value) {
         if (connection.error) {
@@ -701,6 +750,8 @@ export const useExplorerStore = defineStore('explorer', () => {
         activeConnectionId.value = connections.value[0]?.id ?? null;
       }
       reconcileWorkspaceTabs();
+
+      await rehydrateConnections(options.rehydrateConnectionIds ?? []);
     }
     catch (error) {
       bootstrapError.value = error instanceof Error ? error.message : '无法连接本地 API';
@@ -711,18 +762,30 @@ export const useExplorerStore = defineStore('explorer', () => {
     }
   }
 
-  async function connectConnection(connectionId: string) {
-    if (connectedConnectionIds.value.has(connectionId) || connectingConnectionIds.value.has(connectionId)) {
+  async function connectConnection(connectionId: string, options: ConnectConnectionOptions = {}) {
+    const { forceReload = false, preserveExistingDatabases = false } = options;
+
+    if ((!forceReload && connectedConnectionIds.value.has(connectionId)) || connectingConnectionIds.value.has(connectionId)) {
       return;
     }
 
     connectingConnectionIds.value = new Set([...connectingConnectionIds.value, connectionId]);
     try {
+      const currentConnection = connections.value.find((connection) => connection.id === connectionId) ?? null;
       const node = await requestJson<ConnectionInfo>(`/api/explorer/connect/${connectionId}`, { method: 'POST' });
       connections.value = connections.value.map((c) =>
-        c.id === connectionId ? { ...c, databases: node.databases, error: node.error } : c,
+        c.id === connectionId
+          ? {
+              ...c,
+              ...node,
+              databases: node.error && preserveExistingDatabases
+                ? (currentConnection?.databases ?? c.databases)
+                : node.databases,
+            }
+          : c,
       );
       if (node.error) {
+        connectedConnectionIds.value = new Set([...connectedConnectionIds.value].filter((id) => id !== connectionId));
         showNotice('warning', `${node.name}: ${node.error}`);
       }
       else {
@@ -732,7 +795,13 @@ export const useExplorerStore = defineStore('explorer', () => {
     catch (error) {
       const msg = error instanceof Error ? error.message : '连接失败';
       connections.value = connections.value.map((c) =>
-        c.id === connectionId ? { ...c, error: msg } : c,
+        c.id === connectionId
+          ? {
+              ...c,
+              error: msg,
+              databases: preserveExistingDatabases ? c.databases : [],
+            }
+          : c,
       );
       showNotice('warning', msg);
     }
@@ -2129,7 +2198,7 @@ export const useExplorerStore = defineStore('explorer', () => {
       explorerSettings.value = saved;
       settingsDraft.value = { ...saved };
       explorerSettingsLoaded.value = true;
-      await refreshBootstrap();
+      await refreshBootstrap({ rehydrateConnectionIds: connectedConnectionIds.value });
     }
     finally {
       settingsSaving.value = false;
@@ -2975,6 +3044,8 @@ export const useExplorerStore = defineStore('explorer', () => {
   }
 
   async function updateConnection(connectionId: string, request: CreateConnectionRequest) {
+    const wasConnected = connectedConnectionIds.value.has(connectionId);
+
     const response = await fetch(`/api/explorer/connections/${encodeURIComponent(connectionId)}`, {
       method: 'PUT',
       headers: {
@@ -2987,7 +3058,7 @@ export const useExplorerStore = defineStore('explorer', () => {
       throw new Error(await response.text());
     }
 
-    await refreshBootstrap();
+    await refreshBootstrap({ rehydrateConnectionIds: wasConnected ? [connectionId] : [] });
     showNotice('success', '连接已更新');
   }
 
@@ -3004,7 +3075,7 @@ export const useExplorerStore = defineStore('explorer', () => {
       throw new Error(await response.text());
     }
 
-    await refreshBootstrap();
+    await refreshBootstrap({ rehydrateConnectionIds: connectedConnectionIds.value.has(request.connectionId) ? [request.connectionId] : [] });
     showNotice('success', 'SQLite 加密密钥已更新');
   }
 
