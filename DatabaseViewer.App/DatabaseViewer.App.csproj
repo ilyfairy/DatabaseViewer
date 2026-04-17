@@ -6,6 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <LangVersion>13.0</LangVersion>
+    <ApplicationIcon>Assets\App.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -20,30 +21,25 @@
   </ItemGroup>
 
   <!-- build 时把前端产物复制到桌面程序输出目录下的 wwwroot，运行时直接从程序目录读取。 -->
-  <Target Name="CopyFrontendDistToBuildOutput"
-          AfterTargets="Build"
-          Condition="'$(DesignTimeBuild)' != 'true' and Exists('..\database-viewer-web\dist\index.html')">
+  <Target Name="CopyFrontendDistToBuildOutput" AfterTargets="Build" Condition="'$(DesignTimeBuild)' != 'true' and Exists('..\database-viewer-web\dist\index.html')">
     <ItemGroup>
       <FrontendDistFiles Include="..\database-viewer-web\dist\**\*" />
     </ItemGroup>
 
-    <Copy SourceFiles="@(FrontendDistFiles)"
-    DestinationFiles="@(FrontendDistFiles->'$(OutDir)wwwroot\%(RecursiveDir)%(Filename)%(Extension)')"
-          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(FrontendDistFiles)" DestinationFiles="@(FrontendDistFiles->'$(OutDir)wwwroot\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
 
   <!-- publish 时把前端产物复制到桌面程序发布目录下的 wwwroot。 -->
-  <Target Name="CopyFrontendDistToPublishOutput"
-          AfterTargets="Publish"
-          Condition="Exists('..\database-viewer-web\dist\index.html')">
+  <Target Name="CopyFrontendDistToPublishOutput" AfterTargets="Publish" Condition="Exists('..\database-viewer-web\dist\index.html')">
     <ItemGroup>
       <FrontendDistFiles Include="..\database-viewer-web\dist\**\*" />
     </ItemGroup>
 
-    <Copy SourceFiles="@(FrontendDistFiles)"
-      DestinationFiles="@(FrontendDistFiles->'$(PublishDir)wwwroot\%(RecursiveDir)%(Filename)%(Extension)')"
-          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(FrontendDistFiles)" DestinationFiles="@(FrontendDistFiles->'$(PublishDir)wwwroot\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
+  <ItemGroup>
+    <Content Include="Assets\App.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\DatabaseViewer.Api\DatabaseViewer.Api.csproj" />

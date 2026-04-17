@@ -14,6 +14,8 @@ const SqlServerLoginManagerPanel = defineAsyncComponent(() => import('./componen
 const SqlPanel = defineAsyncComponent(() => import('./components/SqlPanel.vue'));
 const TableMockDataPanel = defineAsyncComponent(() => import('./components/TableMockDataPanel.vue'));
 const TableDesignPanel = defineAsyncComponent(() => import('./components/TableDesignPanel.vue'));
+const DatabasePropertiesPanel = defineAsyncComponent(() => import('./components/DatabasePropertiesPanel.vue'));
+import RoutineExecuteDialog from './components/RoutineExecuteDialog.vue';
 
 // Always visible on first render
 import DetailPanel from './components/DetailPanel.vue';
@@ -41,6 +43,8 @@ const activeMockTab = computed(() => store.activeMockTab);
 const activeSettingsTab = computed(() => store.activeSettingsTab);
 const activeSqlServerLoginManagerTab = computed(() => store.activeSqlServerLoginManagerTab);
 const activeSqlServerLoginEditorTab = computed(() => store.activeSqlServerLoginEditorTab);
+const activeDatabasePropertiesTab = computed(() => store.activeDatabasePropertiesTab);
+const pendingRoutineExec = computed(() => store.pendingRoutineExec);
 const pendingSqlCloseTab = computed(() => {
   const pending = store.pendingSqlClose;
   if (!pending) {
@@ -419,6 +423,11 @@ onBeforeUnmount(() => {
                     <div v-else class="database-overview-empty">正在准备数据库关系图...</div>
                   </div>
                 </div>
+                <div v-else-if="activeDatabasePropertiesTab" class="workspace-body">
+                  <div class="workspace-main">
+                    <DatabasePropertiesPanel :tab="activeDatabasePropertiesTab" />
+                  </div>
+                </div>
                 <EmptyWorkspace v-else />
                 </div>
               </section>
@@ -496,6 +505,16 @@ onBeforeUnmount(() => {
               </div>
             </div>
           </NModal>
+
+          <RoutineExecuteDialog
+            :show="!!pendingRoutineExec"
+            :connection-id="pendingRoutineExec?.connectionId ?? ''"
+            :database="pendingRoutineExec?.database ?? ''"
+            :provider="pendingRoutineExec?.provider ?? 'sqlserver'"
+            :routine="pendingRoutineExec?.routine ?? { name: '', routineType: '', parameters: [] }"
+            @update:show="(v: boolean) => { if (!v) store.cancelRoutineExec(); }"
+            @execute="store.confirmRoutineExec($event)"
+          />
         </NLayoutContent>
       </NLayout>
     </NDialogProvider>
@@ -514,7 +533,7 @@ onBeforeUnmount(() => {
 
 .content-shell {
   height: 100vh;
-  padding: 4px;
+  padding: 4px 0 4px 4px;
   overflow: hidden;
 }
 

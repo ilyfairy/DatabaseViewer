@@ -9,4 +9,5 @@ public enum DbCatalogObjectType
     UserDefinedType = 4,
     DatabaseTrigger = 5,
     XmlSchemaCollection = 6,
+    Assembly = 7,
 }

@@ -664,8 +664,8 @@ function edgePath(props: EdgeProps<DatabaseOverviewEdgeData>) {
     grid-template-columns: auto 1fr auto;
     align-items: center;
     gap: $gap-sm;
-    min-height: 30px;
-    padding: $gap-sm $gap-md;
+    min-height: 24px;
+    padding: 2px $gap-sm;
     border-bottom: 2px solid var(--overview-node-border, #72a8de);
     background: var(--overview-node-soft, #eaf3ff);
   }
@@ -739,7 +739,7 @@ function edgePath(props: EdgeProps<DatabaseOverviewEdgeData>) {
 .database-overview-field-list {
   display: grid;
   gap: 0;
-  padding: 5px $gap-md $gap-md;
+  padding: 3px $gap-sm $gap-sm;
 }
 
 .database-overview-field-row {
@@ -747,7 +747,7 @@ function edgePath(props: EdgeProps<DatabaseOverviewEdgeData>) {
   grid-template-columns: 14px minmax(0, 1fr);
   align-items: center;
   gap: 3px;
-  min-height: 18px;
+  min-height: 16px;
 }
 
 .database-overview-field-icon {

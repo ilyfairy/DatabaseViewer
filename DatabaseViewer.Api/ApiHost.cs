@@ -80,7 +80,29 @@ public static class ApiHost
         app.MapGet("/api/explorer/workspace-layout", async () => await explorer.GetWorkspaceLayoutAsync());
         app.MapPut("/api/explorer/workspace-layout", async (UpdateWorkspaceLayoutRequest request) => await explorer.UpdateWorkspaceLayoutAsync(request));
         app.MapGet("/api/explorer/bootstrap", async () => await explorer.GetBootstrapAsync());
+        app.MapPost("/api/explorer/connect/{connectionId:guid}", async (Guid connectionId) =>
+        {
+            try
+            {
+                return Results.Ok(await explorer.ConnectAsync(connectionId));
+            }
+            catch (Exception ex)
+            {
+                return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
+        });
         app.MapGet("/api/explorer/connections/{connectionId:guid}", async (Guid connectionId) => await explorer.GetConnectionConfigAsync(connectionId));
+        app.MapGet("/api/explorer/databases/{connectionId:guid}", async (Guid connectionId) =>
+        {
+            try
+            {
+                return Results.Ok(await explorer.GetDatabaseNamesAsync(connectionId));
+            }
+            catch (Exception ex)
+            {
+                return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
+        });
         app.MapGet("/api/explorer/collations", async (Guid connectionId, string database) =>
         {
             try
@@ -97,6 +119,17 @@ public static class ApiHost
             try
             {
                 return Results.Ok(await explorer.GetDatabaseGraphAsync(connectionId, database));
+            }
+            catch (Exception ex)
+            {
+                return Results.Text(ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
+        });
+        app.MapGet("/api/explorer/database-properties", async (Guid connectionId, string database) =>
+        {
+            try
+            {
+                return Results.Ok(await explorer.GetDatabasePropertiesAsync(connectionId, database));
             }
             catch (Exception ex)
             {
@@ -433,11 +466,11 @@ public static class ApiHost
     }
 
     /// <summary>
-    /// Enables the Vite dev server workflow for debug builds only.
+    /// Enables the Vite dev server workflow only when built with /p:DevFrontend=True.
     /// </summary>
     private static bool ShouldUseFrontendDevServer()
     {
-#if DEBUG
+#if DEV_FRONTEND
         return true;
 #else
         return false;

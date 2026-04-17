@@ -2,6 +2,7 @@ import { computed, ref } from 'vue';
 import { defineStore } from 'pinia';
 import { useLocalStorage } from '@vueuse/core';
 import dayjs from 'dayjs';
+import { tryMatchRoutineCall } from '../lib/sql-ast';
 import type {
   CatalogObjectDetail,
   CatalogObjectType,
@@ -13,6 +14,7 @@ import type {
   ExplorerSettings,
   GraphWorkspaceTab,
   ProviderType,
+  RoutineInfo,
   ExplorerDetailPanel,
   ExplorerGridPanel,
   ExplorerPanel,
@@ -21,6 +23,7 @@ import type {
   CellContentPreview,
   RecordDetail,
   ReverseReferenceGroup,
+
   DatabaseGraph,
   SqlContext,
   TableCellUpdateRequest,
@@ -34,6 +37,7 @@ import type {
   SqliteRekeyRequest,
   SqlWorkspaceTab,
   SettingsWorkspaceTab,
+  DatabasePropertiesWorkspaceTab,
   SqlServerLoginEditorWorkspaceTab,
   SqlServerLoginManagerWorkspaceTab,
   TableDefinition,
@@ -57,6 +61,7 @@ type OpenSqlTabOptions = {
   filePath?: string | null
   isRoutineSource?: boolean
   execute?: boolean
+  skipRoutineCheck?: boolean
 }
 type PendingSqlCloseState = {
   tabId: string
@@ -224,6 +229,8 @@ async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
 export const useExplorerStore = defineStore('explorer', () => {
   const defaultPageSize = 100;
   const connections = ref<ConnectionInfo[]>([]);
+  const connectedConnectionIds = ref<Set<string>>(new Set());
+  const connectingConnectionIds = ref<Set<string>>(new Set());
   const loadedTables = ref<Record<string, TableDefinition>>({});
   const detailCache = ref<Record<string, RecordDetail>>({});
   const activeConnectionId = useLocalStorage<string | null>('dbv-active-connection', null);
@@ -293,6 +300,17 @@ export const useExplorerStore = defineStore('explorer', () => {
   const catalogObjectState = ref<Record<string, { loading: boolean; error: string | null; value: CatalogObjectDetail | null }>>({});
   const pendingSqlClose = ref<PendingSqlCloseState | null>(null);
   const pendingDesignClose = ref<PendingDesignCloseState | null>(null);
+  const pendingDisconnect = ref<{ connectionId: string; remainingDirtyTabIds: string[] } | null>(null);
+  const pendingRoutineExec = ref<{
+    tabId: string | null;
+    connectionId: string;
+    database: string;
+    provider: ProviderType;
+    routine: RoutineInfo;
+  } | null>(null);
+
+  /** 正在执行 SQL 的 Tab 对应的 AbortController，用于取消执行。 */
+  const sqlAbortControllers = new Map<string, AbortController>();
 
   const allTables = computed(() => connections.value.flatMap((connection) => connection.databases.flatMap((database) => database.tables)));
   const allDataObjects = computed(() => connections.value.flatMap((connection) => connection.databases.flatMap((database) => [...database.tables, ...database.views])));
@@ -307,6 +325,7 @@ export const useExplorerStore = defineStore('explorer', () => {
   const activeSettingsTab = computed(() => activeTab.value?.type === 'settings' ? activeTab.value as SettingsWorkspaceTab : undefined);
   const activeSqlServerLoginManagerTab = computed(() => activeTab.value?.type === 'sqlserver-login-manager' ? activeTab.value as SqlServerLoginManagerWorkspaceTab : undefined);
   const activeSqlServerLoginEditorTab = computed(() => activeTab.value?.type === 'sqlserver-login-editor' ? activeTab.value as SqlServerLoginEditorWorkspaceTab : undefined);
+  const activeDatabasePropertiesTab = computed(() => activeTab.value?.type === 'database-properties' ? activeTab.value as DatabasePropertiesWorkspaceTab : undefined);
   const showTableRowCounts = computed(() => explorerSettings.value.showTableRowCounts);
   const isSettingsDirty = computed(() => explorerSettingsLoaded.value && settingsDraft.value.showTableRowCounts !== explorerSettings.value.showTableRowCounts);
   const gridPanel = computed(() => openPanels.value.find((panel) => panel.type === 'grid') as ExplorerGridPanel | undefined);
@@ -516,6 +535,11 @@ export const useExplorerStore = defineStore('explorer', () => {
         return connectionStillExists ? tab : null
       }
 
+      if (tab.type === 'database-properties') {
+        const databaseStillExists = connections.value.some((connection) => connection.id === tab.connectionId && connection.databases.some((db) => db.name === tab.database));
+        return databaseStillExists ? tab : null;
+      }
+
       const connectionId = tab.connectionId && connections.value.some((connection) => connection.id === tab.connectionId)
         ? tab.connectionId
         : (connections.value[0]?.id ?? null);
@@ -558,8 +582,9 @@ export const useExplorerStore = defineStore('explorer', () => {
             userDefinedTypes: database.userDefinedTypes.filter((item) => `${database.name} ${item.name} ${item.baseTypeName}`.toLowerCase().includes(query)),
             databaseTriggers: database.databaseTriggers.filter((item) => `${database.name} ${item.name} ${item.event ?? ''}`.toLowerCase().includes(query)),
             xmlSchemaCollections: database.xmlSchemaCollections.filter((item) => `${database.name} ${item.name}`.toLowerCase().includes(query)),
+            assemblies: database.assemblies.filter((item) => `${database.name} ${item.name} ${item.clrName}`.toLowerCase().includes(query)),
           }))
-          .filter((database) => database.tables.length > 0 || database.views.length > 0 || database.synonyms.length > 0 || database.sequences.length > 0 || database.rules.length > 0 || database.defaults.length > 0 || database.userDefinedTypes.length > 0 || database.databaseTriggers.length > 0 || database.xmlSchemaCollections.length > 0 || database.name.toLowerCase().includes(query)),
+          .filter((database) => database.tables.length > 0 || database.views.length > 0 || database.synonyms.length > 0 || database.sequences.length > 0 || database.rules.length > 0 || database.defaults.length > 0 || database.userDefinedTypes.length > 0 || database.databaseTriggers.length > 0 || database.xmlSchemaCollections.length > 0 || database.assemblies.length > 0 || database.name.toLowerCase().includes(query)),
       }))
       .filter((connection) => connection.name.toLowerCase().includes(query) || connection.host.toLowerCase().includes(query) || connection.databases.length > 0);
   });
@@ -665,6 +690,13 @@ export const useExplorerStore = defineStore('explorer', () => {
     try {
       const payload = await requestJson<{ connections: ConnectionInfo[] }>('/api/explorer/bootstrap');
       connections.value = payload.connections;
+
+      for (const connection of connections.value) {
+        if (connection.error) {
+          showNotice('warning', `${connection.name}: ${connection.error}`);
+        }
+      }
+
       if (!activeConnectionId.value || !connections.value.some((connection) => connection.id === activeConnectionId.value)) {
         activeConnectionId.value = connections.value[0]?.id ?? null;
       }
@@ -677,6 +709,156 @@ export const useExplorerStore = defineStore('explorer', () => {
     finally {
       isBootstrapping.value = false;
     }
+  }
+
+  async function connectConnection(connectionId: string) {
+    if (connectedConnectionIds.value.has(connectionId) || connectingConnectionIds.value.has(connectionId)) {
+      return;
+    }
+
+    connectingConnectionIds.value = new Set([...connectingConnectionIds.value, connectionId]);
+    try {
+      const node = await requestJson<ConnectionInfo>(`/api/explorer/connect/${connectionId}`, { method: 'POST' });
+      connections.value = connections.value.map((c) =>
+        c.id === connectionId ? { ...c, databases: node.databases, error: node.error } : c,
+      );
+      if (node.error) {
+        showNotice('warning', `${node.name}: ${node.error}`);
+      }
+      else {
+        connectedConnectionIds.value = new Set([...connectedConnectionIds.value, connectionId]);
+      }
+    }
+    catch (error) {
+      const msg = error instanceof Error ? error.message : '连接失败';
+      connections.value = connections.value.map((c) =>
+        c.id === connectionId ? { ...c, error: msg } : c,
+      );
+      showNotice('warning', msg);
+    }
+    finally {
+      connectingConnectionIds.value = new Set([...connectingConnectionIds.value].filter((id) => id !== connectionId));
+    }
+  }
+
+  /** 获取 tab 所属的 connectionId（如果有的话） */
+  function getTabConnectionId(tab: WorkspaceTab): string | null {
+    if (tab.type === 'table' || tab.type === 'design') {
+      // tableKey 格式：connectionId::database::schema::table
+      return tab.tableKey.split('::')[0] || null;
+    }
+
+    if (tab.type === 'mock') {
+      return tab.connectionId;
+    }
+
+    if ('connectionId' in tab && typeof tab.connectionId === 'string') {
+      return tab.connectionId;
+    }
+
+    return null;
+  }
+
+  /** 获取属于指定连接的所有 tab */
+  function getConnectionTabs(connectionId: string): WorkspaceTab[] {
+    return workspaceTabs.value.filter((tab) => getTabConnectionId(tab) === connectionId);
+  }
+
+  /** 获取属于指定连接的所有脏 tab id */
+  function getConnectionDirtyTabIds(connectionId: string): string[] {
+    return getConnectionTabs(connectionId)
+      .filter((tab) => isSqlTabDirty(tab.id) || isCreateDesignTabDirty(tab.id))
+      .map((tab) => tab.id);
+  }
+
+  /**
+   * 断开连接：先检查是否有未保存的 tab，如果有则逐个弹出保存提示。
+   * 全部处理完毕后才真正断开。
+   */
+  function disconnectConnection(connectionId: string) {
+    const dirtyTabIds = getConnectionDirtyTabIds(connectionId);
+    if (dirtyTabIds.length > 0) {
+      pendingDisconnect.value = { connectionId, remainingDirtyTabIds: [...dirtyTabIds] };
+      promptNextDisconnectDirtyTab();
+      return;
+    }
+
+    performDisconnectConnection(connectionId);
+  }
+
+  /** 弹出下一个需要保存确认的 tab */
+  function promptNextDisconnectDirtyTab() {
+    if (!pendingDisconnect.value) {
+      return;
+    }
+
+    const { connectionId, remainingDirtyTabIds } = pendingDisconnect.value;
+    if (remainingDirtyTabIds.length === 0) {
+      pendingDisconnect.value = null;
+      performDisconnectConnection(connectionId);
+      return;
+    }
+
+    const nextTabId = remainingDirtyTabIds[0];
+    const tab = workspaceTabs.value.find((t) => t.id === nextTabId);
+    if (!tab) {
+      pendingDisconnect.value = { connectionId, remainingDirtyTabIds: remainingDirtyTabIds.slice(1) };
+      promptNextDisconnectDirtyTab();
+      return;
+    }
+
+    if (tab.type === 'sql' && isSqlTabDirty(nextTabId)) {
+      pendingSqlClose.value = { tabId: nextTabId };
+    }
+    else if (isCreateDesignTabDirty(nextTabId)) {
+      pendingDesignClose.value = { tabId: nextTabId };
+    }
+    else {
+      pendingDisconnect.value = { connectionId, remainingDirtyTabIds: remainingDirtyTabIds.slice(1) };
+      promptNextDisconnectDirtyTab();
+    }
+  }
+
+  /** 真正执行断开连接：关闭所有相关 tab，清理缓存 */
+  function performDisconnectConnection(connectionId: string) {
+    // Close all tabs belonging to this connection
+    const tabsToClose = getConnectionTabs(connectionId);
+    for (const tab of tabsToClose) {
+      performCloseWorkspaceTab(tab.id);
+    }
+
+    connectedConnectionIds.value = new Set([...connectedConnectionIds.value].filter((id) => id !== connectionId));
+    connections.value = connections.value.map((c) =>
+      c.id === connectionId ? { ...c, databases: [], error: null } : c,
+    );
+
+    // Clean up loaded tables belonging to this connection
+    const newLoadedTables: Record<string, TableDefinition> = {};
+    for (const [key, value] of Object.entries(loadedTables.value)) {
+      if (!key.startsWith(connectionId + '::')) {
+        newLoadedTables[key] = value;
+      }
+    }
+    loadedTables.value = newLoadedTables;
+
+    // Clean up detail cache
+    const newDetailCache: Record<string, RecordDetail> = {};
+    for (const [key, value] of Object.entries(detailCache.value)) {
+      if (!key.startsWith(connectionId + '::')) {
+        newDetailCache[key] = value;
+      }
+    }
+    detailCache.value = newDetailCache;
+
+    ensureActiveTabSelection();
+  }
+
+  function isConnectionConnected(connectionId: string): boolean {
+    return connectedConnectionIds.value.has(connectionId);
+  }
+
+  function isConnectionConnecting(connectionId: string): boolean {
+    return connectingConnectionIds.value.has(connectionId);
   }
 
   function getDatabases(connectionId: string) {
@@ -719,12 +901,41 @@ export const useExplorerStore = defineStore('explorer', () => {
     return getDatabases(connectionId).find((entry) => entry.name === database)?.xmlSchemaCollections ?? [];
   }
 
+  function getAssemblies(connectionId: string, database: string) {
+    return getDatabases(connectionId).find((entry) => entry.name === database)?.assemblies ?? [];
+  }
+
   function getRoutines(connectionId: string, database: string) {
     return getDatabases(connectionId).find((entry) => entry.name === database)?.routines ?? [];
   }
 
   function getConnectionDatabases(connectionId: string) {
     return connections.value.find((connection) => connection.id === connectionId)?.databases ?? [];
+  }
+
+  /**
+   * 按需获取指定连接的数据库名称列表（不触发左侧栏的连接状态变更）。
+   * 如果连接已打开，直接使用已有数据；否则调用轻量 API 获取数据库列表。
+   */
+  async function fetchDatabaseNames(connectionId: string): Promise<string[]> {
+    const existing = getConnectionDatabases(connectionId);
+    if (existing.length > 0) {
+      return existing.map((db) => db.name);
+    }
+
+    try {
+      const names = await requestJson<string[]>(`/api/explorer/databases/${connectionId}`);
+      // Stash minimal database info so SQL panel can access it
+      connections.value = connections.value.map((c) =>
+        c.id === connectionId && c.databases.length === 0
+          ? { ...c, databases: names.map((name) => ({ name, tables: [], views: [], synonyms: [], sequences: [], rules: [], defaults: [], userDefinedTypes: [], databaseTriggers: [], xmlSchemaCollections: [], assemblies: [], routines: [] })) }
+          : c,
+      );
+      return names;
+    }
+    catch {
+      return [];
+    }
   }
 
   function getConnectionInfo(connectionId: string) {
@@ -1559,7 +1770,11 @@ export const useExplorerStore = defineStore('explorer', () => {
     const beforeKeys = new Set([...(beforeObjects?.tables ?? []), ...(beforeObjects?.views ?? [])].map((table) => table.key));
 
     try {
-      await refreshBootstrap();
+      // Re-fetch metadata for this connection only
+      const node = await requestJson<ConnectionInfo>(`/api/explorer/connect/${connectionId}`, { method: 'POST' });
+      connections.value = connections.value.map((c) =>
+        c.id === connectionId ? { ...c, databases: node.databases, error: node.error } : c,
+      );
 
       const afterObjects = getConnectionDatabases(connectionId).find((entry) => entry.name === database);
       const afterKeys = [...(afterObjects?.tables ?? []), ...(afterObjects?.views ?? [])].map((table) => table.key);
@@ -1621,6 +1836,20 @@ export const useExplorerStore = defineStore('explorer', () => {
     if (activeGraphTab.value) {
       closeWorkspaceTab(activeGraphTab.value.id);
     }
+  }
+
+  /** 打开数据库属性 Tab 页。 */
+  function openDatabaseProperties(connectionId: string, database: string) {
+    persistActiveTablePanels();
+    const tabId = `db-props:${connectionId}:${database}`;
+
+    upsertWorkspaceTab({
+      id: tabId,
+      type: 'database-properties',
+      connectionId,
+      database,
+    });
+    setActiveTab(tabId);
   }
 
   function setActiveTablePanels(panels: ExplorerPanel[]) {
@@ -1742,6 +1971,10 @@ export const useExplorerStore = defineStore('explorer', () => {
       return `${tab.database} 关系总览`;
     }
 
+    if (tab.type === 'database-properties') {
+      return `${tab.database} 属性`;
+    }
+
     if (tab.type === 'catalog') {
       const prefix = tab.schema ? `${tab.schema}.${tab.name}` : tab.name;
       return `${tab.database} / ${prefix}`;
@@ -1795,7 +2028,7 @@ export const useExplorerStore = defineStore('explorer', () => {
       await ensureSqlContextLoaded(preferredConnectionId, preferredDatabase);
     }
     if (options.execute && sqlText.trim()) {
-      await executeSqlTab(tabId, sqlText);
+      await executeSqlTab(tabId, sqlText, options.skipRoutineCheck ? { skipRoutineCheck: true } : undefined);
     }
     return tabId;
   }
@@ -2114,6 +2347,7 @@ export const useExplorerStore = defineStore('explorer', () => {
 
     pendingSqlClose.value = null;
     performCloseWorkspaceTab(tabId);
+    advanceDisconnectFlow(tabId);
   }
 
   function discardPendingSqlClose() {
@@ -2124,10 +2358,12 @@ export const useExplorerStore = defineStore('explorer', () => {
     const tabId = pendingSqlClose.value.tabId;
     pendingSqlClose.value = null;
     performCloseWorkspaceTab(tabId);
+    advanceDisconnectFlow(tabId);
   }
 
   function cancelPendingSqlClose() {
     pendingSqlClose.value = null;
+    cancelDisconnectFlow();
   }
 
   function discardPendingDesignClose() {
@@ -2138,10 +2374,30 @@ export const useExplorerStore = defineStore('explorer', () => {
     const tabId = pendingDesignClose.value.tabId;
     pendingDesignClose.value = null;
     performCloseWorkspaceTab(tabId);
+    advanceDisconnectFlow(tabId);
   }
 
   function cancelPendingDesignClose() {
     pendingDesignClose.value = null;
+    cancelDisconnectFlow();
+  }
+
+  /** 当一个脏 tab 被保存/丢弃后，继续处理下一个 */
+  function advanceDisconnectFlow(resolvedTabId: string) {
+    if (!pendingDisconnect.value) {
+      return;
+    }
+
+    pendingDisconnect.value = {
+      ...pendingDisconnect.value,
+      remainingDirtyTabIds: pendingDisconnect.value.remainingDirtyTabIds.filter((id) => id !== resolvedTabId),
+    };
+    promptNextDisconnectDirtyTab();
+  }
+
+  /** 用户取消了保存提示，中止整个断开流程 */
+  function cancelDisconnectFlow() {
+    pendingDisconnect.value = null;
   }
 
   async function openSqlFileTab(filePath: string, content: string) {
@@ -2176,19 +2432,59 @@ export const useExplorerStore = defineStore('explorer', () => {
     }));
   }
 
-  async function executeSqlTab(tabId: string, sqlTextOverride?: string, options?: { silent?: boolean }) {
+  async function executeSqlTab(tabId: string, sqlTextOverride?: string, options?: { silent?: boolean; skipRoutineCheck?: boolean; preserveText?: boolean }) {
     const tab = workspaceTabs.value.find((entry) => entry.id === tabId && entry.type === 'sql') as SqlWorkspaceTab | undefined;
     const sqlText = sqlTextOverride ?? tab?.sqlText ?? '';
     if (!tab?.connectionId || !tab.database || !sqlText.trim()) {
       return;
     }
 
+    // 检测是否为存储过程/函数调用，且该例程有参数需要填写
+    if (!options?.silent && !options?.skipRoutineCheck) {
+      const connection = getConnectionInfo(tab.connectionId);
+      if (connection) {
+        // 例程源码 Tab（右键"修改..."打开的）：点击"执行 SQL"应弹参数对话框来测试执行
+        if (tab.isRoutineSource && tab.displayName) {
+          const routine = findRoutineByDisplayName(tab.connectionId, tab.database, tab.displayName);
+          if (routine && routine.parameters.filter((p) => p.direction !== 'RETURN_VALUE').length > 0) {
+            pendingRoutineExec.value = {
+              tabId,
+              connectionId: tab.connectionId,
+              database: tab.database,
+              provider: connection.provider,
+              routine,
+            };
+            return;
+          }
+        }
+
+        // 普通 SQL Tab：检测 EXEC / CALL / SELECT func() 等调用语句
+        const callInfo = await tryMatchRoutineCall(sqlText.trim(), connection.provider);
+        if (callInfo?.hasNoArgs) {
+          const routine = findRoutineByCall(tab.connectionId, tab.database, callInfo.name, callInfo.schema);
+          if (routine && routine.parameters.filter((p) => p.direction !== 'RETURN_VALUE').length > 0) {
+            pendingRoutineExec.value = {
+              tabId,
+              connectionId: tab.connectionId,
+              database: tab.database,
+              provider: connection.provider,
+              routine,
+            };
+            return;
+          }
+        }
+      }
+    }
+
     updateSqlTab(tabId, (current) => ({
       ...current,
-      sqlText,
+      ...(options?.preserveText ? {} : { sqlText }),
       loading: true,
       error: null,
     }));
+
+    const abortController = new AbortController();
+    sqlAbortControllers.set(tabId, abortController);
 
     try {
       const result = await requestJson<SqlExecutionResponse>('/api/explorer/sql-execute', {
@@ -2201,6 +2497,7 @@ export const useExplorerStore = defineStore('explorer', () => {
           database: tab.database,
           sql: sqlText,
         }),
+        signal: abortController.signal,
       });
 
       if (options?.silent) {
@@ -2225,6 +2522,16 @@ export const useExplorerStore = defineStore('explorer', () => {
       }
     }
     catch (error) {
+      if (abortController.signal.aborted) {
+        updateSqlTab(tabId, (current) => ({
+          ...current,
+          loading: false,
+          error: null,
+        }));
+        showNotice('warning', 'SQL 执行已取消');
+        return;
+      }
+
       updateSqlTab(tabId, (current) => ({
         ...current,
         loading: false,
@@ -2232,6 +2539,100 @@ export const useExplorerStore = defineStore('explorer', () => {
       }));
       showNotice('warning', error instanceof Error ? error.message : 'SQL 执行失败');
     }
+    finally {
+      sqlAbortControllers.delete(tabId);
+    }
+  }
+
+  /** 取消正在执行的 SQL 请求。 */
+  function cancelSqlExecution(tabId: string) {
+    const controller = sqlAbortControllers.get(tabId);
+    if (controller) {
+      controller.abort();
+    }
+  }
+
+  /** 根据 AST 解析出的名称在已知例程中查找匹配项。 */
+  function findRoutineByCall(connectionId: string, database: string, name: string, schema: string | null): RoutineInfo | null {
+    const routines = getRoutines(connectionId, database);
+    if (routines.length === 0) {
+      return null;
+    }
+
+    const lowerName = name.toLowerCase();
+    const lowerSchema = schema?.toLowerCase() ?? null;
+
+    return routines.find((r) => {
+      if (r.name.toLowerCase() !== lowerName) {
+        return false;
+      }
+
+      if (lowerSchema === null) {
+        return true;
+      }
+
+      return (r.schema?.toLowerCase() ?? null) === lowerSchema;
+    }) ?? null;
+  }
+
+  /** 根据 Tab displayName（格式 "schema.name" 或 "name"）查找例程。 */
+  function findRoutineByDisplayName(connectionId: string, database: string, displayName: string): RoutineInfo | null {
+    const dotIndex = displayName.indexOf('.');
+    const schema = dotIndex >= 0 ? displayName.slice(0, dotIndex) : null;
+    const name = dotIndex >= 0 ? displayName.slice(dotIndex + 1) : displayName;
+    return findRoutineByCall(connectionId, database, name, schema);
+  }
+
+  /** 用户在参数对话框点击执行后，将生成的 SQL 执行。 */
+  async function confirmRoutineExec(generatedSql: string) {
+    const pending = pendingRoutineExec.value;
+    if (!pending) {
+      return;
+    }
+
+    pendingRoutineExec.value = null;
+
+    if (pending.tabId) {
+      // 已有 SQL Tab：保留编辑器内容不变，后台执行生成的 SQL
+      await executeSqlTab(pending.tabId, generatedSql, { skipRoutineCheck: true, preserveText: true });
+    } else {
+      // 从右键菜单直接触发：先获取源码显示，再后台执行生成的 SQL
+      const routine = pending.routine;
+      const displayName = routine.schema ? `${routine.schema}.${routine.name}` : routine.name;
+      const tabId = await openSqlTabWithContext({
+        connectionId: pending.connectionId,
+        database: pending.database,
+        displayName,
+        isRoutineSource: true,
+      });
+      // 获取源码填充到 Tab
+      try {
+        const response = await requestJson<{ source: string | null }>('/api/explorer/routine-source', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            connectionId: pending.connectionId,
+            database: pending.database,
+            schema: routine.schema ?? null,
+            name: routine.name,
+            routineType: routine.routineType,
+          }),
+        });
+        const source = response.source ?? `-- 无法获取 ${routine.name} 的源代码`;
+        updateSqlTab(tabId, (tab) => ({
+          ...tab,
+          sqlText: source,
+          savedSqlText: source,
+        }));
+      } catch {
+        // 源码获取失败不阻塞执行
+      }
+      await executeSqlTab(tabId, generatedSql, { skipRoutineCheck: true, preserveText: true });
+    }
+  }
+
+  function cancelRoutineExec() {
+    pendingRoutineExec.value = null;
   }
 
   function closeDetailPanel(panelId: string) {
@@ -2518,6 +2919,7 @@ export const useExplorerStore = defineStore('explorer', () => {
       throw new Error(await response.text());
     }
 
+    connectedConnectionIds.value = new Set([...connectedConnectionIds.value].filter((id) => id !== connectionId));
     loadedTables.value = Object.fromEntries(Object.entries(loadedTables.value).filter(([tableKey]) => !tableKey.startsWith(connectionId)));
     detailCache.value = Object.fromEntries(Object.entries(detailCache.value).filter(([panelId]) => !panelId.includes(connectionId)));
     workspaceTabs.value = workspaceTabs.value.filter((tab) => {
@@ -2643,6 +3045,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     tableSortState,
     pendingSqlClose,
     pendingDesignClose,
+    pendingRoutineExec,
     visibleConnections,
     activeConnectionId,
     openPanels,
@@ -2660,6 +3063,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     bootstrapError,
     getDatabases,
     getConnectionDatabases,
+    fetchDatabaseNames,
     getConnectionInfo,
     getSqlContext,
     getTables,
@@ -2671,6 +3075,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     getUserDefinedTypes,
     getDatabaseTriggers,
     getXmlSchemaCollections,
+    getAssemblies,
     getRoutines,
     getWorkspaceTabLabel,
     getTable,
@@ -2740,6 +3145,9 @@ export const useExplorerStore = defineStore('explorer', () => {
     cancelPendingDesignClose,
     selectSqlResultSet,
     executeSqlTab,
+    cancelSqlExecution,
+    confirmRoutineExec,
+    cancelRoutineExec,
     updateDesignTabSelection,
     executeTableDesignSql,
     deleteDesignColumn,
@@ -2772,6 +3180,8 @@ export const useExplorerStore = defineStore('explorer', () => {
     refreshDatabase,
     openDatabaseGraph,
     closeDatabaseGraph,
+    openDatabaseProperties,
+    activeDatabasePropertiesTab,
     defaultPageSize,
     createConnection,
     getConnectionConfig,
@@ -2787,5 +3197,11 @@ export const useExplorerStore = defineStore('explorer', () => {
     showNotice,
     dismissNotice,
     refreshBootstrap,
+    connectConnection,
+    disconnectConnection,
+    isConnectionConnected,
+    isConnectionConnecting,
+    connectedConnectionIds,
+    connectingConnectionIds,
   };
 });

@@ -69,18 +69,43 @@ public sealed class ExplorerApiService
 
     public async Task<BootstrapResponse> GetBootstrapAsync()
     {
-        var settings = await _applicationSettingsStore.LoadAsync();
         var connections = await _connectionStore.LoadAsync();
         var result = new List<ConnectionNodeDto>();
 
         foreach (var connection in connections)
         {
-            try
+            result.Add(new ConnectionNodeDto(
+                connection.Id,
+                connection.Name,
+                ToProviderKey(connection.ProviderType),
+                connection.Host,
+                connection.Port > 0 ? connection.Port : null,
+                connection.AuthenticationMode == AuthenticationMode.WindowsIntegrated ? "windows" : "password",
+                PickAccent(connection.ProviderType),
+                null,
+                Array.Empty<DatabaseNodeDto>()));
+        }
+
+        return new BootstrapResponse(result);
+    }
+
+    public async Task<ConnectionNodeDto> ConnectAsync(Guid connectionId)
+    {
+        var settings = await _applicationSettingsStore.LoadAsync();
+        var connection = (await _connectionStore.LoadAsync()).FirstOrDefault(item => item.Id == connectionId)
+            ?? throw new InvalidOperationException("Connection not found.");
+
+        return await LoadConnectionMetadataAsync(connection, settings);
+    }
+
+    private async Task<ConnectionNodeDto> LoadConnectionMetadataAsync(ConnectionDefinition connection, ApplicationSettings settings)
+    {
+        try
+        {
+            var databases = await _metadataService.GetDatabasesAsync(connection);
+            var databaseNodes = new List<DatabaseNodeDto>();
+            foreach (var database in databases)
             {
-                var databases = await _metadataService.GetDatabasesAsync(connection);
-                var databaseNodes = new List<DatabaseNodeDto>();
-                foreach (var database in databases)
-                {
                     IReadOnlyList<DbTableInfo> tables = Array.Empty<DbTableInfo>();
                     try
                     {
@@ -166,6 +191,15 @@ public sealed class ExplorerApiService
                     {
                     }
 
+                    IReadOnlyList<DbAssemblyInfo> assemblies = Array.Empty<DbAssemblyInfo>();
+                    try
+                    {
+                        assemblies = await _metadataService.GetAssembliesAsync(connection, database);
+                    }
+                    catch
+                    {
+                    }
+
                     var routines = Array.Empty<RoutineNodeDto>();
                     try
                     {
@@ -239,10 +273,16 @@ public sealed class ExplorerApiService
                             item.SchemaName,
                             item.CollectionName,
                             item.XmlNamespaceCount)).ToArray(),
+                        assemblies.Select(item => new AssemblyNodeDto(
+                            item.DatabaseName,
+                            item.AssemblyName,
+                            item.ClrName,
+                            item.PermissionSet,
+                            item.IsVisible)).ToArray(),
                         routines));
                 }
 
-                result.Add(new ConnectionNodeDto(
+                return new ConnectionNodeDto(
                     connection.Id,
                     connection.Name,
                     ToProviderKey(connection.ProviderType),
@@ -251,11 +291,11 @@ public sealed class ExplorerApiService
                     connection.AuthenticationMode == AuthenticationMode.WindowsIntegrated ? "windows" : "password",
                     PickAccent(connection.ProviderType),
                     null,
-                    databaseNodes));
+                    databaseNodes);
             }
             catch (Exception ex)
             {
-                result.Add(new ConnectionNodeDto(
+                return new ConnectionNodeDto(
                     connection.Id,
                     connection.Name,
                     ToProviderKey(connection.ProviderType),
@@ -264,11 +304,15 @@ public sealed class ExplorerApiService
                     connection.AuthenticationMode == AuthenticationMode.WindowsIntegrated ? "windows" : "password",
                     PickAccent(connection.ProviderType),
                     ex.Message,
-                    Array.Empty<DatabaseNodeDto>()));
+                    Array.Empty<DatabaseNodeDto>());
             }
-        }
+    }
 
-        return new BootstrapResponse(result);
+    public async Task<IReadOnlyList<string>> GetDatabaseNamesAsync(Guid connectionId)
+    {
+        var connection = (await _connectionStore.LoadAsync()).FirstOrDefault(item => item.Id == connectionId)
+            ?? throw new InvalidOperationException("Connection not found.");
+        return await _metadataService.GetDatabasesAsync(connection);
     }
 
     public async Task<IReadOnlyList<string>> GetCollationsAsync(Guid connectionId, string database)
@@ -306,13 +350,22 @@ public sealed class ExplorerApiService
             .DistinctBy(edge => $"{edge.SourceTableKey}|{edge.TargetTableKey}|{edge.SourceColumn}|{edge.TargetColumn}|{edge.RelationType}", StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+        var incomingEdges = schemas
+            .SelectMany(schema => schema.IncomingForeignKeys
+                .Select(incoming => CreateIncomingEdge(connectionId, schemas, schema, incoming)))
+            .ToList();
+
+        var mergedEdges = directEdges.Concat(incomingEdges)
+            .DistinctBy(edge => $"{edge.SourceTableKey}|{edge.TargetTableKey}|{edge.SourceColumn}|{edge.TargetColumn}", StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
         var syntheticEdges = schemas
             .Where(IsJunctionTable)
             .SelectMany(schema => CreateSyntheticEdges(connectionId, schema))
             .DistinctBy(edge => $"{edge.SourceTableKey}|{edge.TargetTableKey}|{edge.RelationType}|{edge.ViaTableKey}", StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        return new DatabaseGraphResponse(connectionId, database, nodes, directEdges.Concat(syntheticEdges).ToArray());
+        return new DatabaseGraphResponse(connectionId, database, nodes, mergedEdges.Concat(syntheticEdges).ToArray());
     }
 
     public async Task<ConnectionNodeDto> CreateConnectionAsync(CreateConnectionRequest request)
@@ -353,6 +406,7 @@ public sealed class ExplorerApiService
             connection.Host,
             connection.Port > 0 ? connection.Port : null,
             string.IsNullOrWhiteSpace(connection.Username) ? null : connection.Username,
+            !string.IsNullOrWhiteSpace(connection.Password),
             connection.TrustServerCertificate,
             new SshTunnelConfigResponse(
                 connection.SshTunnel.Enabled,
@@ -360,6 +414,8 @@ public sealed class ExplorerApiService
                 string.IsNullOrWhiteSpace(connection.SshTunnel.Host) ? null : connection.SshTunnel.Host,
                 connection.SshTunnel.Port > 0 ? connection.SshTunnel.Port : null,
                 string.IsNullOrWhiteSpace(connection.SshTunnel.Username) ? null : connection.SshTunnel.Username,
+                !string.IsNullOrWhiteSpace(connection.SshTunnel.Password),
+                !string.IsNullOrWhiteSpace(connection.SshTunnel.Passphrase),
                 string.IsNullOrWhiteSpace(connection.SshTunnel.PrivateKeyPath) ? null : connection.SshTunnel.PrivateKeyPath),
             new SqliteCipherConfigResponse(
                 connection.SqliteCipher.Enabled,
@@ -1693,6 +1749,36 @@ public sealed class ExplorerApiService
             foreignKey.TargetColumn);
     }
 
+    /// <summary>通过 IncomingForeignKeys 补充直接边未覆盖的反向关系。</summary>
+    private static DatabaseGraphEdgeDto CreateIncomingEdge(Guid connectionId, TableSchema[] schemas, TableSchema targetSchema, ForeignKeyReference incoming)
+    {
+        var sourceTable = new DbTableInfo
+        {
+            DatabaseName = incoming.SourceDatabase,
+            SchemaName = incoming.SourceSchema,
+            TableName = incoming.SourceTable,
+        };
+        var sourceTableKey = BuildTableKey(connectionId, sourceTable);
+        var targetTableKey = BuildTableKey(connectionId, targetSchema.Table);
+
+        var sourceSchema = Array.Find(schemas, s =>
+            string.Equals(s.Table.TableName, incoming.SourceTable, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(s.Table.SchemaName ?? string.Empty, incoming.SourceSchema ?? string.Empty, StringComparison.OrdinalIgnoreCase));
+        var sourceIsUnique = sourceSchema?.PrimaryKeys.Contains(incoming.SourceColumn, StringComparer.OrdinalIgnoreCase) ?? false;
+        var relationType = sourceIsUnique ? "one-to-one" : "many-to-one";
+        var relationLabel = sourceIsUnique ? "1:1" : "N:1";
+
+        return new DatabaseGraphEdgeDto(
+            sourceTableKey,
+            targetTableKey,
+            relationType,
+            $"{relationLabel} · {incoming.SourceColumn} -> {incoming.TargetColumn}",
+            !IsPhysicalForeignKey(incoming),
+            null,
+            incoming.SourceColumn,
+            incoming.TargetColumn);
+    }
+
     private static IEnumerable<DatabaseGraphEdgeDto> CreateSyntheticEdges(Guid connectionId, TableSchema schema)
     {
         var foreignKeys = schema.Columns.Where(column => column.ForeignKey is not null).Select(column => column.ForeignKey!).ToArray();
@@ -1788,6 +1874,32 @@ public sealed class ExplorerApiService
         _tablesCache.Clear();
         _viewsCache.Clear();
     }
+
+    /// <summary>
+    /// 获取数据库属性信息。
+    /// </summary>
+    public async Task<DatabasePropertiesResponse> GetDatabasePropertiesAsync(Guid connectionId, string database)
+    {
+        if (string.IsNullOrWhiteSpace(database))
+        {
+            throw new InvalidOperationException("Database is required.");
+        }
+
+        var connection = (await _connectionStore.LoadAsync()).FirstOrDefault(item => item.Id == connectionId)
+            ?? throw new InvalidOperationException("Connection not found.");
+
+        var properties = await _metadataService.GetDatabasePropertiesAsync(connection, database)
+            ?? throw new InvalidOperationException("Database properties not available for this provider.");
+
+        return new DatabasePropertiesResponse(
+            connectionId,
+            database,
+            ToProviderKey(connection.ProviderType),
+            properties.GeneralProperties.Select(p => new CatalogObjectPropertyDto(p.Label, p.Value)).ToArray(),
+            properties.Files.Select(f => new DatabaseFileDto(f.LogicalName, f.FileType, f.FileGroup, f.SizeMB, f.AutoGrowth, f.Path)).ToArray(),
+            properties.Permissions.Select(p => new DatabasePermissionDto(p.UserName, p.UserType, p.DefaultSchema, p.LoginName, p.Roles)).ToArray());
+    }
+
     private async Task<IReadOnlyList<DbTableInfo>> EnsureViewsAsync(ConnectionDefinition connection, string database)
     {
         var cacheKey = BuildViewsCacheKey(connection.Id, database);
@@ -1857,6 +1969,7 @@ public sealed class ExplorerApiService
         "type" => DbCatalogObjectType.UserDefinedType,
         "database-trigger" => DbCatalogObjectType.DatabaseTrigger,
         "xml-schema-collection" => DbCatalogObjectType.XmlSchemaCollection,
+        "assembly" => DbCatalogObjectType.Assembly,
         _ => throw new InvalidOperationException("Unsupported catalog object type."),
     };
 
@@ -1869,6 +1982,7 @@ public sealed class ExplorerApiService
         DbCatalogObjectType.UserDefinedType => "user-defined-type",
         DbCatalogObjectType.DatabaseTrigger => "database-trigger",
         DbCatalogObjectType.XmlSchemaCollection => "xml-schema-collection",
+        DbCatalogObjectType.Assembly => "assembly",
         _ => "synonym",
     };
 

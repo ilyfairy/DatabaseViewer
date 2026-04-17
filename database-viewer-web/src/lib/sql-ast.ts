@@ -354,3 +354,144 @@ function collectSubqueries(
     collectSubqueries(expr.right as Record<string, unknown>, tables, cteNames, subqueryAliases);
   }
 }
+
+// ── 存储过程/函数调用检测 ──
+
+/** 从 AST 中提取的例程调用信息 */
+export interface AstRoutineCall {
+  schema: string | null;
+  name: string;
+  /** true = 调用语句中没有提供任何实参（即括号为空或 EXEC 后无参数） */
+  hasNoArgs: boolean;
+}
+
+/**
+ * 尝试从 SQL 文本中解析出存储过程/函数调用。
+ * 支持 EXEC/EXECUTE (SQL Server)、CALL (MySQL/PostgreSQL)、SELECT func() 等模式。
+ */
+export async function tryMatchRoutineCall(
+  sql: string,
+  provider: ProviderType,
+): Promise<AstRoutineCall | null> {
+  const trimmed = sql.replace(/;+\s*$/, '').trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const astList = await tryParse(trimmed, provider);
+  if (!astList || astList.length !== 1) {
+    return null;
+  }
+
+  const ast = astList[0] as unknown as Record<string, unknown>;
+
+  // SQL Server: EXEC / EXECUTE → type: "exec"
+  if (ast.type === 'exec') {
+    return extractExecAst(ast);
+  }
+
+  // MySQL / PostgreSQL: CALL → type: "call"
+  if (ast.type === 'call') {
+    return extractCallAst(ast);
+  }
+
+  // SELECT func() — 函数调用出现在 columns 或 from 中
+  if (ast.type === 'select') {
+    return extractSelectFuncCall(ast);
+  }
+
+  return null;
+}
+
+/**
+ * SQL Server EXEC 节点提取。
+ * AST 结构: { type: "exec", module: { db: "dbo", table: "ProcName" }, parameters: null | [...] }
+ */
+function extractExecAst(ast: Record<string, unknown>): AstRoutineCall | null {
+  const mod = ast.module as Record<string, unknown> | null;
+  if (!mod || typeof mod.table !== 'string') {
+    return null;
+  }
+
+  const params = ast.parameters as unknown[] | null;
+  return {
+    schema: typeof mod.db === 'string' ? mod.db : null,
+    name: mod.table,
+    hasNoArgs: !params || params.length === 0,
+  };
+}
+
+/**
+ * MySQL / PostgreSQL CALL 节点提取。
+ * AST 结构: { type: "call", expr: { type: "function", name: { name: [{ value }], schema?: { value } }, args: { value: null | [...] } } }
+ */
+function extractCallAst(ast: Record<string, unknown>): AstRoutineCall | null {
+  const expr = ast.expr as Record<string, unknown> | null;
+  if (!expr) {
+    return null;
+  }
+
+  return extractFuncFromExpr(expr);
+}
+
+/** 从 SELECT 语句中检测函数调用（如 SELECT dbo.func() 或 SELECT * FROM func()） */
+function extractSelectFuncCall(ast: Record<string, unknown>): AstRoutineCall | null {
+  // SELECT func(...) — 函数调用在 columns 列表
+  const columns = ast.columns as unknown[] | string | null;
+  if (Array.isArray(columns) && columns.length === 1) {
+    const col = columns[0] as Record<string, unknown>;
+    const expr = col.expr as Record<string, unknown> | null;
+    if (expr?.type === 'function' || expr?.type === 'aggr_func') {
+      return extractFuncFromExpr(expr);
+    }
+  }
+
+  // SELECT * FROM func(...) — 函数调用在 from 列表
+  const from = ast.from as unknown[] | null;
+  if (Array.isArray(from) && from.length === 1) {
+    const fromItem = from[0] as Record<string, unknown>;
+    if (fromItem.type === 'function' || fromItem.type === 'aggr_func') {
+      return extractFuncFromExpr(fromItem);
+    }
+
+    const fromExpr = fromItem.expr as Record<string, unknown> | null;
+    if (fromExpr?.type === 'function' || fromExpr?.type === 'aggr_func') {
+      return extractFuncFromExpr(fromExpr);
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 从 function 类型的 AST 节点中提取名称和参数信息。
+ * AST 结构: { type: "function", name: { name: [{ value: "func_name" }], schema?: { value: "schema_name" } }, args: { value: null | [...] } }
+ */
+function extractFuncFromExpr(expr: Record<string, unknown>): AstRoutineCall | null {
+  const nameObj = expr.name as Record<string, unknown> | null;
+  if (!nameObj) {
+    return null;
+  }
+
+  // name.name 是一个数组，取第一个元素的 value
+  const nameArr = nameObj.name as Array<{ type: string; value: string }> | null;
+  if (!Array.isArray(nameArr) || nameArr.length === 0) {
+    return null;
+  }
+
+  const name = nameArr[0].value;
+  if (!name) {
+    return null;
+  }
+
+  // schema 是可选的对象 { type, value }
+  const schemaObj = nameObj.schema as { value: string } | null | undefined;
+  const schema = schemaObj?.value ?? null;
+
+  // args.value 为 null 或空数组表示无实参
+  const args = expr.args as { type: string; value: unknown[] | null } | null;
+  const argList = args?.value ?? [];
+  const hasNoArgs = !argList || argList.length === 0;
+
+  return { schema, name, hasNoArgs };
+}

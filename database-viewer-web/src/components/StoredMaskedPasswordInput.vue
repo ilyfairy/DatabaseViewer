@@ -13,13 +13,11 @@ const props = withDefaults(defineProps<{
   disabled?: boolean;
   placeholder?: string;
   size?: 'tiny' | 'small' | 'medium' | 'large';
-  showPasswordOn?: 'mousedown' | 'click';
 }>(), {
   storedMask: '••••••••',
   disabled: false,
   placeholder: '',
   size: 'medium',
-  showPasswordOn: 'click',
 });
 
 const emit = defineEmits<{
@@ -120,7 +118,6 @@ function handlePaste(event: ClipboardEvent): void {
     :size="size"
     :disabled="disabled"
     :placeholder="placeholder"
-    :show-password-on="showPasswordOn"
     @keydown="handleKeydown"
     @paste="handlePaste"
     @update:value="handleValueUpdate"

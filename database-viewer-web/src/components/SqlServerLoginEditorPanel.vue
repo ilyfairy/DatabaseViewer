@@ -584,12 +584,12 @@ onBeforeUnmount(() => {
 
             <label class="form-field">
               <span>默认数据库</span>
-              <NSelect v-model:value="draft.defaultDatabase" size="small" :options="databaseOptions" clearable :disabled="!canEditGeneral" />
+              <NSelect v-model:value="draft.defaultDatabase" size="small" :options="databaseOptions" :disabled="!canEditGeneral" />
             </label>
 
             <label class="form-field">
               <span>默认语言</span>
-              <NSelect v-model:value="draft.defaultLanguage" size="small" :options="languageOptions" clearable :disabled="!canEditGeneral" />
+              <NSelect v-model:value="draft.defaultLanguage" size="small" :options="languageOptions" :disabled="!canEditGeneral" />
             </label>
           </div>
           </div>
@@ -690,7 +690,7 @@ onBeforeUnmount(() => {
           <div class="login-tab-body login-tab-body-scroll">
           <NSpin v-if="previewLoading && !sqlPreview" size="small" />
           <NAlert v-if="previewError" type="warning" :show-icon="false">{{ previewError }}</NAlert>
-          <textarea class="sql-preview-textarea" :value="sqlPreview" readonly />
+            <textarea class="sql-preview-textarea" :value="sqlPreview" readonly></textarea>
           </div>
         </NTabPane>
       </NTabs>

@@ -21,6 +21,7 @@ const objectTypeLabel = computed(() => {
     case 'user-defined-type': return '类型';
     case 'database-trigger': return '数据库触发器';
     case 'xml-schema-collection': return 'XML 架构集合';
+    case 'assembly': return '程序集';
     default: return '对象';
   }
 });
@@ -53,10 +54,6 @@ watch(
 
       <template v-else-if="detail">
         <section class="catalog-object-main compact-panel">
-          <div class="catalog-object-summary-row">
-            <strong>摘要</strong>
-            <span class="panel-meta">{{ detail.summary || `${objectTypeLabel}属性` }}</span>
-          </div>
           <table class="catalog-object-grid">
             <tbody>
               <tr v-for="property in detail.properties" :key="property.label">
@@ -90,14 +87,14 @@ watch(
   flex-direction: column;
   min-height: 0;
   height: 100%;
-  gap: 12px;
+  gap: 8px;
 }
 
 .catalog-object-header,
 .catalog-object-main {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
 }
 
 .catalog-object-header {
@@ -120,13 +117,13 @@ watch(
 
 .catalog-object-actions {
   flex: 0 0 auto;
+  padding-right: 8px;
 }
 
 .catalog-object-summary-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 4px;
 }
 
 .catalog-object-grid {
@@ -135,7 +132,7 @@ watch(
 
   th,
   td {
-    padding: 9px 10px;
+    padding: 5px 10px;
     border-top: 1px solid rgba(148, 163, 184, 0.18);
     text-align: left;
     vertical-align: top;
@@ -143,8 +140,8 @@ watch(
   }
 
   th {
-    width: 180px;
-    color: var(--color-text-subtle, #64748b);
+    width: 140px;
+    color: var(--color-text-heading, #0f172a);
     font-weight: 700;
   }
 

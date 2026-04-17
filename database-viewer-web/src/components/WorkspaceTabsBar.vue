@@ -219,6 +219,7 @@ watch(() => [tabs.value.length, activeTabId.value], async () => {
   align-items: center;
   justify-content: flex-end;
   gap: $gap-sm;
+  padding-right: $gap-sm;
 }
 
 .workspace-tab-chip {
@@ -320,6 +321,9 @@ watch(() => [tabs.value.length, activeTabId.value], async () => {
 }
 
 .workspace-tabs-empty {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
   color: $color-text-secondary;
   font-size: $font-size-base;
   padding: 0 $gap-sm;

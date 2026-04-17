@@ -59,9 +59,9 @@ export type DatabaseOverviewLayoutOptions = {
 const OVERVIEW_NODE_MIN_WIDTH = 156;
 const OVERVIEW_NODE_MAX_WIDTH = 292;
 const OVERVIEW_VISIBLE_FIELD_LIMIT = 10;
-const OVERVIEW_NODE_HEADER_HEIGHT = 38;
-const OVERVIEW_NODE_ROW_HEIGHT = 20;
-const OVERVIEW_NODE_FOOTER_HEIGHT = 18;
+const OVERVIEW_NODE_HEADER_HEIGHT = 30;
+const OVERVIEW_NODE_ROW_HEIGHT = 17;
+const OVERVIEW_NODE_FOOTER_HEIGHT = 14;
 const OVERVIEW_EDGE_STUB = 18;
 
 function edgeId(edge: DatabaseGraphEdge) {
@@ -84,16 +84,23 @@ function hiddenFieldCount(node: DatabaseGraphNode, options?: DatabaseOverviewLay
   return Math.max(node.columns.length - visibleFieldCount(node, options), 0);
 }
 
+/** 估算节点宽度，确保标题完整显示。 */
 function estimateNodeWidth(node: DatabaseGraphNode) {
-  const titleWidth = node.title.length * 7.05;
+  // header 固定开销：border(4) + padding(8) + icon(14) + gaps(8) + meta间距(4)
+  const headerOverhead = 38;
+  const titleTextWidth = node.title.length * 7.2;
+  const rowCountLabel = `${node.rowCount ?? '未統計'} rows`;
+  const metaTextWidth = rowCountLabel.length * 5;
+  const headerWidth = titleTextWidth + metaTextWidth + headerOverhead;
+
   const fieldWidth = node.columns.reduce((maxWidth, column) => {
     const iconWidth = 12;
     const nameWidth = column.name.length * 6.2;
     const typeWidth = column.displayType.length * 5.2;
     return Math.max(maxWidth, iconWidth + nameWidth + typeWidth + 20);
-  }, 0);
+  }, 0) + 12;
 
-  return clamp(Math.max(titleWidth + 22, fieldWidth + 12), OVERVIEW_NODE_MIN_WIDTH, OVERVIEW_NODE_MAX_WIDTH);
+  return Math.max(headerWidth, clamp(fieldWidth, OVERVIEW_NODE_MIN_WIDTH, OVERVIEW_NODE_MAX_WIDTH));
 }
 
 function estimateNodeHeight(node: DatabaseGraphNode, options?: DatabaseOverviewLayoutOptions) {
@@ -164,7 +171,30 @@ function compactPathPoints(points: LayoutPoint[]) {
   return compacted;
 }
 
-function extractEdgePath(_layoutEdge: LayoutEdge, nodeById: Map<string, LayoutNode>, edge: DatabaseGraphEdge) {
+function extractEdgePath(layoutEdge: LayoutEdge, nodeById: Map<string, LayoutNode>, edge: DatabaseGraphEdge) {
+  // 优先使用 ELK 计算的正交折线（自动绕开中间节点）
+  if (layoutEdge.sections?.length) {
+    const points: LayoutPoint[] = [];
+    for (const section of layoutEdge.sections) {
+      if (section.startPoint) {
+        points.push(section.startPoint);
+      }
+
+      if (section.bendPoints) {
+        points.push(...section.bendPoints);
+      }
+
+      if (section.endPoint) {
+        points.push(section.endPoint);
+      }
+    }
+
+    if (points.length >= 2) {
+      return pointsToPath(compactPathPoints(points));
+    }
+  }
+
+  // 兜底：简单正交折线（不绕开中间节点）
   const sourceNode = nodeById.get(edge.sourceTableKey);
   const targetNode = nodeById.get(edge.targetTableKey);
   if (!sourceNode || !targetNode) {
@@ -227,7 +257,9 @@ export async function buildDatabaseOverviewLayout(graph: DatabaseGraph, options?
   }) as LayoutGraph;
 
   const layoutNodes = layoutGraph.children ?? [];
+  const layoutEdges = layoutGraph.edges ?? [];
   const nodeById = new Map(layoutNodes.map((node) => [node.id, node]));
+  const edgeById = new Map(layoutEdges.map((e) => [e.id, e]));
 
   const nodes: Node<DatabaseOverviewNodeData>[] = graph.nodes.map((node) => {
     const positionedNode = nodeById.get(node.tableKey);
@@ -288,7 +320,7 @@ export async function buildDatabaseOverviewLayout(graph: DatabaseGraph, options?
         strokeDasharray,
       },
       data: {
-        path: extractEdgePath({ id: edgeId(edge) }, nodeById, edge),
+        path: extractEdgePath(edgeById.get(edgeId(edge)) ?? { id: edgeId(edge) }, nodeById, edge),
         tooltip: buildEdgeTooltip(edge, titleById),
       },
     };

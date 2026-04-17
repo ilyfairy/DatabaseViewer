@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import type { Component } from 'vue';
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
-import { IconBolt, IconChevronDown, IconChevronRight, IconColumns3, IconDatabase, IconEye, IconFunction, IconLink, IconListDetails, IconScript, IconServer, IconTable, IconTableColumn, IconVariable } from '@tabler/icons-vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { IconBolt, IconChevronDown, IconChevronRight, IconColumns3, IconDatabase, IconEye, IconFunction, IconLink, IconListDetails, IconLoader2, IconPackage, IconScript, IconServer, IconTable, IconTableColumn, IconVariable } from '@tabler/icons-vue';
 import { NAlert, NButton, NCheckbox, NEmpty, NIcon, NInput, NModal, NSelect, NSpin, NTabPane, NTabs, NText } from 'naive-ui';
 import type { DropdownOption } from 'naive-ui';
 import ContextDropdown from './ContextDropdown.vue';
 import StoredMaskedPasswordInput from './StoredMaskedPasswordInput.vue';
 import { useExplorerStore } from '../stores/explorer';
-import type { AuthenticationMode, ProviderType, RoutineInfo, SynonymInfo, TableColumn, TableDesignSection, TableSummary } from '../types/explorer';
+import type { AuthenticationMode, CatalogObjectType, ProviderType, RoutineInfo, SynonymInfo, TableColumn, TableDesignSection, TableSummary } from '../types/explorer';
 
 const store = useExplorerStore();
 const expandedConnections = ref<string[]>([]);
@@ -88,6 +88,12 @@ const sqliteRekeyForm = reactive({
   newKeyFormat: 'passphrase' as 'passphrase' | 'hex',
 });
 const sqliteCipherPasswordEdited = ref(false);
+const passwordEdited = ref(false);
+const sshPasswordEdited = ref(false);
+const sshPassphraseEdited = ref(false);
+const hasStoredPassword = ref(false);
+const hasStoredSshPassword = ref(false);
+const hasStoredSshPassphrase = ref(false);
 const closeAllContextMenus = () => {
   closeConnectionContextMenu();
   closeDatabaseContextMenu();
@@ -101,6 +107,18 @@ const showStoredSqliteCipherPasswordMask = computed(() => !!editingConnectionId.
   && createConnectionForm.sqliteCipherHasStoredPassword
   && !sqliteCipherPasswordEdited.value
   && !createConnectionForm.sqliteCipherPassword);
+const showStoredPasswordMask = computed(() => !!editingConnectionId.value
+  && hasStoredPassword.value
+  && !passwordEdited.value
+  && !createConnectionForm.password);
+const showStoredSshPasswordMask = computed(() => !!editingConnectionId.value
+  && hasStoredSshPassword.value
+  && !sshPasswordEdited.value
+  && !createConnectionForm.sshPassword);
+const showStoredSshPassphraseMask = computed(() => !!editingConnectionId.value
+  && hasStoredSshPassphrase.value
+  && !sshPassphraseEdited.value
+  && !createConnectionForm.sshPassphrase);
 const lockExistingUnencryptedSqliteCipherSettings = computed(() => !!editingConnectionId.value
   && createConnectionForm.provider === 'sqlite'
   && !createConnectionForm.sqliteCipherEnabled);
@@ -109,9 +127,18 @@ const connectionContextMenuOptions = computed<DropdownOption[]>(() => {
     return [];
   }
 
-  const options: DropdownOption[] = [
-    { label: '编辑连接', key: 'edit' },
-  ];
+  const isConnected = store.isConnectionConnected(connectionContextMenu.value.connectionId);
+  const options: DropdownOption[] = [];
+
+  if (isConnected) {
+    options.push({ label: '断开连接', key: 'disconnect' });
+  }
+  else {
+    options.push({ label: '连接', key: 'connect' });
+  }
+
+  options.push({ type: 'divider', key: 'd-conn' });
+  options.push({ label: '编辑连接', key: 'edit' });
 
   if (connectionContextMenu.value.provider === 'sqlserver') {
     options.push({ label: '用户管理', key: 'sqlserver-login-manager' });
@@ -121,6 +148,7 @@ const connectionContextMenuOptions = computed<DropdownOption[]>(() => {
     options.push({ label: '修改加密密码', key: 'sqlite-rekey' });
   }
 
+  options.push({ type: 'divider', key: 'd-del' });
   options.push({ label: '删除连接', key: 'delete' });
   return options;
 });
@@ -129,12 +157,20 @@ const databaseContextMenuOptions = computed<DropdownOption[]>(() => {
     return [];
   }
 
-  return [
+  const options: DropdownOption[] = [
     { label: '新建查询', key: 'new-query' },
     { label: '新建表...', key: 'new-table' },
     { label: '刷新数据库', key: 'refresh-database' },
     { label: '查看关系总览', key: 'graph-overview' },
+    { label: '属性...', key: 'database-properties' },
   ];
+
+  const connection = store.getConnectionInfo(databaseContextMenu.value.connectionId);
+  if (connection?.provider === 'sqlite') {
+    options.splice(4, 0, { label: '释放空间占用 (VACUUM)', key: 'vacuum' });
+  }
+
+  return options;
 });
 const tableContextMenuOptions = computed<DropdownOption[]>(() => {
   if (!tableContextMenu.value) {
@@ -165,6 +201,7 @@ const routineContextMenuOptions = computed<DropdownOption[]>(() => {
   }
 
   return [
+    { label: '执行...', key: 'execute-routine' },
     { label: '修改...', key: 'edit-routine' },
     { label: '重命名...', key: 'rename-routine' },
     { label: '删除', key: 'delete-routine' },
@@ -187,6 +224,33 @@ function beginSqliteCipherPasswordEdit() {
 
   sqliteCipherPasswordEdited.value = true;
   createConnectionForm.sqliteCipherPassword = '';
+}
+
+function beginPasswordEdit() {
+  if (!showStoredPasswordMask.value) {
+    return;
+  }
+
+  passwordEdited.value = true;
+  createConnectionForm.password = '';
+}
+
+function beginSshPasswordEdit() {
+  if (!showStoredSshPasswordMask.value) {
+    return;
+  }
+
+  sshPasswordEdited.value = true;
+  createConnectionForm.sshPassword = '';
+}
+
+function beginSshPassphraseEdit() {
+  if (!showStoredSshPassphraseMask.value) {
+    return;
+  }
+
+  sshPassphraseEdited.value = true;
+  createConnectionForm.sshPassphrase = '';
 }
 
 const providerOptions = [
@@ -229,10 +293,37 @@ const authenticationOptions = computed(() => createConnectionForm.provider === '
       { label: createConnectionForm.provider === 'sqlite' ? '本地文件' : '账号密码', value: 'password' },
     ]);
 
+const hostPlaceholder = computed(() => {
+  switch (createConnectionForm.provider) {
+    case 'sqlserver':
+      return '例如 .\\sqlexpress 或 127.0.0.1';
+    case 'mysql':
+      return '例如 127.0.0.1 或 localhost';
+    case 'postgresql':
+      return '例如 127.0.0.1 或 localhost';
+    default:
+      return '例如 127.0.0.1';
+  }
+});
+
 function toggleConnection(connectionId: string) {
-  expandedConnections.value = expandedConnections.value.includes(connectionId)
-    ? expandedConnections.value.filter((id) => id !== connectionId)
-    : [...expandedConnections.value, connectionId];
+  const isExpanded = expandedConnections.value.includes(connectionId);
+  if (isExpanded) {
+    expandedConnections.value = expandedConnections.value.filter((id) => id !== connectionId);
+  }
+  else if (store.isConnectionConnected(connectionId) || store.isConnectionConnecting(connectionId)) {
+    expandedConnections.value = [...expandedConnections.value, connectionId];
+  }
+}
+
+async function handleConnectionDoubleClick(connectionId: string) {
+  if (!store.isConnectionConnected(connectionId) && !store.isConnectionConnecting(connectionId)) {
+    await store.connectConnection(connectionId);
+  }
+
+  if (!expandedConnections.value.includes(connectionId)) {
+    expandedConnections.value = [...expandedConnections.value, connectionId];
+  }
 }
 
 function toggleDatabase(key: string) {
@@ -303,14 +394,14 @@ function treeStatistics(tableKey: string) {
 }
 
 /** 切换存储过程/函数分组的展开状态 */
-function toggleRoutineGroup(connectionId: string, database: string, group: 'tables' | 'views' | 'synonyms' | 'sequences' | 'rules' | 'defaults' | 'types' | 'table-types' | 'database-triggers' | 'xml-schema-collections' | 'procedures' | 'functions') {
+function toggleRoutineGroup(connectionId: string, database: string, group: 'tables' | 'views' | 'synonyms' | 'sequences' | 'rules' | 'defaults' | 'types' | 'table-types' | 'database-triggers' | 'xml-schema-collections' | 'assemblies' | 'procedures' | 'functions') {
   const key = `${connectionId}:${database}:${group}`;
   expandedRoutineGroups.value = expandedRoutineGroups.value.includes(key)
     ? expandedRoutineGroups.value.filter((entry) => entry !== key)
     : [...expandedRoutineGroups.value, key];
 }
 
-function isRoutineGroupExpanded(connectionId: string, database: string, group: 'tables' | 'views' | 'synonyms' | 'sequences' | 'rules' | 'defaults' | 'types' | 'table-types' | 'database-triggers' | 'xml-schema-collections' | 'procedures' | 'functions') {
+function isRoutineGroupExpanded(connectionId: string, database: string, group: 'tables' | 'views' | 'synonyms' | 'sequences' | 'rules' | 'defaults' | 'types' | 'table-types' | 'database-triggers' | 'xml-schema-collections' | 'assemblies' | 'procedures' | 'functions') {
   return expandedRoutineGroups.value.includes(`${connectionId}:${database}:${group}`);
 }
 
@@ -356,6 +447,10 @@ function treeDatabaseTriggers(connectionId: string, database: string) {
 
 function treeXmlSchemaCollections(connectionId: string, database: string) {
   return store.getXmlSchemaCollections(connectionId, database);
+}
+
+function treeAssemblies(connectionId: string, database: string) {
+  return store.getAssemblies(connectionId, database);
 }
 
 /** 获取指定数据库下的存储过程列表 */
@@ -508,7 +603,7 @@ function openCatalogObject(connectionId: string, database: string, objectType: '
   void store.openCatalogObject(connectionId, database, objectType, schema ?? null, name);
 }
 
-function openExtendedCatalogObject(connectionId: string, database: string, objectType: 'synonym' | 'sequence' | 'rule' | 'default' | 'user-defined-type' | 'database-trigger' | 'xml-schema-collection', schema: string | null | undefined, name: string) {
+function openExtendedCatalogObject(connectionId: string, database: string, objectType: CatalogObjectType, schema: string | null | undefined, name: string) {
   void store.openCatalogObject(connectionId, database, objectType, schema ?? null, name);
 }
 
@@ -531,6 +626,7 @@ function databaseObjectSummary(connectionId: string, database: string) {
   const typeCount = treeUserDefinedTypes(connectionId, database).length;
   const triggerCount = treeDatabaseTriggers(connectionId, database).length;
   const xmlSchemaCount = treeXmlSchemaCollections(connectionId, database).length;
+  const assemblyCount = treeAssemblies(connectionId, database).length;
   const parts = [`${tableCount} 表`];
   if (viewCount > 0) {
     parts.push(`${viewCount} 视图`);
@@ -555,6 +651,9 @@ function databaseObjectSummary(connectionId: string, database: string) {
   }
   if (xmlSchemaCount > 0) {
     parts.push(`${xmlSchemaCount} XML 架构`);
+  }
+  if (assemblyCount > 0) {
+    parts.push(`${assemblyCount} 程序集`);
   }
 
   return parts.join(' · ');
@@ -658,6 +757,8 @@ async function openEditConnectionDialog() {
     createConnectionForm.port = config.port ? String(config.port) : '';
     createConnectionForm.username = config.username ?? '';
     createConnectionForm.password = '';
+    hasStoredPassword.value = config.hasPassword;
+    passwordEdited.value = false;
     createConnectionForm.trustServerCertificate = config.trustServerCertificate;
     createConnectionForm.sshEnabled = config.sshTunnel.enabled;
     createConnectionForm.sshAuthentication = config.sshTunnel.authentication;
@@ -665,8 +766,12 @@ async function openEditConnectionDialog() {
     createConnectionForm.sshPort = config.sshTunnel.port ? String(config.sshTunnel.port) : '22';
     createConnectionForm.sshUsername = config.sshTunnel.username ?? '';
     createConnectionForm.sshPassword = '';
+    hasStoredSshPassword.value = config.sshTunnel.hasPassword;
+    sshPasswordEdited.value = false;
     createConnectionForm.sshPrivateKeyPath = config.sshTunnel.privateKeyPath ?? '';
     createConnectionForm.sshPassphrase = '';
+    hasStoredSshPassphrase.value = config.sshTunnel.hasPassphrase;
+    sshPassphraseEdited.value = false;
     createConnectionForm.sqliteCipherEnabled = config.sqliteCipher.enabled;
     createConnectionForm.sqliteCipherHasStoredPassword = config.sqliteCipher.hasPassword;
     sqliteCipherPasswordEdited.value = false;
@@ -990,6 +1095,67 @@ function openRoutineSourceFromContextMenu() {
   closeRoutineContextMenu();
 }
 
+/** 打开执行存储过程/函数对话框，无参数时直接打开 SQL Tab。 */
+/** 执行存储过程/函数：无参数直接打开 SQL Tab 执行，有参数弹对话框填写。 */
+function openExecuteRoutineDialog() {
+  if (!routineContextMenu.value) {
+    return;
+  }
+
+  const ctx = routineContextMenu.value;
+  closeRoutineContextMenu();
+
+  const inputParams = ctx.routine.parameters.filter((p) => p.direction !== 'RETURN_VALUE');
+
+  if (inputParams.length === 0) {
+    // 无参数，直接创建 SQL Tab 并执行
+    const qualifiedName = buildRoutineQualifiedName(ctx.provider, ctx.routine);
+    const sql = buildNoParamExecuteSql(ctx.provider, ctx.routine, qualifiedName);
+    void store.openSqlTabWithContext({
+      connectionId: ctx.connectionId,
+      database: ctx.database,
+      sqlText: sql,
+      savedSqlText: sql,
+      execute: true,
+      skipRoutineCheck: true,
+    });
+    return;
+  }
+
+  // 有参数，直接弹对话框（不创建 SQL Tab）
+  store.pendingRoutineExec = {
+    tabId: null,
+    connectionId: ctx.connectionId,
+    database: ctx.database,
+    provider: ctx.provider,
+    routine: ctx.routine,
+  };
+}
+
+function buildRoutineQualifiedName(provider: ProviderType, routine: RoutineInfo): string {
+  if (!routine.schema || provider === 'mysql') {
+    return quoteIdentifier(provider, routine.name);
+  }
+
+  return `${quoteIdentifier(provider, routine.schema)}.${quoteIdentifier(provider, routine.name)}`;
+}
+
+function buildNoParamExecuteSql(provider: ProviderType, routine: RoutineInfo, qualifiedName: string): string {
+  if (routine.routineType === 'Procedure') {
+    if (provider === 'sqlserver') {
+      return `EXEC ${qualifiedName};`;
+    }
+
+    return `CALL ${qualifiedName}();`;
+  }
+
+  if (provider === 'postgresql') {
+    return `SELECT * FROM ${qualifiedName}();`;
+  }
+
+  return `SELECT ${qualifiedName}();`;
+}
+
 function openDeleteRoutineConfirm() {
   if (!routineContextMenu.value) {
     return;
@@ -1031,6 +1197,23 @@ function handleDesignEntryContextMenuShow(value: boolean) {
 
 function handleConnectionContextMenuSelect(key: string | number) {
   switch (key) {
+    case 'connect':
+      if (connectionContextMenu.value) {
+        const connId = connectionContextMenu.value.connectionId;
+        closeConnectionContextMenu();
+        void store.connectConnection(connId);
+        if (!expandedConnections.value.includes(connId)) {
+          expandedConnections.value = [...expandedConnections.value, connId];
+        }
+      }
+      return;
+    case 'disconnect':
+      if (connectionContextMenu.value) {
+        const connId = connectionContextMenu.value.connectionId;
+        closeConnectionContextMenu();
+        store.disconnectConnection(connId);
+      }
+      return;
     case 'edit':
       void openEditConnectionDialog();
       return;
@@ -1061,6 +1244,12 @@ function handleDatabaseContextMenuSelect(key: string | number) {
       return;
     case 'graph-overview':
       openDatabaseGraphOverview();
+      return;
+    case 'database-properties':
+      openDatabaseProperties();
+      return;
+    case 'vacuum':
+      openVacuumQuery();
       return;
     default:
       return;
@@ -1103,6 +1292,9 @@ function handleTableContextMenuSelect(key: string | number) {
 
 function handleRoutineContextMenuSelect(key: string | number) {
   switch (key) {
+    case 'execute-routine':
+      openExecuteRoutineDialog();
+      return;
     case 'edit-routine':
       openRoutineSourceFromContextMenu();
       return;
@@ -1299,6 +1491,31 @@ async function openDatabaseGraphOverview() {
   await store.openDatabaseGraph(connectionId, database);
 }
 
+function openDatabaseProperties() {
+  if (!databaseContextMenu.value) {
+    return;
+  }
+
+  const { connectionId, database } = databaseContextMenu.value;
+  closeDatabaseContextMenu();
+  store.openDatabaseProperties(connectionId, database);
+}
+
+async function openVacuumQuery() {
+  if (!databaseContextMenu.value) {
+    return;
+  }
+
+  const { connectionId, database } = databaseContextMenu.value;
+  closeDatabaseContextMenu();
+  await store.openSqlTabWithContext({
+    connectionId,
+    database,
+    sqlText: 'VACUUM;',
+    savedSqlText: 'VACUUM;',
+  });
+}
+
 async function openRenameTableQuery() {
   if (!tableContextMenu.value) {
     return;
@@ -1396,6 +1613,8 @@ function resetCreateConnectionForm() {
   createConnectionForm.username = '';
   createConnectionForm.password = '';
   createConnectionForm.trustServerCertificate = true;
+  hasStoredPassword.value = false;
+  passwordEdited.value = false;
   createConnectionForm.sshEnabled = false;
   createConnectionForm.sshAuthentication = 'password';
   createConnectionForm.sshHost = '';
@@ -1404,6 +1623,10 @@ function resetCreateConnectionForm() {
   createConnectionForm.sshPassword = '';
   createConnectionForm.sshPrivateKeyPath = '';
   createConnectionForm.sshPassphrase = '';
+  hasStoredSshPassword.value = false;
+  sshPasswordEdited.value = false;
+  hasStoredSshPassphrase.value = false;
+  sshPassphraseEdited.value = false;
   createConnectionForm.sqliteCipherEnabled = false;
   createConnectionForm.sqliteCipherHasStoredPassword = false;
   sqliteCipherPasswordEdited.value = false;
@@ -1630,6 +1853,11 @@ onBeforeUnmount(() => {
   window.removeEventListener('contextmenu', closeAllContextMenus, true);
   window.removeEventListener('blur', closeAllContextMenus);
 });
+
+// 断开连接后折叠对应的树节点
+watch(() => store.connectedConnectionIds, (newIds) => {
+  expandedConnections.value = expandedConnections.value.filter((id) => newIds.has(id));
+});
 </script>
 
 <template>
@@ -1662,8 +1890,8 @@ onBeforeUnmount(() => {
             <button class="tree-toggle" type="button" @click="toggleConnection(connection.id)">
               <NIcon size="12"><component :is="treeToggleIcon(expandedConnections.includes(connection.id))" /></NIcon>
             </button>
-            <button class="tree-node-main tree-node-main-connection" type="button" @click="toggleConnection(connection.id)">
-              <NIcon class="tree-icon tree-icon-provider" :class="providerTreeClass(connection.provider)" size="12"><component :is="providerTreeIcon(connection.provider)" /></NIcon>
+            <button class="tree-node-main tree-node-main-connection" type="button" @click="toggleConnection(connection.id)" @dblclick.stop="handleConnectionDoubleClick(connection.id)">
+              <NIcon class="tree-icon tree-icon-provider" :class="[store.isConnectionConnecting(connection.id) ? 'tree-icon-connecting' : providerTreeClass(connection.provider), { 'tree-icon-disconnected': !store.isConnectionConnected(connection.id) && !store.isConnectionConnecting(connection.id) }]" size="12"><component :is="store.isConnectionConnecting(connection.id) ? IconLoader2 : providerTreeIcon(connection.provider)" /></NIcon>
               <span class="tree-label-stack">
                 <span class="tree-label-main">{{ connection.name }}</span>
                 <span class="tree-label-meta">{{ connection.host }}<template v-if="connection.port">:{{ connection.port }}</template></span>
@@ -1671,11 +1899,23 @@ onBeforeUnmount(() => {
             </button>
           </div>
 
-          <NAlert v-if="connection.error" type="warning" :show-icon="false" class="connection-error">
-            {{ connection.error }}
-          </NAlert>
-
           <div v-if="expandedConnections.includes(connection.id)" class="tree-children tree-children-animated" @contextmenu.prevent.stop>
+            <template v-if="store.isConnectionConnecting(connection.id)">
+              <div class="tree-row tree-row-empty">
+                <span class="tree-label-meta">正在连接…</span>
+              </div>
+            </template>
+            <template v-else-if="connection.error">
+              <div class="tree-row tree-row-empty tree-row-error">
+                <span class="tree-label-meta">{{ connection.error }}</span>
+              </div>
+            </template>
+            <template v-else-if="!store.isConnectionConnected(connection.id)">
+              <div class="tree-row tree-row-empty">
+                <span class="tree-label-meta">双击连接或右键选择"连接"</span>
+              </div>
+            </template>
+            <template v-else>
             <div
               v-for="database in store.getDatabases(connection.id)"
               :key="`${connection.id}:${database.name}`"
@@ -2154,6 +2394,28 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
 
+                <div v-if="treeAssemblies(connection.id, database.name).length > 0" class="tree-node">
+                  <div class="tree-row tree-row-group">
+                    <button class="tree-toggle" type="button" @click="toggleRoutineGroup(connection.id, database.name, 'assemblies')">
+                      <NIcon size="12"><component :is="treeToggleIcon(isRoutineGroupExpanded(connection.id, database.name, 'assemblies'))" /></NIcon>
+                    </button>
+                    <button type="button" class="tree-node-main" @click="toggleRoutineGroup(connection.id, database.name, 'assemblies')">
+                      <NIcon class="tree-icon tree-icon-function" size="12"><IconPackage /></NIcon>
+                      <span class="tree-label-main">程序集</span>
+                      <span class="tree-row-count">{{ treeAssemblies(connection.id, database.name).length }}</span>
+                    </button>
+                  </div>
+                  <div v-if="isRoutineGroupExpanded(connection.id, database.name, 'assemblies')" class="tree-children tree-children-animated">
+                    <button v-for="item in treeAssemblies(connection.id, database.name)" :key="item.name" type="button" class="tree-leaf-row tree-leaf-row-catalog" :title="item.clrName" @dblclick.stop.prevent="openExtendedCatalogObject(connection.id, database.name, 'assembly', null, item.name)">
+                      <NIcon class="tree-icon tree-icon-leaf" size="12"><IconPackage /></NIcon>
+                      <span class="tree-leaf-stack">
+                        <span class="tree-leaf-name">{{ item.name }}</span>
+                        <span class="tree-leaf-type">{{ item.permissionSet }}</span>
+                      </span>
+                    </button>
+                  </div>
+                </div>
+
                 <!-- 存储过程分组 -->
                 <div v-if="treeProcedures(connection.id, database.name).length > 0" class="tree-node">
                   <div class="tree-row tree-row-group">
@@ -2254,6 +2516,7 @@ onBeforeUnmount(() => {
                 </div>
               </div>
             </div>
+            </template>
           </div>
         </div>
       </template>
@@ -2325,10 +2588,10 @@ onBeforeUnmount(() => {
                     <span class="connection-parameter-key">{{ createConnectionForm.provider === 'sqlite' ? 'data_source' : 'host' }}</span>
                   </div>
                   <div v-if="createConnectionForm.provider === 'sqlite'" class="connection-dialog-inline-row connection-parameter-control">
-                    <NInput v-model:value="createConnectionForm.host" placeholder="例如 C:\\data\\app.db" />
+                    <NInput v-model:value="createConnectionForm.host" placeholder="例如 C:\data\app.db" />
                     <NButton tertiary type="primary" @click="browseSqliteDatabaseFile">选择...</NButton>
                   </div>
-                  <NInput v-else v-model:value="createConnectionForm.host" class="connection-parameter-control" placeholder="例如 db.internal 或 127.0.0.1" />
+                  <NInput v-else v-model:value="createConnectionForm.host" class="connection-parameter-control" :placeholder="hostPlaceholder" />
                 </div>
 
                 <div v-if="createConnectionForm.provider !== 'sqlite'" class="connection-parameter-row">
@@ -2352,7 +2615,14 @@ onBeforeUnmount(() => {
                     <span class="connection-parameter-label">密码</span>
                     <span class="connection-parameter-key">password</span>
                   </div>
-                  <NInput v-model:value="createConnectionForm.password" class="connection-parameter-control" type="password" show-password-on="click" :placeholder="editingConnectionId ? '留空则保持原密码' : '输入密码'" />
+                  <StoredMaskedPasswordInput
+                    :model-value="createConnectionForm.password"
+                    :has-stored-value="showStoredPasswordMask"
+                    class="connection-parameter-control"
+                    :placeholder="editingConnectionId && hasStoredPassword ? '留空则保持原密码' : '输入密码'"
+                    @begin-edit="beginPasswordEdit"
+                    @update:model-value="(value: string) => { createConnectionForm.password = value }"
+                  />
                 </div>
 
                 <div v-if="createConnectionForm.provider === 'sqlserver'" class="connection-parameter-row connection-parameter-row-toggle">
@@ -2519,7 +2789,14 @@ onBeforeUnmount(() => {
                       <span class="connection-parameter-label">SSH 密码</span>
                       <span class="connection-parameter-key">ssh.password</span>
                     </div>
-                    <NInput v-model:value="createConnectionForm.sshPassword" class="connection-parameter-control" type="password" show-password-on="click" :placeholder="editingConnectionId ? '留空则保持原密码' : '输入 SSH 密码'" />
+                    <StoredMaskedPasswordInput
+                      :model-value="createConnectionForm.sshPassword"
+                      :has-stored-value="showStoredSshPasswordMask"
+                      class="connection-parameter-control"
+                      :placeholder="editingConnectionId && hasStoredSshPassword ? '留空则保持原密码' : '输入 SSH 密码'"
+                      @begin-edit="beginSshPasswordEdit"
+                      @update:model-value="(value: string) => { createConnectionForm.sshPassword = value }"
+                    />
                   </div>
 
                   <template v-else>
@@ -2539,7 +2816,14 @@ onBeforeUnmount(() => {
                         <span class="connection-parameter-label">通行短语</span>
                         <span class="connection-parameter-key">ssh.passphrase</span>
                       </div>
-                      <NInput v-model:value="createConnectionForm.sshPassphrase" class="connection-parameter-control" type="password" show-password-on="click" :placeholder="editingConnectionId ? '留空则保持原通行短语' : '可选'" />
+                      <StoredMaskedPasswordInput
+                        :model-value="createConnectionForm.sshPassphrase"
+                        :has-stored-value="showStoredSshPassphraseMask"
+                        class="connection-parameter-control"
+                        :placeholder="editingConnectionId && hasStoredSshPassphrase ? '留空则保持原通行短语' : '可选'"
+                        @begin-edit="beginSshPassphraseEdit"
+                        @update:model-value="(value: string) => { createConnectionForm.sshPassphrase = value }"
+                      />
                     </div>
                   </template>
                 </div>
@@ -2778,6 +3062,11 @@ onBeforeUnmount(() => {
   }
 }
 
+@keyframes spin-icon {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 @keyframes tree-node-enter {
   from {
     opacity: 0;
@@ -2856,6 +3145,16 @@ onBeforeUnmount(() => {
   .tree-node-main {
     background: transparent;
   }
+}
+
+.tree-row-empty {
+  padding: 4px 8px 4px 30px;
+  font-size: $font-size-xs;
+  color: $color-text-muted;
+}
+
+.tree-row-error {
+  color: $color-accent-red;
 }
 
 .tree-toggle {
@@ -2946,6 +3245,18 @@ onBeforeUnmount(() => {
   &-provider-sqlite {
     background: rgba(21, 128, 61, 0.16);
     color: $color-accent-green;
+  }
+
+  &-disconnected {
+    background: rgba(148, 163, 184, 0.16);
+    color: $color-text-muted;
+    opacity: 0.6;
+  }
+
+  &-connecting {
+    background: transparent;
+    color: $color-accent-indigo;
+    animation: spin-icon 0.8s linear infinite;
   }
 
   &-database {

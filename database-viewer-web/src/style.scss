@@ -31,6 +31,13 @@ body {
   overflow: hidden;
 }
 
+// ── NaiveUI: 禁用 focus 外发光（被 overflow:hidden 容器裁切导致只显示一半） ──
+// 保留 border 颜色变化作为 focus 视觉反馈，仅去除 box-shadow 光晕。
+.n-input__state-border,
+.n-base-selection__state-border {
+  box-shadow: none !important;
+}
+
 // ── 全局滚动条样式 ──
 *::-webkit-scrollbar {
   width: 8px;
@@ -382,9 +389,10 @@ textarea {
 
 .workspace-panel {
   height: 100%;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
   background: $color-bg-panel;
   border: 1px solid $color-border-subtle;
+  border-right: none;
   box-shadow: 0 20px 40px $shadow-subtle;
 }
 

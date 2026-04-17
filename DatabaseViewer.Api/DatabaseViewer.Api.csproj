@@ -7,6 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <SkipFrontendBuildForDebug Condition="'$(SkipFrontendBuildForDebug)' == '' and '$(Configuration)' == 'Debug'">true</SkipFrontendBuildForDebug>
     <SkipFrontendBuildForDebug Condition="'$(SkipFrontendBuildForDebug)' == ''">false</SkipFrontendBuildForDebug>
+    <DefineConstants Condition="'$(DevFrontend)' == 'true'">$(DefineConstants);DEV_FRONTEND</DefineConstants>
   </PropertyGroup>
 
   <!-- 前端依赖恢复和构建输入，任何一个文件变化后都会重新执行对应目标。 -->

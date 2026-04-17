@@ -453,6 +453,40 @@ public sealed class DatabaseMetadataService
         }).ToArray();
     }
 
+    public async Task<IReadOnlyList<DbAssemblyInfo>> GetAssembliesAsync(ConnectionDefinition connection, string databaseName)
+    {
+        if (connection.ProviderType != DatabaseProviderType.SqlServer)
+        {
+            return Array.Empty<DbAssemblyInfo>();
+        }
+
+        await using var db = DbConnectionFactory.Create(connection, databaseName);
+        await db.OpenAsync();
+
+        var rows = await db.QueryAsync(@"
+            SELECT
+                a.name AS AssemblyName,
+                a.clr_name AS ClrName,
+                CASE a.permission_set
+                    WHEN 1 THEN 'SAFE'
+                    WHEN 2 THEN 'EXTERNAL_ACCESS'
+                    WHEN 3 THEN 'UNSAFE'
+                    ELSE CAST(a.permission_set AS nvarchar(10))
+                END AS PermissionSet,
+                a.is_visible AS IsVisible
+            FROM sys.assemblies a
+            ORDER BY a.name;");
+
+        return rows.Select(row => new DbAssemblyInfo
+        {
+            DatabaseName = databaseName,
+            AssemblyName = (string)row.AssemblyName,
+            ClrName = (string)row.ClrName,
+            PermissionSet = (string)row.PermissionSet,
+            IsVisible = (bool)row.IsVisible,
+        }).ToArray();
+    }
+
     public async Task<DbCatalogObjectDetailInfo?> GetCatalogObjectDetailAsync(ConnectionDefinition connection, string databaseName, DbCatalogObjectType objectType, string? schemaName, string objectName)
     {
         if (connection.ProviderType != DatabaseProviderType.SqlServer)
@@ -474,6 +508,7 @@ public sealed class DatabaseMetadataService
             DbCatalogObjectType.UserDefinedType => await GetUserDefinedTypeDetailAsync(db, databaseName, resolvedSchema, objectName),
             DbCatalogObjectType.DatabaseTrigger => await GetDatabaseTriggerDetailAsync(db, databaseName, resolvedSchema, objectName),
             DbCatalogObjectType.XmlSchemaCollection => await GetXmlSchemaCollectionDetailAsync(db, databaseName, resolvedSchema, objectName),
+            DbCatalogObjectType.Assembly => await GetAssemblyDetailAsync(db, databaseName, objectName),
             _ => null,
         };
     }
@@ -774,6 +809,55 @@ public sealed class DatabaseMetadataService
                 new DbCatalogObjectProperty { Label = "架构", Value = row.SchemaName },
                 new DbCatalogObjectProperty { Label = "集合 ID", Value = Convert.ToString(row.CollectionId) },
                 new DbCatalogObjectProperty { Label = "命名空间数量", Value = Convert.ToString(row.XmlNamespaceCount) },
+            ],
+        };
+    }
+
+    private static async Task<DbCatalogObjectDetailInfo?> GetAssemblyDetailAsync(DbConnection db, string databaseName, string objectName)
+    {
+        var row = await db.QuerySingleOrDefaultAsync(@"
+            SELECT
+                a.name AS AssemblyName,
+                a.clr_name AS ClrName,
+                CASE a.permission_set
+                    WHEN 1 THEN 'SAFE'
+                    WHEN 2 THEN 'EXTERNAL_ACCESS'
+                    WHEN 3 THEN 'UNSAFE'
+                    ELSE CAST(a.permission_set AS nvarchar(10))
+                END AS PermissionSet,
+                a.is_visible AS IsVisible,
+                a.create_date AS CreateDate,
+                a.modify_date AS ModifyDate,
+                CONVERT(nvarchar(40), ASSEMBLYPROPERTY(a.name, 'VersionMajor')) + '.' +
+                CONVERT(nvarchar(40), ASSEMBLYPROPERTY(a.name, 'VersionMinor')) + '.' +
+                CONVERT(nvarchar(40), ASSEMBLYPROPERTY(a.name, 'VersionBuild')) + '.' +
+                CONVERT(nvarchar(40), ASSEMBLYPROPERTY(a.name, 'VersionRevision')) AS VersionString
+            FROM sys.assemblies a
+            WHERE a.name = @objectName;",
+            new { objectName });
+
+        if (row is null)
+        {
+            return null;
+        }
+
+        return new DbCatalogObjectDetailInfo
+        {
+            DatabaseName = databaseName,
+            SchemaName = null,
+            ObjectName = row.AssemblyName,
+            ObjectType = DbCatalogObjectType.Assembly,
+            Title = (string)row.AssemblyName,
+            Summary = (string)row.PermissionSet,
+            Properties =
+            [
+                new DbCatalogObjectProperty { Label = "程序集名称", Value = row.AssemblyName },
+                new DbCatalogObjectProperty { Label = "CLR 名称", Value = row.ClrName },
+                new DbCatalogObjectProperty { Label = "权限集", Value = row.PermissionSet },
+                new DbCatalogObjectProperty { Label = "版本", Value = row.VersionString },
+                new DbCatalogObjectProperty { Label = "可见", Value = (bool)row.IsVisible ? "是" : "否" },
+                new DbCatalogObjectProperty { Label = "创建时间", Value = Convert.ToString(row.CreateDate) },
+                new DbCatalogObjectProperty { Label = "修改时间", Value = Convert.ToString(row.ModifyDate) },
             ],
         };
     }
@@ -1329,28 +1413,27 @@ public sealed class DatabaseMetadataService
 
         if (connection.ProviderType == DatabaseProviderType.PostgreSql)
         {
+            // 使用 pg_catalog 而非 information_schema，正确配对复合外键的列顺序。
             var postgreSqlRows = await db.QueryAsync(@"
                 SELECT
-                    tc.table_catalog AS ""SourceDatabase"",
-                    tc.table_schema AS ""SourceSchema"",
-                    tc.table_name AS ""SourceTable"",
-                    kcu.column_name AS ""SourceColumn"",
-                    ccu.table_catalog AS ""TargetDatabase"",
-                    ccu.table_schema AS ""TargetSchema"",
-                    ccu.table_name AS ""TargetTable"",
-                    ccu.column_name AS ""TargetColumn""
-                FROM information_schema.table_constraints tc
-                INNER JOIN information_schema.key_column_usage kcu
-                    ON tc.constraint_name = kcu.constraint_name
-                    AND tc.table_schema = kcu.table_schema
-                    AND tc.table_name = kcu.table_name
-                    AND tc.table_catalog = kcu.table_catalog
-                INNER JOIN information_schema.constraint_column_usage ccu
-                    ON ccu.constraint_name = tc.constraint_name
-                    AND ccu.constraint_schema = tc.table_schema
-                    AND ccu.constraint_catalog = tc.table_catalog
-                WHERE tc.constraint_type = 'FOREIGN KEY'
-                  AND tc.table_catalog = @databaseName;", new { databaseName });
+                    current_database() AS ""SourceDatabase"",
+                    sn.nspname AS ""SourceSchema"",
+                    sc.relname AS ""SourceTable"",
+                    sa.attname AS ""SourceColumn"",
+                    current_database() AS ""TargetDatabase"",
+                    tn.nspname AS ""TargetSchema"",
+                    tc.relname AS ""TargetTable"",
+                    ta.attname AS ""TargetColumn""
+                FROM pg_constraint con
+                INNER JOIN pg_class sc ON sc.oid = con.conrelid
+                INNER JOIN pg_namespace sn ON sn.oid = sc.relnamespace
+                INNER JOIN pg_class tc ON tc.oid = con.confrelid
+                INNER JOIN pg_namespace tn ON tn.oid = tc.relnamespace
+                CROSS JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS cols(source_attnum, target_attnum, ord)
+                INNER JOIN pg_attribute sa ON sa.attrelid = con.conrelid AND sa.attnum = cols.source_attnum
+                INNER JOIN pg_attribute ta ON ta.attrelid = con.confrelid AND ta.attnum = cols.target_attnum
+                WHERE con.contype = 'f'
+                ORDER BY con.oid, cols.ord;");
 
             return postgreSqlRows.Select(row => new ForeignKeyReference
             {
@@ -1782,5 +1865,361 @@ public sealed class DatabaseMetadataService
                 ORDER BY collation_name;")).ToArray(),
             _ => Array.Empty<string>(),
         };
+    }
+
+    /// <summary>
+    /// 获取数据库属性信息（常规、文件、权限）。
+    /// </summary>
+    public async Task<DbDatabasePropertiesInfo?> GetDatabasePropertiesAsync(ConnectionDefinition connection, string databaseName)
+    {
+        await using var db = DbConnectionFactory.Create(connection, databaseName);
+        await db.OpenAsync();
+
+        return connection.ProviderType switch
+        {
+            DatabaseProviderType.SqlServer => await GetSqlServerDatabasePropertiesAsync(db, databaseName),
+            DatabaseProviderType.MySql => await GetMySqlDatabasePropertiesAsync(db, databaseName),
+            DatabaseProviderType.PostgreSql => await GetPostgreSqlDatabasePropertiesAsync(db, databaseName),
+            DatabaseProviderType.Sqlite => await GetSqliteDatabasePropertiesAsync(db, databaseName),
+            _ => null,
+        };
+    }
+
+    private static async Task<DbDatabasePropertiesInfo> GetSqlServerDatabasePropertiesAsync(DbConnection db, string databaseName)
+    {
+        // 常规属性
+        var generalRow = await db.QuerySingleOrDefaultAsync(@"
+            SELECT
+                d.name AS Name,
+                d.state_desc AS State,
+                SUSER_SNAME(d.owner_sid) AS Owner,
+                d.create_date AS CreateDate,
+                d.collation_name AS Collation,
+                d.recovery_model_desc AS RecoveryModel,
+                d.compatibility_level AS CompatibilityLevel,
+                d.user_access_desc AS UserAccess,
+                d.is_read_only AS IsReadOnly,
+                d.is_auto_close_on AS IsAutoClose,
+                d.is_auto_shrink_on AS IsAutoShrink,
+                d.is_fulltext_enabled AS IsFullTextEnabled,
+                d.page_verify_option_desc AS PageVerifyOption
+            FROM sys.databases d
+            WHERE d.name = @databaseName;",
+            new { databaseName });
+
+        // 数据库大小
+        var sizeRows = await db.QueryAsync(@"
+            SELECT
+                SUM(CASE WHEN type = 0 THEN size END) * 8.0 / 1024 AS DataSizeMB,
+                SUM(CASE WHEN type = 1 THEN size END) * 8.0 / 1024 AS LogSizeMB,
+                SUM(size) * 8.0 / 1024 AS TotalSizeMB,
+                SUM(CASE WHEN type = 0 THEN size - FILEPROPERTY(name, 'SpaceUsed') ELSE 0 END) * 8.0 / 1024 AS FreeSpaceMB
+            FROM sys.database_files;");
+        var sizeRow = sizeRows.FirstOrDefault();
+
+        // 备份信息
+        var backupRow = await db.QuerySingleOrDefaultAsync(@"
+            SELECT
+                (SELECT MAX(backup_finish_date) FROM msdb.dbo.backupset WHERE database_name = @databaseName AND type = 'D') AS LastFullBackup,
+                (SELECT MAX(backup_finish_date) FROM msdb.dbo.backupset WHERE database_name = @databaseName AND type = 'L') AS LastLogBackup
+            ;", new { databaseName });
+
+        var generalProperties = new List<DbCatalogObjectProperty>();
+        if (generalRow is not null)
+        {
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "名称", Value = (string?)generalRow.Name });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "状态", Value = (string?)generalRow.State });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "所有者", Value = (string?)generalRow.Owner });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "创建日期", Value = ((DateTime?)generalRow.CreateDate)?.ToString("yyyy/MM/dd HH:mm:ss") });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "排序规则", Value = (string?)generalRow.Collation });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "恢复模式", Value = (string?)generalRow.RecoveryModel });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "兼容级别", Value = ((int?)generalRow.CompatibilityLevel)?.ToString() });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "用户访问", Value = (string?)generalRow.UserAccess });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "只读", Value = ((bool?)generalRow.IsReadOnly) == true ? "是" : "否" });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "自动关闭", Value = ((bool?)generalRow.IsAutoClose) == true ? "是" : "否" });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "自动收缩", Value = ((bool?)generalRow.IsAutoShrink) == true ? "是" : "否" });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "全文检索", Value = ((bool?)generalRow.IsFullTextEnabled) == true ? "已启用" : "未启用" });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "页面验证", Value = (string?)generalRow.PageVerifyOption });
+        }
+
+        if (sizeRow is not null)
+        {
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "数据大小", Value = FormatSize((decimal?)sizeRow.DataSizeMB) });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "日志大小", Value = FormatSize((decimal?)sizeRow.LogSizeMB) });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "总大小", Value = FormatSize((decimal?)sizeRow.TotalSizeMB) });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "可用空间", Value = FormatSize((decimal?)sizeRow.FreeSpaceMB) });
+        }
+
+        if (backupRow is not null)
+        {
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "上次完整备份", Value = ((DateTime?)backupRow.LastFullBackup)?.ToString("yyyy/MM/dd HH:mm:ss") ?? "无" });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "上次日志备份", Value = ((DateTime?)backupRow.LastLogBackup)?.ToString("yyyy/MM/dd HH:mm:ss") ?? "无" });
+        }
+
+        // 用户数
+        var userCount = await db.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM sys.database_principals WHERE type IN ('S','U','G') AND principal_id > 4;");
+        generalProperties.Add(new DbCatalogObjectProperty { Label = "用户数", Value = userCount.ToString() });
+
+        // 文件信息
+        var fileRows = await db.QueryAsync(@"
+            SELECT
+                f.name AS LogicalName,
+                CASE f.type WHEN 0 THEN '行数据' WHEN 1 THEN '日志' WHEN 2 THEN '文件流' WHEN 4 THEN '全文' ELSE '其他' END AS FileType,
+                fg.name AS FileGroup,
+                CAST(f.size * 8.0 / 1024 AS DECIMAL(18,2)) AS SizeMB,
+                CASE f.is_percent_growth
+                    WHEN 1 THEN '增量为 ' + CAST(f.growth AS VARCHAR) + '%'
+                    ELSE '增量为 ' + CAST(f.growth * 8 / 1024 AS VARCHAR) + ' MB'
+                END
+                + CASE
+                    WHEN f.max_size = -1 THEN '，增长无限制'
+                    WHEN f.max_size = 0 THEN '，不可增长'
+                    ELSE '，限制为 ' + CAST(CAST(f.max_size * 8.0 / 1024 AS DECIMAL(18,0)) AS VARCHAR) + ' MB'
+                  END AS AutoGrowth,
+                f.physical_name AS Path
+            FROM sys.database_files f
+            LEFT JOIN sys.filegroups fg ON fg.data_space_id = f.data_space_id
+            ORDER BY f.type, f.file_id;");
+
+        var files = fileRows.Select(row => new DbDatabaseFileInfo
+        {
+            LogicalName = (string)row.LogicalName,
+            FileType = (string)row.FileType,
+            FileGroup = (string?)row.FileGroup,
+            SizeMB = ((decimal)row.SizeMB).ToString("0.##") + " MB",
+            AutoGrowth = (string?)row.AutoGrowth,
+            Path = (string?)row.Path,
+        }).ToArray();
+
+        // 权限/用户
+        var userRows = await db.QueryAsync(@"
+            SELECT
+                dp.name AS UserName,
+                dp.type_desc AS UserType,
+                dp.default_schema_name AS DefaultSchema,
+                sp.name AS LoginName
+            FROM sys.database_principals dp
+            LEFT JOIN sys.server_principals sp ON sp.sid = dp.sid
+            WHERE dp.type IN ('S','U','G','E','X')
+              AND dp.principal_id > 4
+            ORDER BY dp.name;");
+
+        var roleRows = await db.QueryAsync(@"
+            SELECT
+                m.name AS UserName,
+                r.name AS RoleName
+            FROM sys.database_role_members rm
+            INNER JOIN sys.database_principals m ON m.principal_id = rm.member_principal_id
+            INNER JOIN sys.database_principals r ON r.principal_id = rm.role_principal_id
+            WHERE m.principal_id > 4;");
+
+        var roleLookup = roleRows
+            .GroupBy(r => (string)r.UserName)
+            .ToDictionary(g => g.Key, g => g.Select(r => (string)r.RoleName).ToArray(), StringComparer.OrdinalIgnoreCase);
+
+        var permissions = userRows.Select(row => new DbDatabasePermissionInfo
+        {
+            UserName = (string)row.UserName,
+            UserType = (string)row.UserType,
+            DefaultSchema = (string?)row.DefaultSchema,
+            LoginName = (string?)row.LoginName,
+            Roles = roleLookup.TryGetValue((string)row.UserName, out var roles) ? roles : Array.Empty<string>(),
+        }).ToArray();
+
+        return new DbDatabasePropertiesInfo
+        {
+            GeneralProperties = generalProperties,
+            Files = files,
+            Permissions = permissions,
+        };
+    }
+
+    private static async Task<DbDatabasePropertiesInfo> GetMySqlDatabasePropertiesAsync(DbConnection db, string databaseName)
+    {
+        var generalProperties = new List<DbCatalogObjectProperty>();
+
+        var schemaRow = await db.QuerySingleOrDefaultAsync(@"
+            SELECT
+                SCHEMA_NAME AS Name,
+                DEFAULT_CHARACTER_SET_NAME AS CharacterSet,
+                DEFAULT_COLLATION_NAME AS Collation
+            FROM information_schema.SCHEMATA
+            WHERE SCHEMA_NAME = @databaseName;",
+            new { databaseName });
+
+        if (schemaRow is not null)
+        {
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "名称", Value = (string?)schemaRow.Name });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "字符集", Value = (string?)schemaRow.CharacterSet });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "排序规则", Value = (string?)schemaRow.Collation });
+        }
+
+        // 数据库大小
+        var sizeRow = await db.QuerySingleOrDefaultAsync(@"
+            SELECT
+                SUM(data_length + index_length) / 1024 / 1024 AS TotalSizeMB,
+                SUM(data_length) / 1024 / 1024 AS DataSizeMB,
+                SUM(index_length) / 1024 / 1024 AS IndexSizeMB,
+                COUNT(*) AS TableCount
+            FROM information_schema.TABLES
+            WHERE TABLE_SCHEMA = @databaseName;",
+            new { databaseName });
+
+        if (sizeRow is not null)
+        {
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "总大小", Value = FormatSize((decimal?)sizeRow.TotalSizeMB) });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "数据大小", Value = FormatSize((decimal?)sizeRow.DataSizeMB) });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "索引大小", Value = FormatSize((decimal?)sizeRow.IndexSizeMB) });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "表数量", Value = ((long?)sizeRow.TableCount)?.ToString() });
+        }
+
+        // 用户/权限
+        var userRows = await db.QueryAsync(@"
+            SELECT DISTINCT
+                GRANTEE AS UserName,
+                PRIVILEGE_TYPE AS Privilege
+            FROM information_schema.SCHEMA_PRIVILEGES
+            WHERE TABLE_SCHEMA = @databaseName
+            ORDER BY GRANTEE;",
+            new { databaseName });
+
+        var userLookup = userRows
+            .GroupBy(r => (string)r.UserName)
+            .Select(g => new DbDatabasePermissionInfo
+            {
+                UserName = g.Key,
+                UserType = "用户",
+                Roles = g.Select(r => (string)r.Privilege).ToArray(),
+            })
+            .ToArray();
+
+        return new DbDatabasePropertiesInfo
+        {
+            GeneralProperties = generalProperties,
+            Files = Array.Empty<DbDatabaseFileInfo>(),
+            Permissions = userLookup,
+        };
+    }
+
+    private static async Task<DbDatabasePropertiesInfo> GetPostgreSqlDatabasePropertiesAsync(DbConnection db, string databaseName)
+    {
+        var generalProperties = new List<DbCatalogObjectProperty>();
+
+        var dbRow = await db.QuerySingleOrDefaultAsync(@"
+            SELECT
+                d.datname AS ""Name"",
+                pg_catalog.pg_get_userbyid(d.datdba) AS ""Owner"",
+                pg_catalog.pg_encoding_to_char(d.encoding) AS ""Encoding"",
+                d.datcollate AS ""Collation"",
+                d.datctype AS ""CType"",
+                d.datconnlimit AS ""ConnectionLimit"",
+                pg_catalog.pg_database_size(d.datname) AS ""SizeBytes""
+            FROM pg_catalog.pg_database d
+            WHERE d.datname = @databaseName;",
+            new { databaseName });
+
+        if (dbRow is not null)
+        {
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "名称", Value = (string?)dbRow.Name });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "所有者", Value = (string?)dbRow.Owner });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "编码", Value = (string?)dbRow.Encoding });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "排序规则", Value = (string?)dbRow.Collation });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "字符分类", Value = (string?)dbRow.CType });
+            generalProperties.Add(new DbCatalogObjectProperty { Label = "连接限制", Value = ((int?)dbRow.ConnectionLimit)?.ToString() });
+            var sizeBytes = (long?)dbRow.SizeBytes;
+            if (sizeBytes.HasValue)
+            {
+                generalProperties.Add(new DbCatalogObjectProperty { Label = "大小", Value = $"{sizeBytes.Value / 1024.0 / 1024.0:0.##} MB" });
+            }
+        }
+
+        // 表数量
+        var tableCount = await db.ExecuteScalarAsync<long>(@"
+            SELECT COUNT(*)
+            FROM information_schema.tables
+            WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+              AND table_type = 'BASE TABLE';");
+        generalProperties.Add(new DbCatalogObjectProperty { Label = "表数量", Value = tableCount.ToString() });
+
+        // 用户/权限
+        var userRows = await db.QueryAsync(@"
+            SELECT
+                r.rolname AS ""UserName"",
+                CASE WHEN r.rolsuper THEN 'Superuser' WHEN r.rolcreaterole THEN 'CreateRole' ELSE 'User' END AS ""UserType"",
+                ARRAY_TO_STRING(ARRAY(
+                    SELECT b.rolname
+                    FROM pg_catalog.pg_auth_members m
+                    INNER JOIN pg_catalog.pg_roles b ON b.oid = m.roleid
+                    WHERE m.member = r.oid
+                ), ', ') AS ""Roles""
+            FROM pg_catalog.pg_roles r
+            WHERE r.rolcanlogin = true
+              AND r.rolname NOT LIKE 'pg_%'
+            ORDER BY r.rolname;");
+
+        var permissions = userRows.Select(row => new DbDatabasePermissionInfo
+        {
+            UserName = (string)row.UserName,
+            UserType = (string)row.UserType,
+            Roles = string.IsNullOrEmpty((string?)row.Roles) ? Array.Empty<string>() : ((string)row.Roles).Split(", "),
+        }).ToArray();
+
+        return new DbDatabasePropertiesInfo
+        {
+            GeneralProperties = generalProperties,
+            Files = Array.Empty<DbDatabaseFileInfo>(),
+            Permissions = permissions,
+        };
+    }
+
+    private static async Task<DbDatabasePropertiesInfo> GetSqliteDatabasePropertiesAsync(DbConnection db, string databaseName)
+    {
+        var generalProperties = new List<DbCatalogObjectProperty>();
+        generalProperties.Add(new DbCatalogObjectProperty { Label = "名称", Value = databaseName });
+
+        // PRAGMA 查询
+        var pragmas = new[] { "page_size", "page_count", "journal_mode", "encoding", "auto_vacuum", "freelist_count" };
+        foreach (var pragma in pragmas)
+        {
+            var value = await db.ExecuteScalarAsync<string>($"PRAGMA {pragma};");
+            var label = pragma switch
+            {
+                "page_size" => "页面大小",
+                "page_count" => "页面数",
+                "journal_mode" => "日志模式",
+                "encoding" => "编码",
+                "auto_vacuum" => "自动清理",
+                "freelist_count" => "空闲页数",
+                _ => pragma,
+            };
+            generalProperties.Add(new DbCatalogObjectProperty { Label = label, Value = value });
+        }
+
+        // 计算大小
+        var pageSize = await db.ExecuteScalarAsync<long>("PRAGMA page_size;");
+        var pageCount = await db.ExecuteScalarAsync<long>("PRAGMA page_count;");
+        var totalSizeBytes = pageSize * pageCount;
+        generalProperties.Add(new DbCatalogObjectProperty { Label = "数据库大小", Value = $"{totalSizeBytes / 1024.0 / 1024.0:0.##} MB" });
+
+        // 表数量
+        var tableCount = await db.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';");
+        generalProperties.Add(new DbCatalogObjectProperty { Label = "表数量", Value = tableCount.ToString() });
+
+        return new DbDatabasePropertiesInfo
+        {
+            GeneralProperties = generalProperties,
+            Files = Array.Empty<DbDatabaseFileInfo>(),
+            Permissions = Array.Empty<DbDatabasePermissionInfo>(),
+        };
+    }
+
+    private static string FormatSize(decimal? sizeMB)
+    {
+        if (!sizeMB.HasValue)
+        {
+            return "无";
+        }
+
+        return $"{sizeMB.Value:0.##} MB";
     }
 }

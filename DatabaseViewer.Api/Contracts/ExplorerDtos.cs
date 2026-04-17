@@ -32,6 +32,7 @@ public sealed record DatabaseNodeDto(
     IReadOnlyList<UserDefinedTypeNodeDto> UserDefinedTypes,
     IReadOnlyList<DatabaseTriggerNodeDto> DatabaseTriggers,
     IReadOnlyList<XmlSchemaCollectionNodeDto> XmlSchemaCollections,
+    IReadOnlyList<AssemblyNodeDto> Assemblies,
     IReadOnlyList<RoutineNodeDto> Routines);
 
 public sealed record DatabaseGraphNodeDto(
@@ -81,6 +82,8 @@ public sealed record UserDefinedTypeNodeDto(string Database, string? Schema, str
 public sealed record DatabaseTriggerNodeDto(string Database, string? Schema, string Name, string? Timing, string? Event);
 
 public sealed record XmlSchemaCollectionNodeDto(string Database, string? Schema, string Name, int XmlNamespaceCount);
+
+public sealed record AssemblyNodeDto(string Database, string Name, string ClrName, string PermissionSet, bool IsVisible);
 
 public sealed record RoutineNodeDto(string? Schema, string Name, string RoutineType, IReadOnlyList<RoutineParameterDto> Parameters);
 
@@ -198,6 +201,32 @@ public sealed record RoutineSourceRequest(Guid ConnectionId, string Database, st
 
 public sealed record RoutineSourceResponse(string? Source);
 
+/// <summary>
+/// 数据库属性响应。
+/// </summary>
+public sealed record DatabasePropertiesResponse(
+    Guid ConnectionId,
+    string Database,
+    string Provider,
+    IReadOnlyList<CatalogObjectPropertyDto> GeneralProperties,
+    IReadOnlyList<DatabaseFileDto> Files,
+    IReadOnlyList<DatabasePermissionDto> Permissions);
+
+public sealed record DatabaseFileDto(
+    string LogicalName,
+    string FileType,
+    string? FileGroup,
+    string SizeMB,
+    string? AutoGrowth,
+    string? Path);
+
+public sealed record DatabasePermissionDto(
+    string UserName,
+    string UserType,
+    string? DefaultSchema,
+    string? LoginName,
+    IReadOnlyList<string> Roles);
+
 public sealed record SshTunnelRequest(
     bool Enabled,
     string Authentication,
@@ -214,6 +243,8 @@ public sealed record SshTunnelConfigResponse(
     string? Host,
     int? Port,
     string? Username,
+    bool HasPassword,
+    bool HasPassphrase,
     string? PrivateKeyPath);
 
 public sealed record SqliteCipherRequest(
@@ -262,6 +293,7 @@ public sealed record ConnectionConfigResponse(
     string Host,
     int? Port,
     string? Username,
+    bool HasPassword,
     bool TrustServerCertificate,
     SshTunnelConfigResponse SshTunnel,
     SqliteCipherConfigResponse SqliteCipher);

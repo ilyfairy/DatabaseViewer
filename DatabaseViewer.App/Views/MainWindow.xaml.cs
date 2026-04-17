@@ -169,8 +169,14 @@ public partial class MainWindow : Window
 
     private async void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        if (_closeConfirmed || _closeCheckInProgress)
+        if (_closeConfirmed)
         {
+            return;
+        }
+
+        if (_closeCheckInProgress)
+        {
+            e.Cancel = true;
             return;
         }
 
@@ -182,7 +188,7 @@ public partial class MainWindow : Window
             {
                 PersistWindowState();
                 _closeConfirmed = true;
-                Close();
+                Dispatcher.BeginInvoke(new Action(Close));
                 return;
             }
 
@@ -191,7 +197,7 @@ public partial class MainWindow : Window
             {
                 PersistWindowState();
                 _closeConfirmed = true;
-                Close();
+                Dispatcher.BeginInvoke(new Action(Close));
                 return;
             }
 
@@ -203,7 +209,7 @@ public partial class MainWindow : Window
 
             PersistWindowState();
             _closeConfirmed = true;
-            Close();
+            Dispatcher.BeginInvoke(new Action(Close));
         }
         finally
         {

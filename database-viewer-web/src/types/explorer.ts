@@ -2,7 +2,7 @@ export type ProviderType = 'sqlserver' | 'mysql' | 'postgresql' | 'sqlite'
 export type AuthenticationMode = 'windows' | 'password'
 export type CellValue = string | number | boolean | null
 export type DatabaseObjectType = 'table' | 'view'
-export type CatalogObjectType = 'synonym' | 'sequence' | 'rule' | 'default' | 'user-defined-type' | 'database-trigger' | 'xml-schema-collection'
+export type CatalogObjectType = 'synonym' | 'sequence' | 'rule' | 'default' | 'user-defined-type' | 'database-trigger' | 'xml-schema-collection' | 'assembly'
 
 export interface ConnectionInfo {
   id: string
@@ -69,6 +69,8 @@ export interface SshTunnelConfig {
   host?: string | null
   port?: number | null
   username?: string | null
+  hasPassword: boolean
+  hasPassphrase: boolean
   privateKeyPath?: string | null
 }
 
@@ -80,6 +82,7 @@ export interface ConnectionConfig {
   host: string
   port?: number | null
   username?: string | null
+  hasPassword: boolean
   trustServerCertificate: boolean
   sshTunnel: SshTunnelConfig
   sqliteCipher: SqliteCipherConfig
@@ -122,6 +125,7 @@ export interface DatabaseInfo {
   userDefinedTypes: UserDefinedTypeInfo[]
   databaseTriggers: DatabaseTriggerInfo[]
   xmlSchemaCollections: XmlSchemaCollectionInfo[]
+  assemblies: AssemblyInfo[]
   routines: RoutineInfo[]
 }
 
@@ -176,6 +180,14 @@ export interface XmlSchemaCollectionInfo {
   schema?: string | null
   name: string
   xmlNamespaceCount: number
+}
+
+export interface AssemblyInfo {
+  database: string
+  name: string
+  clrName: string
+  permissionSet: string
+  isVisible: boolean
 }
 
 export interface CatalogObjectProperty {
@@ -355,6 +367,32 @@ export interface ExplorerDetailPanel {
   sourceLabel: string
 }
 
+export interface DatabaseFileInfo {
+  logicalName: string
+  fileType: string
+  fileGroup?: string | null
+  sizeMB: string
+  autoGrowth?: string | null
+  path?: string | null
+}
+
+export interface DatabasePermissionInfo {
+  userName: string
+  userType: string
+  defaultSchema?: string | null
+  loginName?: string | null
+  roles: string[]
+}
+
+export interface DatabaseProperties {
+  connectionId: string
+  database: string
+  provider: ProviderType
+  generalProperties: CatalogObjectProperty[]
+  files: DatabaseFileInfo[]
+  permissions: DatabasePermissionInfo[]
+}
+
 export type ExplorerPanel = ExplorerGridPanel | ExplorerDetailPanel
 
 export interface TableWorkspaceTab {
@@ -485,7 +523,14 @@ export interface SqlServerLoginEditorWorkspaceTab {
   mode: 'browse' | 'create'
 }
 
-export type WorkspaceTab = TableWorkspaceTab | TableDesignWorkspaceTab | SqlWorkspaceTab | GraphWorkspaceTab | CatalogObjectWorkspaceTab | TableMockWorkspaceTab | SettingsWorkspaceTab | SqlServerLoginManagerWorkspaceTab | SqlServerLoginEditorWorkspaceTab
+export interface DatabasePropertiesWorkspaceTab {
+  id: string
+  type: 'database-properties'
+  connectionId: string
+  database: string
+}
+
+export type WorkspaceTab = TableWorkspaceTab | TableDesignWorkspaceTab | SqlWorkspaceTab | GraphWorkspaceTab | CatalogObjectWorkspaceTab | TableMockWorkspaceTab | SettingsWorkspaceTab | SqlServerLoginManagerWorkspaceTab | SqlServerLoginEditorWorkspaceTab | DatabasePropertiesWorkspaceTab
 
 export interface ReverseReferenceRow {
   rowKey: string

@@ -109,12 +109,16 @@ function clearEditorText() {
   store.updateSqlTabText(props.tab.id, '');
 }
 
-function executeCurrentSql() {
+async function executeCurrentSql() {
   const sqlText = editorText.value;
   lastLocalSqlText.value = sqlText;
   store.updateSqlTabText(props.tab.id, sqlText);
-  resultsClosed.value = false;
-  void store.executeSqlTab(props.tab.id, sqlText);
+  await store.executeSqlTab(props.tab.id, sqlText);
+
+  // 仅在实际执行了 SQL（而非弹出参数对话框）时展开结果面板
+  if (!store.pendingRoutineExec) {
+    resultsClosed.value = false;
+  }
 }
 
 function focusEditorAtStart() {
@@ -365,6 +369,10 @@ onMounted(() => {
 });
 
 watch(() => [props.tab.connectionId, props.tab.database] as const, ([connectionId, database]) => {
+  if (connectionId) {
+    void store.fetchDatabaseNames(connectionId);
+  }
+
   if (connectionId && database) {
     void store.ensureSqlContextLoaded(connectionId, database);
   }
@@ -406,10 +414,6 @@ watch(() => [props.tab.id, editorReady.value, store.pendingSqlEditorFocusTabId] 
           <NTag v-if="sqlFileName" size="small" :bordered="false">{{ sqlFileName }}</NTag>
           <span v-if="isDirty" class="sql-panel-status-chip sql-panel-status-chip-warning">未保存</span>
         </div>
-        <div class="sql-panel-header-meta">
-          <NTag v-if="tab.result" size="small" :bordered="false" type="info">{{ tab.result.elapsedMs }} ms</NTag>
-          <NTag v-if="tab.result?.affectedRows !== null && tab.result?.affectedRows !== undefined" size="small" :bordered="false" type="success">影响 {{ tab.result.affectedRows }} 行</NTag>
-        </div>
       </div>
     </template>
 
@@ -432,7 +436,10 @@ watch(() => [props.tab.id, editorReady.value, store.pendingSqlEditorFocusTabId] 
             :options="databaseOptions"
             @update:value="store.updateSqlTabDatabase(tab.id, $event)"
           />
-          <NButton size="small" type="primary" :disabled="!tab.connectionId || !tab.database || !editorText.trim() || tab.loading" @click="executeCurrentSql">
+          <NButton v-if="tab.loading" size="small" type="error" @click="store.cancelSqlExecution(tab.id)">
+            取消执行
+          </NButton>
+          <NButton v-else size="small" type="primary" :disabled="!tab.connectionId || !tab.database || !editorText.trim()" @click="executeCurrentSql">
             执行 SQL
           </NButton>
           <NButton size="small" tertiary @click="saveCurrentSql()">保存</NButton>
@@ -455,7 +462,7 @@ watch(() => [props.tab.id, editorReady.value, store.pendingSqlEditorFocusTabId] 
           @update:model-value="handleEditorTextUpdate"
           @execute="executeCurrentSql"
         />
-        <div class="sql-editor-resize-handle" @mousedown="beginEditorResize" />
+          <div class="sql-editor-resize-handle" @mousedown="beginEditorResize"></div>
       </div>
 
       <div v-show="hasVisibleResults" class="sql-panel-results">
@@ -481,6 +488,10 @@ watch(() => [props.tab.id, editorReady.value, store.pendingSqlEditorFocusTabId] 
             {{ selectedResultSet.name }} · {{ selectedResultSet.rows.length }} 行
           </span>
           <span v-else />
+          <span class="sql-results-header-meta">
+            <NTag v-if="tab.result" size="small" :bordered="false" type="info">{{ tab.result.elapsedMs }} ms</NTag>
+            <NTag v-if="tab.result?.affectedRows !== null && tab.result?.affectedRows !== undefined" size="small" :bordered="false" type="success">影响 {{ tab.result.affectedRows }} 行</NTag>
+          </span>
           <button type="button" class="sql-results-close-btn" title="关闭结果" @click="closeResults"><NIcon size="14"><Close /></NIcon></button>
         </div>
 
@@ -685,6 +696,14 @@ watch(() => [props.tab.id, editorReady.value, store.pendingSqlEditorFocusTabId] 
 .sql-results-header-info {
   font-size: $font-size-sm;
   color: $color-text-secondary;
+  flex: 1;
+}
+
+.sql-results-header-meta {
+  display: flex;
+  align-items: center;
+  gap: $gap-sm;
+  flex: 0 0 auto;
 }
 
 .sql-results-close-btn {

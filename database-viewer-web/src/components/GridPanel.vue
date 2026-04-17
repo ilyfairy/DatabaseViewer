@@ -302,7 +302,6 @@ const contextMenuOptions = computed<DropdownOption[]>(() => {
 
 // ── 筛选 / 搜索 ──
 const filterOpen = ref(false);
-const tableStats = computed(() => store.tableStats(props.tableKey));
 const searchColumnOptions = computed(() =>
   store.getSearchableColumns(props.tableKey).map((column) => ({
     label: `${column.name} (${column.type})`,
@@ -1405,8 +1404,6 @@ watch(dragSelectionMode, (mode, _, onCleanup) => {
         <div class="grid-panel-title-row">
           <h3>{{ tableMeta?.schema ? `${tableMeta.schema}.${tableMeta.name}` : tableMeta?.name }}</h3>
           <span class="panel-meta">{{ loadedRowCount }} / {{ totalRowCount }} rows</span>
-          <NTag size="small" :bordered="false" type="info">{{ tableStats.foreignKeyCount }} FK</NTag>
-          <NTag size="small" :bordered="false" type="warning">{{ tableStats.reverseCount }} 反向引用</NTag>
         </div>
         <div class="grid-panel-header-meta">
           <NButton size="small" :tertiary="!filterOpen" :type="filterOpen || searchActive ? 'primary' : 'default'" @click="filterOpen = !filterOpen">
@@ -1450,11 +1447,9 @@ watch(dragSelectionMode, (mode, _, onCleanup) => {
         {{ store.getTableSearchError(props.tableKey) }}
       </NAlert>
 
-      <div v-if="editMode" class="grid-selection-hint" :class="{ 'is-active': selectedRowCount > 0 }">
-        <span class="grid-selection-hint-title">Ctrl/⌘ + 左键可多选行，按住后拖拽可连续扫选，右键删除所选</span>
-        <NTag v-if="selectedRowCount > 0" size="small" :bordered="false" type="info">已选 {{ selectedRowCount }} 行</NTag>
-        <span class="panel-meta">默认双击编辑、右键菜单等行为保持不变</span>
-        <NButton v-if="selectedRowCount > 0" size="tiny" tertiary @click="clearSelectedRows">取消选择</NButton>
+      <div v-if="editMode && selectedRowCount > 0" class="grid-selection-hint is-active">
+        <NTag size="small" :bordered="false" type="info">已选 {{ selectedRowCount }} 行</NTag>
+        <NButton size="tiny" tertiary @click="clearSelectedRows">取消选择</NButton>
       </div>
 
       <NSpin :show="store.isTableLoading(props.tableKey) || store.isSearchLoading(props.tableKey)" class="grid-panel-spin">
@@ -1592,7 +1587,7 @@ watch(dragSelectionMode, (mode, _, onCleanup) => {
             加载全部
           </NButton>
           <NButton v-if="searchActive" size="small" tertiary @click="store.clearActiveTableSearch()">
-            清除搜索
+            清除筛选
           </NButton>
         </div>
       </div>
