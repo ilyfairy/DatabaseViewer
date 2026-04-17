@@ -6,6 +6,7 @@ import { NAlert, NButton, NCheckbox, NEmpty, NIcon, NInput, NModal, NSelect, NSp
 import type { DropdownOption } from 'naive-ui';
 import ContextDropdown from './ContextDropdown.vue';
 import StoredMaskedPasswordInput from './StoredMaskedPasswordInput.vue';
+import { buildSqliteDatabaseToolSql, findSqliteDatabaseTool, getSqliteDatabaseTools } from '../lib/sqliteDatabaseTools';
 import { useExplorerStore } from '../stores/explorer';
 import type { AuthenticationMode, CatalogObjectType, ProviderType, RoutineInfo, SynonymInfo, TableColumn, TableDesignSection, TableSummary } from '../types/explorer';
 
@@ -166,8 +167,16 @@ const databaseContextMenuOptions = computed<DropdownOption[]>(() => {
   ];
 
   const connection = store.getConnectionInfo(databaseContextMenu.value.connectionId);
-  if (connection?.provider === 'sqlite') {
-    options.splice(4, 0, { label: '释放空间占用 (VACUUM)', key: 'vacuum' });
+  const sqliteTools = connection ? getSqliteDatabaseTools(connection.provider) : [];
+  if (sqliteTools.length > 0) {
+    options.splice(4, 0, {
+      label: '工具',
+      key: 'tools',
+      children: sqliteTools.map((tool) => ({
+        label: tool.label,
+        key: tool.key,
+      })),
+    });
   }
 
   return options;
@@ -1232,6 +1241,14 @@ function handleConnectionContextMenuSelect(key: string | number) {
 }
 
 function handleDatabaseContextMenuSelect(key: string | number) {
+  if (typeof key === 'string' && databaseContextMenu.value) {
+    const provider = store.getConnectionInfo(databaseContextMenu.value.connectionId)?.provider ?? null;
+    if (provider && findSqliteDatabaseTool(provider, key)) {
+      void openDatabaseToolQuery(key);
+      return;
+    }
+  }
+
   switch (key) {
     case 'new-query':
       openDatabaseSqlQuery();
@@ -1247,9 +1264,6 @@ function handleDatabaseContextMenuSelect(key: string | number) {
       return;
     case 'database-properties':
       openDatabaseProperties();
-      return;
-    case 'vacuum':
-      openVacuumQuery();
       return;
     default:
       return;
@@ -1501,18 +1515,34 @@ function openDatabaseProperties() {
   store.openDatabaseProperties(connectionId, database);
 }
 
-async function openVacuumQuery() {
+/**
+ * 打开 SQLite 数据库工具对应的 SQL 标签页。
+ * 当前阶段只预填 SQL，不自动执行，保持工具行为一致且可审阅。
+ */
+async function openDatabaseToolQuery(toolKey: string) {
   if (!databaseContextMenu.value) {
     return;
   }
 
   const { connectionId, database } = databaseContextMenu.value;
+  const provider = store.getConnectionInfo(connectionId)?.provider ?? null;
   closeDatabaseContextMenu();
+
+  if (!provider) {
+    return;
+  }
+
+  const toolSql = buildSqliteDatabaseToolSql(provider, database, toolKey);
+  if (!toolSql) {
+    return;
+  }
+
   await store.openSqlTabWithContext({
     connectionId,
     database,
-    sqlText: 'VACUUM;',
-    savedSqlText: 'VACUUM;',
+    displayName: toolSql.tool.label,
+    sqlText: toolSql.sqlText,
+    savedSqlText: toolSql.sqlText,
   });
 }
 
