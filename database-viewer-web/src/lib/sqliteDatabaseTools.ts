@@ -1,4 +1,4 @@
-import type { ProviderType } from '../types/explorer';
+import type { DatabaseProviderType } from '../types/explorer';
 
 export type SqliteDatabaseToolKey =
   | 'sqlite-tool:optimize'
@@ -55,15 +55,15 @@ function buildToolSqlText(database: string, tool: SqliteDatabaseToolDefinition) 
   return `-- SQLite 工具: ${tool.label}\n-- database: ${database}\n-- 手动点击“执行 SQL”运行\n\n${tool.commandText}`;
 }
 
-export function getSqliteDatabaseTools(provider: ProviderType) {
+export function getSqliteDatabaseTools(provider: DatabaseProviderType) {
   return provider === 'sqlite' ? SQLITE_DATABASE_TOOLS : [];
 }
 
-export function findSqliteDatabaseTool(provider: ProviderType, key: string) {
+export function findSqliteDatabaseTool(provider: DatabaseProviderType, key: string) {
   return getSqliteDatabaseTools(provider).find((tool) => tool.key === key) ?? null;
 }
 
-export function buildSqliteDatabaseToolSql(provider: ProviderType, database: string, key: string) {
+export function buildSqliteDatabaseToolSql(provider: DatabaseProviderType, database: string, key: string) {
   const tool = findSqliteDatabaseTool(provider, key);
   if (!tool) {
     return null;

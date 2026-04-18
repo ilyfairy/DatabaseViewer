@@ -13,7 +13,7 @@ import type {
   CreateConnectionRequest,
   ExplorerSettings,
   GraphWorkspaceTab,
-  ProviderType,
+  DatabaseProviderType,
   RoutineInfo,
   ExplorerDetailPanel,
   ExplorerGridPanel,
@@ -183,7 +183,7 @@ function normalizeCellValue(value: CellValue | undefined): CellValue {
   return value ?? null;
 }
 
-function quoteSqlIdentifier(provider: ProviderType, value: string) {
+function quoteSqlIdentifier(provider: DatabaseProviderType, value: string) {
   if (provider === 'mysql') {
     return `\`${value.replace(/`/g, '``')}\``;
   }
@@ -195,7 +195,7 @@ function quoteSqlIdentifier(provider: ProviderType, value: string) {
   return `[${value.replace(/\]/g, ']]')}]`;
 }
 
-function qualifiedSqlObject(provider: ProviderType, schema: string | null | undefined, objectName: string) {
+function qualifiedSqlObject(provider: DatabaseProviderType, schema: string | null | undefined, objectName: string) {
   return schema
     ? `${quoteSqlIdentifier(provider, schema)}.${quoteSqlIdentifier(provider, objectName)}`
     : quoteSqlIdentifier(provider, objectName);
@@ -315,7 +315,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     tabId: string | null;
     connectionId: string;
     database: string;
-    provider: ProviderType;
+    provider: DatabaseProviderType;
     routine: RoutineInfo;
   } | null>(null);
 
@@ -1118,12 +1118,12 @@ export const useExplorerStore = defineStore('explorer', () => {
   }
   function isConnectionReadOnly(connectionId: string) {
     const connection = connections.value.find((entry) => entry.id === connectionId);
-    return connection?.provider === 'sqlite' && connection.sqliteOpenMode === 'readonly';
+    return connection?.provider === 'sqlite' && connection.sqlite.openMode === 'readonly';
   }
 
   function isTableConnectionReadOnly(tableKey: string) {
     const connection = getConnectionForTable(tableKey);
-    return connection?.provider === 'sqlite' && connection.sqliteOpenMode === 'readonly';
+    return connection?.provider === 'sqlite' && connection.sqlite.openMode === 'readonly';
   }
 
   function assertTableWritable(tableKey: string, actionLabel: string) {

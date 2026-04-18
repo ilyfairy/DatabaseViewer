@@ -7,7 +7,7 @@
  * 提供上下文感知的智能补全信息。
  */
 
-import type { ProviderType } from '../types/explorer';
+import type { DatabaseProviderType } from '../types/explorer';
 import type { Parser, AST, Select, From, BaseFrom, Join } from 'node-sql-parser';
 
 /** 从 AST 中提取的表引用信息 */
@@ -36,11 +36,11 @@ export interface AstAnalysis {
 
 // ── Parser 缓存（按 provider 懒加载） ──
 
-const parserCache = new Map<ProviderType, Parser>();
+const parserCache = new Map<DatabaseProviderType, Parser>();
 
 /** 将项目的 ProviderType 映射为 node-sql-parser 的 database 名 */
-function toParserDatabase(provider: ProviderType): string {
-  const mapping: Record<ProviderType, string> = {
+function toParserDatabase(provider: DatabaseProviderType): string {
+  const mapping: Record<DatabaseProviderType, string> = {
     sqlserver: 'TransactSQL',
     postgresql: 'PostgresQL',
     mysql: 'MySQL',
@@ -53,7 +53,7 @@ function toParserDatabase(provider: ProviderType): string {
 /**
  * 按需加载指定 provider 的 parser 实例（动态导入，仅加载对应方言的 ~200KB parser）
  */
-async function getParser(provider: ProviderType): Promise<Parser> {
+async function getParser(provider: DatabaseProviderType): Promise<Parser> {
   const cached = parserCache.get(provider);
   if (cached) {
     return cached;
@@ -90,7 +90,7 @@ async function getParser(provider: ProviderType): Promise<Parser> {
  */
 export async function tryParse(
   sql: string,
-  provider: ProviderType,
+  provider: DatabaseProviderType,
 ): Promise<AST[] | null> {
   try {
     const parser = await getParser(provider);
@@ -111,7 +111,7 @@ export async function tryParse(
 export async function tryParseForCompletion(
   fullSql: string,
   sqlBeforeCursor: string,
-  provider: ProviderType,
+  provider: DatabaseProviderType,
 ): Promise<AST[] | null> {
   // 策略 1: 先尝试解析完整 SQL
   const fullAst = await tryParse(fullSql, provider);
@@ -371,7 +371,7 @@ export interface AstRoutineCall {
  */
 export async function tryMatchRoutineCall(
   sql: string,
-  provider: ProviderType,
+  provider: DatabaseProviderType,
 ): Promise<AstRoutineCall | null> {
   const trimmed = sql.replace(/;+\s*$/, '').trim();
   if (!trimmed) {

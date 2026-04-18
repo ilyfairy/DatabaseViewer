@@ -8,8 +8,6 @@ public sealed class ConnectionDefinition
 
     public DatabaseProviderType ProviderType { get; set; }
 
-    public AuthenticationMode AuthenticationMode { get; set; } = AuthenticationMode.UsernamePassword;
-
     public string Host { get; set; } = string.Empty;
 
     public int Port { get; set; }
@@ -18,13 +16,15 @@ public sealed class ConnectionDefinition
 
     public string Password { get; set; } = string.Empty;
 
-    public bool TrustServerCertificate { get; set; } = true;
-
     public SshTunnelOptions SshTunnel { get; set; } = new();
 
-    public SqliteOpenMode SqliteOpenMode { get; set; } = SqliteOpenMode.ReadWrite;
+    public SqlServerConnectionOptions SqlServer { get; set; } = new();
 
-    public SqliteCipherOptions SqliteCipher { get; set; } = new();
+    public MySqlConnectionOptions MySql { get; set; } = new();
+
+    public PostgreSqlConnectionOptions PostgreSql { get; set; } = new();
+
+    public SqliteConnectionOptions Sqlite { get; set; } = new();
 
     public string DisplayLabel => $"{Name} ({ProviderType})";
 }

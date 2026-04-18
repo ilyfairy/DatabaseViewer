@@ -1,6 +1,6 @@
 'use strict';
 
-import type { ProviderType } from '../types/explorer';
+import type { DatabaseProviderType } from '../types/explorer';
 
 /**
  * SQL 自动补全数据 — 关键字、内置函数、系统变量、数据类型。
@@ -634,7 +634,7 @@ export interface SqlCompletionSet {
   systemObjects: string[];
 }
 
-export function getSqlCompletions(provider: ProviderType): SqlCompletionSet {
+export function getSqlCompletions(provider: DatabaseProviderType): SqlCompletionSet {
   switch (provider) {
     case 'sqlserver':
       return {

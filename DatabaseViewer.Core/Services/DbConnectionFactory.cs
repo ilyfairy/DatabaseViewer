@@ -42,12 +42,12 @@ public static class DbConnectionFactory
         {
             DataSource = definition.SshTunnel.Enabled ? $"{endpoint.Host},{endpoint.Port}" : dataSource,
             InitialCatalog = string.IsNullOrWhiteSpace(databaseName) ? "master" : databaseName,
-            TrustServerCertificate = definition.TrustServerCertificate,
+            TrustServerCertificate = definition.SqlServer.TrustServerCertificate,
             Encrypt = true,
             MultipleActiveResultSets = false,
         };
 
-        if (definition.AuthenticationMode == AuthenticationMode.WindowsIntegrated)
+        if (definition.SqlServer.AuthenticationMode == SqlServerAuthenticationMode.WindowsIntegrated)
         {
             builder.IntegratedSecurity = true;
         }
@@ -123,30 +123,30 @@ public static class DbConnectionFactory
 
         var filePath = Path.GetFullPath(definition.Host.Trim());
         var directory = Path.GetDirectoryName(filePath);
-        if (!File.Exists(filePath) && definition.SqliteOpenMode == Models.SqliteOpenMode.ReadOnly)
+        if (!File.Exists(filePath) && definition.Sqlite.OpenMode == Models.SqliteOpenMode.ReadOnly)
         {
             throw new InvalidOperationException("SQLite 只读连接要求数据库文件已存在。", null);
         }
 
-        if (definition.SqliteOpenMode != Models.SqliteOpenMode.ReadOnly && !string.IsNullOrWhiteSpace(directory))
+        if (definition.Sqlite.OpenMode != Models.SqliteOpenMode.ReadOnly && !string.IsNullOrWhiteSpace(directory))
         {
             Directory.CreateDirectory(directory);
         }
 
-        if (definition.SqliteCipher.SkipBytes.GetValueOrDefault() > 0)
+        if (definition.Sqlite.Cipher.SkipBytes.GetValueOrDefault() > 0)
         {
-            return OffsetSqliteConnectionFactory.Create(filePath, definition.SqliteCipher, definition.SqliteOpenMode);
+            return OffsetSqliteConnectionFactory.Create(filePath, definition.Sqlite.Cipher, definition.Sqlite.OpenMode);
         }
 
         var builder = new SqliteConnectionStringBuilder
         {
             DataSource = filePath,
-            Mode = definition.SqliteOpenMode == Models.SqliteOpenMode.ReadOnly ? Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly : Microsoft.Data.Sqlite.SqliteOpenMode.ReadWriteCreate,
+            Mode = definition.Sqlite.OpenMode == Models.SqliteOpenMode.ReadOnly ? Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly : Microsoft.Data.Sqlite.SqliteOpenMode.ReadWriteCreate,
             Cache = SqliteCacheMode.Shared,
-            ForeignKeys = !definition.SqliteCipher.Enabled,
+            ForeignKeys = !definition.Sqlite.Cipher.Enabled,
         };
 
-        return new ConfiguredSqliteConnection(new SqliteConnection(builder.ConnectionString), definition.SqliteCipher);
+        return new ConfiguredSqliteConnection(new SqliteConnection(builder.ConnectionString), definition.Sqlite.Cipher);
     }
 
     private static async Task ApplySqliteSessionConfigurationAsync(SqliteConnection connection, SqliteCipherOptions options, CancellationToken cancellationToken)

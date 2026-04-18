@@ -10,13 +10,13 @@ import 'monaco-editor/esm/vs/editor/contrib/wordOperations/browser/wordOperation
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useLocalStorage } from '@vueuse/core';
-import type { ProviderType, RoutineInfo, SqlContextTable } from '../types/explorer';
+import type { DatabaseProviderType, RoutineInfo, SqlContextTable } from '../types/explorer';
 import { getSqlCompletions } from '../data/sql-completions';
 import { tryParseForCompletion, extractAnalysis, type AstAnalysis } from '../lib/sql-ast';
 
 const props = defineProps<{
   modelValue: string
-  provider: ProviderType
+  provider: DatabaseProviderType
   database: string | null
   databases: string[]
   tables: SqlContextTable[]
@@ -98,7 +98,7 @@ type CompletionCandidate = {
 };
 
 type ModelContext = {
-  provider: ProviderType
+  provider: DatabaseProviderType
   database: string | null
   databases: string[]
   tables: SqlContextTable[]

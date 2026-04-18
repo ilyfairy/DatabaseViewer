@@ -349,17 +349,7 @@ public sealed class ExplorerApiService
         connections.Add(definition);
         await _connectionStore.SaveAsync(connections);
 
-        return new ConnectionNodeDto(
-            definition.Id,
-            definition.Name,
-            ToProviderKey(definition.ProviderType),
-            definition.Host,
-            definition.Port > 0 ? definition.Port : null,
-            definition.AuthenticationMode == AuthenticationMode.WindowsIntegrated ? "windows" : "password",
-            PickAccent(definition.ProviderType),
-            ToSqliteOpenModeKey(definition),
-            null,
-            Array.Empty<DatabaseNodeDto>());
+        return BuildConnectionNode(definition, null, Array.Empty<DatabaseNodeDto>());
     }
 
     public async Task<ConnectionConfigResponse> GetConnectionConfigAsync(Guid connectionId)
@@ -370,13 +360,29 @@ public sealed class ExplorerApiService
             connection.Id,
             connection.Name,
             ToProviderKey(connection.ProviderType),
-            connection.AuthenticationMode == AuthenticationMode.WindowsIntegrated ? "windows" : "password",
             connection.Host,
             connection.Port > 0 ? connection.Port : null,
             string.IsNullOrWhiteSpace(connection.Username) ? null : connection.Username,
             !string.IsNullOrWhiteSpace(connection.Password),
-            connection.TrustServerCertificate,
-            ToSqliteOpenModeKey(connection),
+            new SqlServerConnectionConfigResponse(
+                connection.SqlServer.AuthenticationMode == SqlServerAuthenticationMode.WindowsIntegrated ? "windows" : "password",
+                connection.SqlServer.TrustServerCertificate),
+            new MySqlConnectionConfigResponse(),
+            new PostgreSqlConnectionConfigResponse(),
+            new SqliteConnectionConfigResponse(
+                ToSqliteOpenModeKey(connection.Sqlite.OpenMode),
+                new SqliteCipherConfigResponse(
+                    connection.Sqlite.Cipher.Enabled,
+                    !string.IsNullOrWhiteSpace(connection.Sqlite.Cipher.Password),
+                    ToSqliteCipherKeyFormatKey(connection.Sqlite.Cipher.KeyFormat),
+                    connection.Sqlite.Cipher.PageSize,
+                    connection.Sqlite.Cipher.KdfIter,
+                    connection.Sqlite.Cipher.CipherCompatibility,
+                    connection.Sqlite.Cipher.PlaintextHeaderSize,
+                    connection.Sqlite.Cipher.SkipBytes,
+                    connection.Sqlite.Cipher.UseHmac,
+                    string.IsNullOrWhiteSpace(connection.Sqlite.Cipher.KdfAlgorithm) ? null : connection.Sqlite.Cipher.KdfAlgorithm,
+                    string.IsNullOrWhiteSpace(connection.Sqlite.Cipher.HmacAlgorithm) ? null : connection.Sqlite.Cipher.HmacAlgorithm)),
             new SshTunnelConfigResponse(
                 connection.SshTunnel.Enabled,
                 ToSshAuthenticationKey(connection.SshTunnel.AuthenticationMode),
@@ -385,19 +391,7 @@ public sealed class ExplorerApiService
                 string.IsNullOrWhiteSpace(connection.SshTunnel.Username) ? null : connection.SshTunnel.Username,
                 !string.IsNullOrWhiteSpace(connection.SshTunnel.Password),
                 !string.IsNullOrWhiteSpace(connection.SshTunnel.Passphrase),
-                string.IsNullOrWhiteSpace(connection.SshTunnel.PrivateKeyPath) ? null : connection.SshTunnel.PrivateKeyPath),
-            new SqliteCipherConfigResponse(
-                connection.SqliteCipher.Enabled,
-                !string.IsNullOrWhiteSpace(connection.SqliteCipher.Password),
-                ToSqliteCipherKeyFormatKey(connection.SqliteCipher.KeyFormat),
-                connection.SqliteCipher.PageSize,
-                connection.SqliteCipher.KdfIter,
-                connection.SqliteCipher.CipherCompatibility,
-                connection.SqliteCipher.PlaintextHeaderSize,
-                connection.SqliteCipher.SkipBytes,
-                connection.SqliteCipher.UseHmac,
-                string.IsNullOrWhiteSpace(connection.SqliteCipher.KdfAlgorithm) ? null : connection.SqliteCipher.KdfAlgorithm,
-                string.IsNullOrWhiteSpace(connection.SqliteCipher.HmacAlgorithm) ? null : connection.SqliteCipher.HmacAlgorithm));
+                string.IsNullOrWhiteSpace(connection.SshTunnel.PrivateKeyPath) ? null : connection.SshTunnel.PrivateKeyPath));
     }
 
     public async Task TestConnectionAsync(TestConnectionRequest request)
@@ -408,15 +402,15 @@ public sealed class ExplorerApiService
         var definition = MapConnectionRequest(new CreateConnectionRequest(
             request.Name,
             request.Provider,
-            request.Authentication,
             request.Host,
             request.Port,
             request.Username,
             request.Password,
-            request.TrustServerCertificate,
-            request.SqliteOpenMode,
-            request.SshTunnel,
-            request.SqliteCipher), existing);
+            request.SqlServer,
+            request.MySql,
+            request.PostgreSql,
+            request.Sqlite,
+            request.SshTunnel), existing);
 
         var canConnect = await _queryService.TestConnectionAsync(definition);
         if (!canConnect)
@@ -440,7 +434,7 @@ public sealed class ExplorerApiService
             throw new InvalidOperationException("只有 SQLite 连接支持修改加密密钥。", null);
         }
 
-        if (!existing.SqliteCipher.Enabled)
+        if (!existing.Sqlite.Cipher.Enabled)
         {
             throw new InvalidOperationException("当前实现仅支持修改已加密 SQLite 数据库的密钥。明文库加密/解密需要 sqlcipher_export 导出重写，暂未实现。", null);
         }
@@ -453,19 +447,19 @@ public sealed class ExplorerApiService
         var currentConnection = CloneConnectionDefinition(existing);
         if (!string.IsNullOrWhiteSpace(request.CurrentPassword))
         {
-            currentConnection.SqliteCipher = CloneSqliteCipherOptions(existing.SqliteCipher);
-            currentConnection.SqliteCipher.Enabled = true;
-            currentConnection.SqliteCipher.Password = request.CurrentPassword.Trim();
-            currentConnection.SqliteCipher.KeyFormat = ParseSqliteCipherKeyFormat(request.CurrentKeyFormat);
+            currentConnection.Sqlite.Cipher = CloneSqliteCipherOptions(existing.Sqlite.Cipher);
+            currentConnection.Sqlite.Cipher.Enabled = true;
+            currentConnection.Sqlite.Cipher.Password = request.CurrentPassword.Trim();
+            currentConnection.Sqlite.Cipher.KeyFormat = ParseSqliteCipherKeyFormat(request.CurrentKeyFormat);
         }
 
         var updated = CloneConnectionDefinition(existing);
-        updated.SqliteCipher = CloneSqliteCipherOptions(existing.SqliteCipher);
-        updated.SqliteCipher.Enabled = true;
-        updated.SqliteCipher.Password = request.NewPassword.Trim();
-        updated.SqliteCipher.KeyFormat = ParseSqliteCipherKeyFormat(request.NewKeyFormat);
+        updated.Sqlite.Cipher = CloneSqliteCipherOptions(existing.Sqlite.Cipher);
+        updated.Sqlite.Cipher.Enabled = true;
+        updated.Sqlite.Cipher.Password = request.NewPassword.Trim();
+        updated.Sqlite.Cipher.KeyFormat = ParseSqliteCipherKeyFormat(request.NewKeyFormat);
 
-        await _queryService.RekeySqliteDatabaseAsync(currentConnection, updated.SqliteCipher);
+        await _queryService.RekeySqliteDatabaseAsync(currentConnection, updated.Sqlite.Cipher);
 
         connections[existingIndex] = updated;
         await _connectionStore.SaveAsync(connections);
@@ -1041,28 +1035,30 @@ public sealed class ExplorerApiService
             _ => throw new InvalidOperationException("不支持的数据库类型。"),
         };
 
-        var authenticationMode = request.Authentication.ToLowerInvariant() switch
+        var sqlServerRequest = request.SqlServer ?? new SqlServerConnectionRequest(null, null);
+        var sqlServerAuthenticationMode = (sqlServerRequest.AuthenticationMode ?? (existing?.SqlServer.AuthenticationMode == SqlServerAuthenticationMode.WindowsIntegrated ? "windows" : "password")).ToLowerInvariant() switch
         {
-            "windows" when providerType == DatabaseProviderType.SqlServer => AuthenticationMode.WindowsIntegrated,
-            "password" => AuthenticationMode.UsernamePassword,
+            "windows" when providerType == DatabaseProviderType.SqlServer => SqlServerAuthenticationMode.WindowsIntegrated,
+            "password" => SqlServerAuthenticationMode.UsernamePassword,
             "windows" => throw new InvalidOperationException("只有 SQL Server 支持 Windows 身份验证。"),
             _ => throw new InvalidOperationException("不支持的认证方式。"),
         };
 
-        var resolvedUsername = authenticationMode == AuthenticationMode.WindowsIntegrated || providerType == DatabaseProviderType.Sqlite
+        var resolvedUsername = sqlServerAuthenticationMode == SqlServerAuthenticationMode.WindowsIntegrated || providerType == DatabaseProviderType.Sqlite
             ? string.Empty
             : !string.IsNullOrWhiteSpace(request.Username)
               ? request.Username.Trim()
               : existing?.Username ?? throw new InvalidOperationException("用户名不能为空。");
 
-        var resolvedPassword = authenticationMode == AuthenticationMode.WindowsIntegrated || providerType == DatabaseProviderType.Sqlite
+        var resolvedPassword = sqlServerAuthenticationMode == SqlServerAuthenticationMode.WindowsIntegrated || providerType == DatabaseProviderType.Sqlite
             ? string.Empty
             : request.Password ?? existing?.Password ?? string.Empty;
 
-        var sqliteCipherRequest = request.SqliteCipher ?? new SqliteCipherRequest(false, null, null, null, null, null, null, null, null, null, null);
-        var sqliteCipher = ResolveSqliteCipherOptions(providerType, sqliteCipherRequest, existing?.SqliteCipher);
+        var sqliteRequest = request.Sqlite ?? new SqliteConnectionRequest(null, null);
+        var sqliteCipherRequest = sqliteRequest.Cipher ?? new SqliteCipherRequest(false, null, null, null, null, null, null, null, null, null, null);
+        var sqliteCipher = ResolveSqliteCipherOptions(providerType, sqliteCipherRequest, existing?.Sqlite.Cipher);
         var sqliteOpenMode = providerType == DatabaseProviderType.Sqlite
-            ? ParseSqliteOpenMode(request.SqliteOpenMode)
+            ? ParseSqliteOpenMode(sqliteRequest.OpenMode ?? ToSqliteOpenModeKey(existing?.Sqlite.OpenMode ?? SqliteOpenMode.ReadWrite))
             : SqliteOpenMode.ReadWrite;
 
         var sshTunnel = request.SshTunnel ?? new SshTunnelRequest(false, "password", null, null, null, null, null, null);
@@ -1073,7 +1069,7 @@ public sealed class ExplorerApiService
             throw new InvalidOperationException("SQLite 不支持 SSH 隧道。");
         }
 
-        if (sshTunnel.Enabled && authenticationMode == AuthenticationMode.WindowsIntegrated)
+        if (sshTunnel.Enabled && sqlServerAuthenticationMode == SqlServerAuthenticationMode.WindowsIntegrated)
         {
             throw new InvalidOperationException("SSH 隧道下暂不支持 SQL Server 的 Windows 身份验证，请改用账号密码连接。");
         }
@@ -1119,14 +1115,22 @@ public sealed class ExplorerApiService
             Id = existing?.Id ?? Guid.NewGuid(),
             Name = request.Name.Trim(),
             ProviderType = providerType,
-            AuthenticationMode = authenticationMode,
             Host = request.Host.Trim(),
             Port = request.Port ?? GetDefaultPort(providerType),
             Username = resolvedUsername,
             Password = resolvedPassword,
-            SqliteOpenMode = sqliteOpenMode,
-            SqliteCipher = sqliteCipher,
-            TrustServerCertificate = request.TrustServerCertificate,
+            SqlServer = new SqlServerConnectionOptions
+            {
+                AuthenticationMode = sqlServerAuthenticationMode,
+                TrustServerCertificate = sqlServerRequest.TrustServerCertificate ?? existing?.SqlServer.TrustServerCertificate ?? true,
+            },
+            MySql = new MySqlConnectionOptions(),
+            PostgreSql = new PostgreSqlConnectionOptions(),
+            Sqlite = new SqliteConnectionOptions
+            {
+                OpenMode = sqliteOpenMode,
+                Cipher = sqliteCipher,
+            },
             SshTunnel = new SshTunnelOptions
             {
                 Enabled = sshTunnel.Enabled,
@@ -1265,14 +1269,22 @@ public sealed class ExplorerApiService
             Id = source.Id,
             Name = source.Name,
             ProviderType = source.ProviderType,
-            AuthenticationMode = source.AuthenticationMode,
             Host = source.Host,
             Port = source.Port,
             Username = source.Username,
             Password = source.Password,
-            TrustServerCertificate = source.TrustServerCertificate,
-            SqliteOpenMode = source.SqliteOpenMode,
-            SqliteCipher = CloneSqliteCipherOptions(source.SqliteCipher),
+            SqlServer = new SqlServerConnectionOptions
+            {
+                AuthenticationMode = source.SqlServer.AuthenticationMode,
+                TrustServerCertificate = source.SqlServer.TrustServerCertificate,
+            },
+            MySql = new MySqlConnectionOptions(),
+            PostgreSql = new PostgreSqlConnectionOptions(),
+            Sqlite = new SqliteConnectionOptions
+            {
+                OpenMode = source.Sqlite.OpenMode,
+                Cipher = CloneSqliteCipherOptions(source.Sqlite.Cipher),
+            },
             SshTunnel = new SshTunnelOptions
             {
                 Enabled = source.SshTunnel.Enabled,
@@ -1322,8 +1334,13 @@ public sealed class ExplorerApiService
     private static string? ToSqliteOpenModeKey(ConnectionDefinition connection)
     {
         return connection.ProviderType == DatabaseProviderType.Sqlite
-            ? connection.SqliteOpenMode == SqliteOpenMode.ReadOnly ? "readonly" : "readwrite"
+            ? ToSqliteOpenModeKey(connection.Sqlite.OpenMode)
             : null;
+    }
+
+    private static string ToSqliteOpenModeKey(SqliteOpenMode value)
+    {
+        return value == SqliteOpenMode.ReadOnly ? "readonly" : "readwrite";
     }
 
     private ConnectionNodeDto BuildConnectionNode(ConnectionDefinition connection, string? error, IReadOnlyList<DatabaseNodeDto> databases)
@@ -1334,9 +1351,13 @@ public sealed class ExplorerApiService
             ToProviderKey(connection.ProviderType),
             connection.Host,
             connection.Port > 0 ? connection.Port : null,
-            connection.AuthenticationMode == AuthenticationMode.WindowsIntegrated ? "windows" : "password",
+            new SqlServerConnectionSummaryDto(
+                connection.SqlServer.AuthenticationMode == SqlServerAuthenticationMode.WindowsIntegrated ? "windows" : "password",
+                connection.SqlServer.TrustServerCertificate),
+            new MySqlConnectionSummaryDto(),
+            new PostgreSqlConnectionSummaryDto(),
+            new SqliteConnectionSummaryDto(ToSqliteOpenModeKey(connection.Sqlite.OpenMode)),
             PickAccent(connection.ProviderType),
-            ToSqliteOpenModeKey(connection),
             error,
             databases);
     }
@@ -1356,7 +1377,7 @@ public sealed class ExplorerApiService
     {
         if (definition.ProviderType == DatabaseProviderType.Sqlite)
         {
-            return definition.SqliteCipher.Enabled
+            return definition.Sqlite.Cipher.Enabled
                 ? new InvalidOperationException("SQLite / SQLCipher 连接失败，请检查数据库文件路径、密码、密钥格式以及加密参数。新数据库文件会在首次连接时自动创建。", null)
                 : new InvalidOperationException("SQLite 连接失败，请检查数据库文件路径以及目录读写权限。新数据库文件会在首次连接时自动创建。", null);
         }

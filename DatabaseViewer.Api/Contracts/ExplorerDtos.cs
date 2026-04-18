@@ -16,11 +16,21 @@ public sealed record ConnectionNodeDto(
     string Provider,
     string Host,
     int? Port,
-    string Authentication,
+    SqlServerConnectionSummaryDto SqlServer,
+    MySqlConnectionSummaryDto MySql,
+    PostgreSqlConnectionSummaryDto PostgreSql,
+    SqliteConnectionSummaryDto Sqlite,
     string Accent,
-    string? SqliteOpenMode,
     string? Error,
     IReadOnlyList<DatabaseNodeDto> Databases);
+
+public sealed record SqlServerConnectionSummaryDto(string AuthenticationMode, bool TrustServerCertificate);
+
+public sealed record MySqlConnectionSummaryDto();
+
+public sealed record PostgreSqlConnectionSummaryDto();
+
+public sealed record SqliteConnectionSummaryDto(string OpenMode);
 
 public sealed record DatabaseNodeDto(
     string Name,
@@ -274,46 +284,62 @@ public sealed record SqliteCipherConfigResponse(
     string? KdfAlgorithm,
     string? HmacAlgorithm);
 
+public sealed record SqlServerConnectionRequest(string? AuthenticationMode, bool? TrustServerCertificate);
+
+public sealed record SqlServerConnectionConfigResponse(string AuthenticationMode, bool TrustServerCertificate);
+
+public sealed record MySqlConnectionRequest();
+
+public sealed record MySqlConnectionConfigResponse();
+
+public sealed record PostgreSqlConnectionRequest();
+
+public sealed record PostgreSqlConnectionConfigResponse();
+
+public sealed record SqliteConnectionRequest(string? OpenMode, SqliteCipherRequest? Cipher);
+
+public sealed record SqliteConnectionConfigResponse(string OpenMode, SqliteCipherConfigResponse Cipher);
+
 public sealed record CreateConnectionRequest(
     string Name,
     string Provider,
-    string Authentication,
     string Host,
     int? Port,
     string? Username,
     string? Password,
-    bool TrustServerCertificate,
-    string? SqliteOpenMode,
-    SshTunnelRequest? SshTunnel,
-    SqliteCipherRequest? SqliteCipher);
+    SqlServerConnectionRequest? SqlServer,
+    MySqlConnectionRequest? MySql,
+    PostgreSqlConnectionRequest? PostgreSql,
+    SqliteConnectionRequest? Sqlite,
+    SshTunnelRequest? SshTunnel);
 
 public sealed record ConnectionConfigResponse(
     Guid Id,
     string Name,
     string Provider,
-    string Authentication,
     string Host,
     int? Port,
     string? Username,
     bool HasPassword,
-    bool TrustServerCertificate,
-    string? SqliteOpenMode,
-    SshTunnelConfigResponse SshTunnel,
-    SqliteCipherConfigResponse SqliteCipher);
+    SqlServerConnectionConfigResponse SqlServer,
+    MySqlConnectionConfigResponse MySql,
+    PostgreSqlConnectionConfigResponse PostgreSql,
+    SqliteConnectionConfigResponse Sqlite,
+    SshTunnelConfigResponse SshTunnel);
 
 public sealed record TestConnectionRequest(
     Guid? ConnectionId,
     string Name,
     string Provider,
-    string Authentication,
     string Host,
     int? Port,
     string? Username,
     string? Password,
-    bool TrustServerCertificate,
-    string? SqliteOpenMode,
-    SshTunnelRequest? SshTunnel,
-    SqliteCipherRequest? SqliteCipher);
+    SqlServerConnectionRequest? SqlServer,
+    MySqlConnectionRequest? MySql,
+    PostgreSqlConnectionRequest? PostgreSql,
+    SqliteConnectionRequest? Sqlite,
+    SshTunnelRequest? SshTunnel);
 
 public sealed record SqliteRekeyRequest(
     Guid ConnectionId,

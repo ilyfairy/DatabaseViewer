@@ -8,7 +8,7 @@ import ContextDropdown from './ContextDropdown.vue';
 import StoredMaskedPasswordInput from './StoredMaskedPasswordInput.vue';
 import { buildSqliteDatabaseToolSql, findSqliteDatabaseTool, getSqliteDatabaseTools } from '../lib/sqliteDatabaseTools';
 import { useExplorerStore } from '../stores/explorer';
-import type { AuthenticationMode, CatalogObjectType, ProviderType, RoutineInfo, SqliteOpenMode, SynonymInfo, TableColumn, TableDesignSection, TableSummary } from '../types/explorer';
+import type { CatalogObjectType, DatabaseProviderType, RoutineInfo, SqliteOpenMode, SqlServerAuthenticationMode, SynonymInfo, TableColumn, TableDesignSection, TableSummary } from '../types/explorer';
 
 const store = useExplorerStore();
 const expandedConnections = ref<string[]>([]);
@@ -23,21 +23,21 @@ const connectionContextMenu = ref<{
   y: number;
   connectionId: string;
   connectionName: string;
-  provider: ProviderType;
+  provider: DatabaseProviderType;
   sqliteEncrypted: boolean | null;
 } | null>(null);
 const databaseContextMenu = ref<{ x: number; y: number; connectionId: string; database: string } | null>(null);
 const tableContextMenu = ref<{ x: number; y: number; connectionId: string; database: string; table: TableSummary } | null>(null);
-const routineContextMenu = ref<{ x: number; y: number; connectionId: string; database: string; provider: ProviderType; routine: RoutineInfo } | null>(null);
+const routineContextMenu = ref<{ x: number; y: number; connectionId: string; database: string; provider: DatabaseProviderType; routine: RoutineInfo } | null>(null);
 const designEntryContextMenu = ref<{ x: number; y: number; tableKey: string; kind: 'column' | 'index'; name: string } | null>(null);
 const deleteConnectionConfirm = ref<{ connectionId: string; connectionName: string } | null>(null);
-const deleteRoutineConfirm = ref<{ connectionId: string; database: string; provider: ProviderType; routine: RoutineInfo } | null>(null);
+const deleteRoutineConfirm = ref<{ connectionId: string; database: string; provider: DatabaseProviderType; routine: RoutineInfo } | null>(null);
 const renameTableTarget = ref<{ connectionId: string; database: string; table: TableSummary } | null>(null);
 const renameTableVisible = ref(false);
 const renameTableLoading = ref(false);
 const renameTableError = ref<string | null>(null);
 const renameTableName = ref('');
-const renameRoutineTarget = ref<{ connectionId: string; database: string; provider: ProviderType; routine: RoutineInfo } | null>(null);
+const renameRoutineTarget = ref<{ connectionId: string; database: string; provider: DatabaseProviderType; routine: RoutineInfo } | null>(null);
 const renameRoutineVisible = ref(false);
 const renameRoutineLoading = ref(false);
 const renameRoutineError = ref<string | null>(null);
@@ -54,34 +54,40 @@ const sqliteRekeyTarget = ref<{ connectionId: string; connectionName: string; cu
 const activeConnectionSettingsTab = ref<'general' | 'ssh' | 'cipher'>('general');
 const createConnectionForm = reactive({
   name: '',
-  provider: 'sqlserver' as ProviderType,
-  authentication: 'password' as AuthenticationMode,
+  provider: 'sqlserver' as DatabaseProviderType,
   host: '',
   port: '1433',
   username: '',
   password: '',
+});
+const sqlServerConnectionForm = reactive({
+  authenticationMode: 'password' as SqlServerAuthenticationMode,
   trustServerCertificate: true,
-  sshEnabled: false,
-  sshAuthentication: 'password' as 'password' | 'publicKey',
-  sshHost: '',
-  sshPort: '22',
-  sshUsername: '',
-  sshPassword: '',
-  sshPrivateKeyPath: '',
-  sshPassphrase: '',
-  sqliteOpenMode: 'readwrite' as SqliteOpenMode,
-  sqliteCipherEnabled: false,
-  sqliteCipherHasStoredPassword: false,
-  sqliteCipherPassword: '',
-  sqliteCipherKeyFormat: 'passphrase' as 'passphrase' | 'hex',
-  sqliteCipherPageSize: '',
-  sqliteCipherKdfIter: '',
-  sqliteCipherCompatibility: '',
-  sqliteCipherPlaintextHeaderSize: '',
-  sqliteCipherSkipBytes: '',
-  sqliteCipherUseHmac: 'default' as 'default' | 'enabled' | 'disabled',
-  sqliteCipherKdfAlgorithm: '' as '' | 'PBKDF2_HMAC_SHA1' | 'PBKDF2_HMAC_SHA256' | 'PBKDF2_HMAC_SHA512',
-  sqliteCipherHmacAlgorithm: '' as '' | 'HMAC_SHA1' | 'HMAC_SHA256' | 'HMAC_SHA512',
+});
+const sqliteConnectionForm = reactive({
+  openMode: 'readwrite' as SqliteOpenMode,
+  cipherEnabled: false,
+  cipherHasStoredPassword: false,
+  cipherPassword: '',
+  cipherKeyFormat: 'passphrase' as 'passphrase' | 'hex',
+  cipherPageSize: '',
+  cipherKdfIter: '',
+  cipherCompatibility: '',
+  cipherPlaintextHeaderSize: '',
+  cipherSkipBytes: '',
+  cipherUseHmac: 'default' as 'default' | 'enabled' | 'disabled',
+  cipherKdfAlgorithm: '' as '' | 'PBKDF2_HMAC_SHA1' | 'PBKDF2_HMAC_SHA256' | 'PBKDF2_HMAC_SHA512',
+  cipherHmacAlgorithm: '' as '' | 'HMAC_SHA1' | 'HMAC_SHA256' | 'HMAC_SHA512',
+});
+const sshTunnelForm = reactive({
+  enabled: false,
+  authentication: 'password' as 'password' | 'publicKey',
+  host: '',
+  port: '22',
+  username: '',
+  password: '',
+  privateKeyPath: '',
+  passphrase: '',
 });
 const sqliteRekeyForm = reactive({
   currentPassword: '',
@@ -106,9 +112,9 @@ const closeAllContextMenus = () => {
 
 const visibleConnections = computed(() => store.visibleConnections);
 const showStoredSqliteCipherPasswordMask = computed(() => !!editingConnectionId.value
-  && createConnectionForm.sqliteCipherHasStoredPassword
+  && sqliteConnectionForm.cipherHasStoredPassword
   && !sqliteCipherPasswordEdited.value
-  && !createConnectionForm.sqliteCipherPassword);
+  && !sqliteConnectionForm.cipherPassword);
 const showStoredPasswordMask = computed(() => !!editingConnectionId.value
   && hasStoredPassword.value
   && !passwordEdited.value
@@ -116,14 +122,14 @@ const showStoredPasswordMask = computed(() => !!editingConnectionId.value
 const showStoredSshPasswordMask = computed(() => !!editingConnectionId.value
   && hasStoredSshPassword.value
   && !sshPasswordEdited.value
-  && !createConnectionForm.sshPassword);
+  && !sshTunnelForm.password);
 const showStoredSshPassphraseMask = computed(() => !!editingConnectionId.value
   && hasStoredSshPassphrase.value
   && !sshPassphraseEdited.value
-  && !createConnectionForm.sshPassphrase);
+  && !sshTunnelForm.passphrase);
 const lockExistingUnencryptedSqliteCipherSettings = computed(() => !!editingConnectionId.value
   && createConnectionForm.provider === 'sqlite'
-  && !createConnectionForm.sqliteCipherEnabled);
+  && !sqliteConnectionForm.cipherEnabled);
 const connectionContextMenuOptions = computed<DropdownOption[]>(() => {
   if (!connectionContextMenu.value) {
     return [];
@@ -250,7 +256,7 @@ function beginSqliteCipherPasswordEdit() {
   }
 
   sqliteCipherPasswordEdited.value = true;
-  createConnectionForm.sqliteCipherPassword = '';
+  sqliteConnectionForm.cipherPassword = '';
 }
 
 function beginPasswordEdit() {
@@ -268,7 +274,7 @@ function beginSshPasswordEdit() {
   }
 
   sshPasswordEdited.value = true;
-  createConnectionForm.sshPassword = '';
+  sshTunnelForm.password = '';
 }
 
 function beginSshPassphraseEdit() {
@@ -277,7 +283,7 @@ function beginSshPassphraseEdit() {
   }
 
   sshPassphraseEdited.value = true;
-  createConnectionForm.sshPassphrase = '';
+  sshTunnelForm.passphrase = '';
 }
 
 const providerOptions = [
@@ -316,7 +322,7 @@ const sqliteCipherHmacAlgorithmOptions = [
   { label: 'HMAC_SHA256', value: 'HMAC_SHA256' },
   { label: 'HMAC_SHA512', value: 'HMAC_SHA512' },
 ];
-const authenticationOptions = computed(() => createConnectionForm.provider === 'sqlserver'
+const sqlServerAuthenticationModeOptions = computed(() => createConnectionForm.provider === 'sqlserver'
   ? [
       { label: '账号密码', value: 'password' },
       { label: 'Windows 身份验证', value: 'windows' },
@@ -496,7 +502,7 @@ function treeFunctions(connectionId: string, database: string): RoutineInfo[] {
 }
 
 /** 格式化例程显示名（含 schema） */
-function formatRoutineName(provider: ProviderType, routine: RoutineInfo) {
+function formatRoutineName(provider: DatabaseProviderType, routine: RoutineInfo) {
   if (routine.schema && provider !== 'mysql') {
     return `${routine.schema}.${routine.name}`;
   }
@@ -567,12 +573,12 @@ function formatTreeColumnType(column: TableColumn) {
   return column.type;
 }
 
-function providerTreeIcon(provider: ProviderType): Component {
+function providerTreeIcon(provider: DatabaseProviderType): Component {
   void provider;
   return IconServer;
 }
 
-function providerTreeClass(provider: ProviderType) {
+function providerTreeClass(provider: DatabaseProviderType) {
   return `tree-icon-provider-${provider}`;
 }
 
@@ -720,7 +726,7 @@ async function confirmDeleteConnection(connectionId: string) {
 }
 
 /** 打开连接右键菜单，并在渲染后按真实菜单尺寸回夹到视口内。 */
-async function openConnectionContextMenu(event: MouseEvent, connectionId: string, connectionName: string, provider: ProviderType) {
+async function openConnectionContextMenu(event: MouseEvent, connectionId: string, connectionName: string, provider: DatabaseProviderType) {
   closeDatabaseContextMenu();
   closeTableContextMenu();
   const clickX = event.clientX;
@@ -730,7 +736,7 @@ async function openConnectionContextMenu(event: MouseEvent, connectionId: string
   if (provider === 'sqlite') {
     try {
       const config = await store.getConnectionConfig(connectionId);
-      sqliteEncrypted = config.sqliteCipher.enabled;
+      sqliteEncrypted = config.sqlite.cipher.enabled;
     }
     catch {
       sqliteEncrypted = null;
@@ -784,48 +790,48 @@ async function openEditConnectionDialog() {
     editingConnectionId.value = config.id;
     createConnectionForm.name = config.name;
     createConnectionForm.provider = config.provider;
-    createConnectionForm.authentication = config.authentication;
+    sqlServerConnectionForm.authenticationMode = config.sqlServer.authenticationMode;
     createConnectionForm.host = config.host;
     createConnectionForm.port = config.port ? String(config.port) : '';
     createConnectionForm.username = config.username ?? '';
     createConnectionForm.password = '';
     hasStoredPassword.value = config.hasPassword;
     passwordEdited.value = false;
-    createConnectionForm.trustServerCertificate = config.trustServerCertificate;
-    createConnectionForm.sshEnabled = config.sshTunnel.enabled;
-    createConnectionForm.sshAuthentication = config.sshTunnel.authentication;
-    createConnectionForm.sshHost = config.sshTunnel.host ?? '';
-    createConnectionForm.sshPort = config.sshTunnel.port ? String(config.sshTunnel.port) : '22';
-    createConnectionForm.sshUsername = config.sshTunnel.username ?? '';
-    createConnectionForm.sshPassword = '';
+    sqlServerConnectionForm.trustServerCertificate = config.sqlServer.trustServerCertificate;
+    sshTunnelForm.enabled = config.sshTunnel.enabled;
+    sshTunnelForm.authentication = config.sshTunnel.authentication;
+    sshTunnelForm.host = config.sshTunnel.host ?? '';
+    sshTunnelForm.port = config.sshTunnel.port ? String(config.sshTunnel.port) : '22';
+    sshTunnelForm.username = config.sshTunnel.username ?? '';
+    sshTunnelForm.password = '';
     hasStoredSshPassword.value = config.sshTunnel.hasPassword;
     sshPasswordEdited.value = false;
-    createConnectionForm.sshPrivateKeyPath = config.sshTunnel.privateKeyPath ?? '';
-    createConnectionForm.sshPassphrase = '';
+    sshTunnelForm.privateKeyPath = config.sshTunnel.privateKeyPath ?? '';
+    sshTunnelForm.passphrase = '';
     hasStoredSshPassphrase.value = config.sshTunnel.hasPassphrase;
     sshPassphraseEdited.value = false;
-    createConnectionForm.sqliteOpenMode = config.sqliteOpenMode ?? 'readwrite';
-    createConnectionForm.sqliteCipherEnabled = config.sqliteCipher.enabled;
-    createConnectionForm.sqliteCipherHasStoredPassword = config.sqliteCipher.hasPassword;
+    sqliteConnectionForm.openMode = config.sqlite.openMode ?? 'readwrite';
+    sqliteConnectionForm.cipherEnabled = config.sqlite.cipher.enabled;
+    sqliteConnectionForm.cipherHasStoredPassword = config.sqlite.cipher.hasPassword;
     sqliteCipherPasswordEdited.value = false;
-    createConnectionForm.sqliteCipherPassword = '';
-    createConnectionForm.sqliteCipherKeyFormat = config.sqliteCipher.keyFormat;
-    createConnectionForm.sqliteCipherPageSize = config.sqliteCipher.pageSize ? String(config.sqliteCipher.pageSize) : '';
-    createConnectionForm.sqliteCipherKdfIter = config.sqliteCipher.kdfIter ? String(config.sqliteCipher.kdfIter) : '';
-    createConnectionForm.sqliteCipherCompatibility = config.sqliteCipher.cipherCompatibility ? String(config.sqliteCipher.cipherCompatibility) : '';
-    createConnectionForm.sqliteCipherPlaintextHeaderSize = config.sqliteCipher.plaintextHeaderSize !== null && config.sqliteCipher.plaintextHeaderSize !== undefined
-      ? String(config.sqliteCipher.plaintextHeaderSize)
+    sqliteConnectionForm.cipherPassword = '';
+    sqliteConnectionForm.cipherKeyFormat = config.sqlite.cipher.keyFormat;
+    sqliteConnectionForm.cipherPageSize = config.sqlite.cipher.pageSize ? String(config.sqlite.cipher.pageSize) : '';
+    sqliteConnectionForm.cipherKdfIter = config.sqlite.cipher.kdfIter ? String(config.sqlite.cipher.kdfIter) : '';
+    sqliteConnectionForm.cipherCompatibility = config.sqlite.cipher.cipherCompatibility ? String(config.sqlite.cipher.cipherCompatibility) : '';
+    sqliteConnectionForm.cipherPlaintextHeaderSize = config.sqlite.cipher.plaintextHeaderSize !== null && config.sqlite.cipher.plaintextHeaderSize !== undefined
+      ? String(config.sqlite.cipher.plaintextHeaderSize)
       : '';
-    createConnectionForm.sqliteCipherSkipBytes = config.sqliteCipher.skipBytes !== null && config.sqliteCipher.skipBytes !== undefined
-      ? String(config.sqliteCipher.skipBytes)
+    sqliteConnectionForm.cipherSkipBytes = config.sqlite.cipher.skipBytes !== null && config.sqlite.cipher.skipBytes !== undefined
+      ? String(config.sqlite.cipher.skipBytes)
       : '';
-    createConnectionForm.sqliteCipherUseHmac = config.sqliteCipher.useHmac === true
+    sqliteConnectionForm.cipherUseHmac = config.sqlite.cipher.useHmac === true
       ? 'enabled'
-      : config.sqliteCipher.useHmac === false
+      : config.sqlite.cipher.useHmac === false
         ? 'disabled'
         : 'default';
-    createConnectionForm.sqliteCipherKdfAlgorithm = config.sqliteCipher.kdfAlgorithm ?? '';
-    createConnectionForm.sqliteCipherHmacAlgorithm = config.sqliteCipher.hmacAlgorithm ?? '';
+    sqliteConnectionForm.cipherKdfAlgorithm = config.sqlite.cipher.kdfAlgorithm ?? '';
+    sqliteConnectionForm.cipherHmacAlgorithm = config.sqlite.cipher.hmacAlgorithm ?? '';
     activeConnectionSettingsTab.value = 'general';
     createConnectionVisible.value = true;
   }
@@ -848,7 +854,7 @@ async function openSqliteRekeyDialog() {
 
   try {
     const config = await store.getConnectionConfig(connectionContextMenu.value.connectionId);
-    if (!config.sqliteCipher.enabled) {
+    if (!config.sqlite.cipher.enabled) {
       store.showNotice('warning', '当前实现仅支持修改已加密 SQLite 数据库的密码。明文库加密/解密需要导出重写，暂未实现。');
       return;
     }
@@ -856,12 +862,12 @@ async function openSqliteRekeyDialog() {
     sqliteRekeyTarget.value = {
       connectionId: config.id,
       connectionName: config.name,
-      currentEncrypted: config.sqliteCipher.enabled,
+      currentEncrypted: config.sqlite.cipher.enabled,
     };
     sqliteRekeyForm.currentPassword = '';
-    sqliteRekeyForm.currentKeyFormat = config.sqliteCipher.keyFormat;
+    sqliteRekeyForm.currentKeyFormat = config.sqlite.cipher.keyFormat;
     sqliteRekeyForm.newPassword = '';
-    sqliteRekeyForm.newKeyFormat = config.sqliteCipher.keyFormat;
+    sqliteRekeyForm.newKeyFormat = config.sqlite.cipher.keyFormat;
     sqliteRekeyVisible.value = true;
   }
   catch (error) {
@@ -954,7 +960,7 @@ function closeTableContextMenu() {
 }
 
 /** 打开例程右键菜单，并在渲染后按真实菜单尺寸修正位置。 */
-function openRoutineContextMenu(event: MouseEvent, connectionId: string, database: string, provider: ProviderType, routine: RoutineInfo) {
+function openRoutineContextMenu(event: MouseEvent, connectionId: string, database: string, provider: DatabaseProviderType, routine: RoutineInfo) {
   closeAllContextMenus();
   routineContextMenu.value = {
     x: event.clientX,
@@ -1019,7 +1025,7 @@ function closeRenameRoutineDialog() {
 }
 
 /** 生成重命名例程 SQL */
-function buildRenameRoutineScript(provider: ProviderType, routine: RoutineInfo, newName: string): string {
+function buildRenameRoutineScript(provider: DatabaseProviderType, routine: RoutineInfo, newName: string): string {
   const isProcedure = routine.routineType === 'Procedure';
   const objectType = isProcedure ? 'PROCEDURE' : 'FUNCTION';
 
@@ -1100,7 +1106,7 @@ async function submitRenameRoutine() {
   }
 }
 
-function providerForConnection(connectionId: string): ProviderType {
+function providerForConnection(connectionId: string): DatabaseProviderType {
   return store.getConnectionInfo(connectionId)?.provider ?? 'sqlserver';
 }
 
@@ -1165,7 +1171,7 @@ function openExecuteRoutineDialog() {
   };
 }
 
-function buildRoutineQualifiedName(provider: ProviderType, routine: RoutineInfo): string {
+function buildRoutineQualifiedName(provider: DatabaseProviderType, routine: RoutineInfo): string {
   if (!routine.schema || provider === 'mysql') {
     return quoteIdentifier(provider, routine.name);
   }
@@ -1173,7 +1179,7 @@ function buildRoutineQualifiedName(provider: ProviderType, routine: RoutineInfo)
   return `${quoteIdentifier(provider, routine.schema)}.${quoteIdentifier(provider, routine.name)}`;
 }
 
-function buildNoParamExecuteSql(provider: ProviderType, routine: RoutineInfo, qualifiedName: string): string {
+function buildNoParamExecuteSql(provider: DatabaseProviderType, routine: RoutineInfo, qualifiedName: string): string {
   if (routine.routineType === 'Procedure') {
     if (provider === 'sqlserver') {
       return `EXEC ${qualifiedName};`;
@@ -1353,7 +1359,7 @@ function handleDesignEntryContextMenuSelect(key: string | number) {
   }
 }
 
-function quoteIdentifier(provider: ProviderType, value: string) {
+function quoteIdentifier(provider: DatabaseProviderType, value: string) {
   if (provider === 'mysql') {
     return `\`${value.replace(/`/g, '``')}\``;
   }
@@ -1365,7 +1371,7 @@ function quoteIdentifier(provider: ProviderType, value: string) {
   return `[${value.replace(/\]/g, ']]')}]`;
 }
 
-function formatSchemaTable(provider: ProviderType, table: TableSummary) {
+function formatSchemaTable(provider: DatabaseProviderType, table: TableSummary) {
   const parts = [];
   if (table.schema) {
     parts.push(quoteIdentifier(provider, table.schema));
@@ -1374,7 +1380,7 @@ function formatSchemaTable(provider: ProviderType, table: TableSummary) {
   return parts.join('.');
 }
 
-function buildBatchPrefix(provider: ProviderType, database: string) {
+function buildBatchPrefix(provider: DatabaseProviderType, database: string) {
   if (provider === 'sqlserver') {
     return `USE ${quoteIdentifier(provider, database)}\nGO\n\n`;
   }
@@ -1390,7 +1396,7 @@ function buildBatchPrefix(provider: ProviderType, database: string) {
   return `-- database: ${database}\n\n`;
 }
 
-function buildBatchSuffix(provider: ProviderType) {
+function buildBatchSuffix(provider: DatabaseProviderType) {
   return provider === 'sqlserver' ? '\nGO' : ';';
 }
 
@@ -1422,41 +1428,41 @@ async function getTableColumns(connectionId: string, database: string, table: Ta
   }));
 }
 
-function buildSelectScript(provider: ProviderType, database: string, table: TableSummary, columns: Array<{ name: string }>) {
+function buildSelectScript(provider: DatabaseProviderType, database: string, table: TableSummary, columns: Array<{ name: string }>) {
   const selectLines = columns.length
     ? columns.map((column, index) => `${index === 0 ? 'SELECT' : '      ,'} ${quoteIdentifier(provider, column.name)}`)
     : ['SELECT *'];
   return `${buildBatchPrefix(provider, database)}${selectLines.join('\n')}\n  FROM ${formatSchemaTable(provider, table)}${buildBatchSuffix(provider)}`;
 }
 
-function buildDeleteScript(provider: ProviderType, database: string, table: TableSummary) {
+function buildDeleteScript(provider: DatabaseProviderType, database: string, table: TableSummary) {
   return `${buildBatchPrefix(provider, database)}DELETE FROM ${formatSchemaTable(provider, table)}\n      WHERE <搜索条件,,>${buildBatchSuffix(provider)}`;
 }
 
-function buildDropScript(provider: ProviderType, database: string, table: TableSummary) {
+function buildDropScript(provider: DatabaseProviderType, database: string, table: TableSummary) {
   return `${buildBatchPrefix(provider, database)}DROP TABLE ${formatSchemaTable(provider, table)}${buildBatchSuffix(provider)}`;
 }
 
-function buildInsertScript(provider: ProviderType, database: string, table: TableSummary, columns: Array<{ name: string; type?: string }>) {
+function buildInsertScript(provider: DatabaseProviderType, database: string, table: TableSummary, columns: Array<{ name: string; type?: string }>) {
   const names = columns.length ? columns : [{ name: 'Column1', type: 'type' }];
   const columnLines = names.map((column, index) => `${index === 0 ? '           (' : '           ,'}${quoteIdentifier(provider, column.name)}`).join('\n');
   const valueLines = names.map((column, index) => `${index === 0 ? '           (' : '           ,'}<${column.name}, ${column.type ?? 'type'},>`).join('\n');
   return `${buildBatchPrefix(provider, database)}INSERT INTO ${formatSchemaTable(provider, table)}\n${columnLines})\n     VALUES\n${valueLines})${buildBatchSuffix(provider)}`;
 }
 
-function buildUpdateScript(provider: ProviderType, database: string, table: TableSummary, columns: Array<{ name: string; type?: string }>) {
+function buildUpdateScript(provider: DatabaseProviderType, database: string, table: TableSummary, columns: Array<{ name: string; type?: string }>) {
   const names = columns.length ? columns : [{ name: 'Column1', type: 'type' }];
   const setLines = names.map((column, index) => `${index === 0 ? '   SET' : '      ,'} ${quoteIdentifier(provider, column.name)} = <${column.name}, ${column.type ?? 'type'},>`).join('\n');
   return `${buildBatchPrefix(provider, database)}UPDATE ${formatSchemaTable(provider, table)}\n${setLines}\n WHERE <搜索条件,,>${buildBatchSuffix(provider)}`;
 }
 
-function buildCreateScript(provider: ProviderType, database: string, table: TableSummary, columns: Array<{ name: string; type?: string; isNullable?: boolean }>) {
+function buildCreateScript(provider: DatabaseProviderType, database: string, table: TableSummary, columns: Array<{ name: string; type?: string; isNullable?: boolean }>) {
   const names = columns.length ? columns : [{ name: 'Column1', type: 'int', isNullable: false }];
   const body = names.map((column, index) => `    ${index === 0 ? '' : ','}${quoteIdentifier(provider, column.name)} ${column.type ?? 'nvarchar(255)'} ${column.isNullable === false ? 'NOT NULL' : 'NULL'}`).join('\n');
   return `${buildBatchPrefix(provider, database)}CREATE TABLE ${formatSchemaTable(provider, table)}\n(\n${body}\n)${buildBatchSuffix(provider)}`;
 }
 
-function buildRenameTableScript(provider: ProviderType, database: string, table: TableSummary, targetName: string) {
+function buildRenameTableScript(provider: DatabaseProviderType, database: string, table: TableSummary, targetName: string) {
   const currentName = formatSchemaTable(provider, table);
 
   if (provider === 'sqlserver') {
@@ -1661,40 +1667,40 @@ function resetCreateConnectionForm() {
   editingConnectionId.value = null;
   createConnectionForm.name = '';
   createConnectionForm.provider = 'sqlserver';
-  createConnectionForm.authentication = 'password';
+  sqlServerConnectionForm.authenticationMode = 'password';
   createConnectionForm.host = '';
   createConnectionForm.port = '1433';
   createConnectionForm.username = '';
   createConnectionForm.password = '';
-  createConnectionForm.trustServerCertificate = true;
+  sqlServerConnectionForm.trustServerCertificate = true;
   hasStoredPassword.value = false;
   passwordEdited.value = false;
-  createConnectionForm.sshEnabled = false;
-  createConnectionForm.sshAuthentication = 'password';
-  createConnectionForm.sshHost = '';
-  createConnectionForm.sshPort = '22';
-  createConnectionForm.sshUsername = '';
-  createConnectionForm.sshPassword = '';
-  createConnectionForm.sshPrivateKeyPath = '';
-  createConnectionForm.sshPassphrase = '';
-  createConnectionForm.sqliteOpenMode = 'readwrite';
+  sshTunnelForm.enabled = false;
+  sshTunnelForm.authentication = 'password';
+  sshTunnelForm.host = '';
+  sshTunnelForm.port = '22';
+  sshTunnelForm.username = '';
+  sshTunnelForm.password = '';
+  sshTunnelForm.privateKeyPath = '';
+  sshTunnelForm.passphrase = '';
+  sqliteConnectionForm.openMode = 'readwrite';
   hasStoredSshPassword.value = false;
   sshPasswordEdited.value = false;
   hasStoredSshPassphrase.value = false;
   sshPassphraseEdited.value = false;
-  createConnectionForm.sqliteCipherEnabled = false;
-  createConnectionForm.sqliteCipherHasStoredPassword = false;
+  sqliteConnectionForm.cipherEnabled = false;
+  sqliteConnectionForm.cipherHasStoredPassword = false;
   sqliteCipherPasswordEdited.value = false;
-  createConnectionForm.sqliteCipherPassword = '';
-  createConnectionForm.sqliteCipherKeyFormat = 'passphrase';
-  createConnectionForm.sqliteCipherPageSize = '';
-  createConnectionForm.sqliteCipherKdfIter = '';
-  createConnectionForm.sqliteCipherCompatibility = '';
-  createConnectionForm.sqliteCipherPlaintextHeaderSize = '';
-  createConnectionForm.sqliteCipherSkipBytes = '';
-  createConnectionForm.sqliteCipherUseHmac = 'default';
-  createConnectionForm.sqliteCipherKdfAlgorithm = '';
-  createConnectionForm.sqliteCipherHmacAlgorithm = '';
+  sqliteConnectionForm.cipherPassword = '';
+  sqliteConnectionForm.cipherKeyFormat = 'passphrase';
+  sqliteConnectionForm.cipherPageSize = '';
+  sqliteConnectionForm.cipherKdfIter = '';
+  sqliteConnectionForm.cipherCompatibility = '';
+  sqliteConnectionForm.cipherPlaintextHeaderSize = '';
+  sqliteConnectionForm.cipherSkipBytes = '';
+  sqliteConnectionForm.cipherUseHmac = 'default';
+  sqliteConnectionForm.cipherKdfAlgorithm = '';
+  sqliteConnectionForm.cipherHmacAlgorithm = '';
   activeConnectionSettingsTab.value = 'general';
   createConnectionError.value = null;
 }
@@ -1705,22 +1711,22 @@ function openCreateConnectionDialog() {
   createConnectionVisible.value = true;
 }
 
-function handleProviderChange(provider: ProviderType) {
+function handleProviderChange(provider: DatabaseProviderType) {
   createConnectionForm.provider = provider;
   createConnectionForm.port = provider === 'sqlserver' ? '1433' : provider === 'postgresql' ? '5432' : provider === 'mysql' ? '3306' : '';
-  if (provider === 'mysql' && createConnectionForm.authentication === 'windows') {
-    createConnectionForm.authentication = 'password';
+  if (provider === 'mysql' && sqlServerConnectionForm.authenticationMode === 'windows') {
+    sqlServerConnectionForm.authenticationMode = 'password';
   }
 
-  if (provider === 'postgresql' && createConnectionForm.authentication === 'windows') {
-    createConnectionForm.authentication = 'password';
+  if (provider === 'postgresql' && sqlServerConnectionForm.authenticationMode === 'windows') {
+    sqlServerConnectionForm.authenticationMode = 'password';
   }
 
   if (provider === 'sqlite') {
-    createConnectionForm.authentication = 'password';
+    sqlServerConnectionForm.authenticationMode = 'password';
     createConnectionForm.username = '';
     createConnectionForm.password = '';
-    createConnectionForm.sshEnabled = false;
+    sshTunnelForm.enabled = false;
     activeConnectionSettingsTab.value = 'general';
   }
 
@@ -1769,22 +1775,22 @@ function buildSqliteCipherPayload() {
   }
 
   return {
-    enabled: createConnectionForm.sqliteCipherEnabled,
-    password: createConnectionForm.sqliteCipherEnabled && createConnectionForm.sqliteCipherPassword.trim()
-      ? createConnectionForm.sqliteCipherPassword
+    enabled: sqliteConnectionForm.cipherEnabled,
+    password: sqliteConnectionForm.cipherEnabled && sqliteConnectionForm.cipherPassword.trim()
+      ? sqliteConnectionForm.cipherPassword
       : null,
-    keyFormat: createConnectionForm.sqliteCipherKeyFormat,
-    pageSize: createConnectionForm.sqliteCipherEnabled ? toNullableNumber(createConnectionForm.sqliteCipherPageSize) : null,
-    kdfIter: createConnectionForm.sqliteCipherEnabled ? toNullableNumber(createConnectionForm.sqliteCipherKdfIter) : null,
-    cipherCompatibility: createConnectionForm.sqliteCipherEnabled ? toNullableNumber(createConnectionForm.sqliteCipherCompatibility) : null,
-    plaintextHeaderSize: createConnectionForm.sqliteCipherEnabled ? toNullableNumber(createConnectionForm.sqliteCipherPlaintextHeaderSize) : null,
-    skipBytes: createConnectionForm.sqliteCipherEnabled ? toNullableNumber(createConnectionForm.sqliteCipherSkipBytes) : null,
-    useHmac: createConnectionForm.sqliteCipherEnabled ? toNullableSqliteCipherUseHmac(createConnectionForm.sqliteCipherUseHmac) : null,
-    kdfAlgorithm: createConnectionForm.sqliteCipherEnabled && createConnectionForm.sqliteCipherKdfAlgorithm
-      ? createConnectionForm.sqliteCipherKdfAlgorithm
+    keyFormat: sqliteConnectionForm.cipherKeyFormat,
+    pageSize: sqliteConnectionForm.cipherEnabled ? toNullableNumber(sqliteConnectionForm.cipherPageSize) : null,
+    kdfIter: sqliteConnectionForm.cipherEnabled ? toNullableNumber(sqliteConnectionForm.cipherKdfIter) : null,
+    cipherCompatibility: sqliteConnectionForm.cipherEnabled ? toNullableNumber(sqliteConnectionForm.cipherCompatibility) : null,
+    plaintextHeaderSize: sqliteConnectionForm.cipherEnabled ? toNullableNumber(sqliteConnectionForm.cipherPlaintextHeaderSize) : null,
+    skipBytes: sqliteConnectionForm.cipherEnabled ? toNullableNumber(sqliteConnectionForm.cipherSkipBytes) : null,
+    useHmac: sqliteConnectionForm.cipherEnabled ? toNullableSqliteCipherUseHmac(sqliteConnectionForm.cipherUseHmac) : null,
+    kdfAlgorithm: sqliteConnectionForm.cipherEnabled && sqliteConnectionForm.cipherKdfAlgorithm
+      ? sqliteConnectionForm.cipherKdfAlgorithm
       : null,
-    hmacAlgorithm: createConnectionForm.sqliteCipherEnabled && createConnectionForm.sqliteCipherHmacAlgorithm
-      ? createConnectionForm.sqliteCipherHmacAlgorithm
+    hmacAlgorithm: sqliteConnectionForm.cipherEnabled && sqliteConnectionForm.cipherHmacAlgorithm
+      ? sqliteConnectionForm.cipherHmacAlgorithm
       : null,
   };
 }
@@ -1793,9 +1799,9 @@ async function browseSshPrivateKeyFile() {
   createConnectionError.value = null;
 
   try {
-    const filePath = await store.pickSshPrivateKeyFile(createConnectionForm.sshPrivateKeyPath || null);
+    const filePath = await store.pickSshPrivateKeyFile(sshTunnelForm.privateKeyPath || null);
     if (filePath) {
-      createConnectionForm.sshPrivateKeyPath = filePath;
+      sshTunnelForm.privateKeyPath = filePath;
     }
   }
   catch (error) {
@@ -1827,24 +1833,30 @@ async function submitCreateConnection() {
     const payload = {
       name: createConnectionForm.name,
       provider: createConnectionForm.provider,
-      authentication: createConnectionForm.authentication,
       host: createConnectionForm.host,
       port: createConnectionForm.provider === 'sqlite' || !Number.isFinite(Number(createConnectionForm.port)) ? null : Number(createConnectionForm.port),
-      username: createConnectionForm.provider === 'sqlite' || createConnectionForm.authentication === 'windows' ? null : createConnectionForm.username,
-      password: createConnectionForm.provider === 'sqlite' || createConnectionForm.authentication === 'windows' ? null : createConnectionForm.password,
-      trustServerCertificate: createConnectionForm.trustServerCertificate,
-      sqliteOpenMode: createConnectionForm.provider === 'sqlite' ? createConnectionForm.sqliteOpenMode : null,
-      sshTunnel: {
-        enabled: createConnectionForm.provider !== 'sqlite' && createConnectionForm.sshEnabled,
-        authentication: createConnectionForm.sshAuthentication,
-        host: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled ? null : createConnectionForm.sshHost,
-        port: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled || !Number.isFinite(Number(createConnectionForm.sshPort)) ? null : Number(createConnectionForm.sshPort),
-        username: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled ? null : createConnectionForm.sshUsername,
-        password: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled || createConnectionForm.sshAuthentication === 'publicKey' ? null : createConnectionForm.sshPassword,
-        privateKeyPath: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled || createConnectionForm.sshAuthentication !== 'publicKey' ? null : (createConnectionForm.sshPrivateKeyPath || null),
-        passphrase: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled || createConnectionForm.sshAuthentication !== 'publicKey' ? null : (createConnectionForm.sshPassphrase || null),
+      username: createConnectionForm.provider === 'sqlite' || sqlServerConnectionForm.authenticationMode === 'windows' ? null : createConnectionForm.username,
+      password: createConnectionForm.provider === 'sqlite' || sqlServerConnectionForm.authenticationMode === 'windows' ? null : createConnectionForm.password,
+      sqlServer: {
+        authenticationMode: sqlServerConnectionForm.authenticationMode,
+        trustServerCertificate: sqlServerConnectionForm.trustServerCertificate,
       },
-      sqliteCipher: buildSqliteCipherPayload(),
+      mySql: {},
+      postgreSql: {},
+      sqlite: {
+        openMode: createConnectionForm.provider === 'sqlite' ? sqliteConnectionForm.openMode : null,
+        cipher: buildSqliteCipherPayload(),
+      },
+      sshTunnel: {
+        enabled: createConnectionForm.provider !== 'sqlite' && sshTunnelForm.enabled,
+        authentication: sshTunnelForm.authentication,
+        host: createConnectionForm.provider === 'sqlite' || !sshTunnelForm.enabled ? null : sshTunnelForm.host,
+        port: createConnectionForm.provider === 'sqlite' || !sshTunnelForm.enabled || !Number.isFinite(Number(sshTunnelForm.port)) ? null : Number(sshTunnelForm.port),
+        username: createConnectionForm.provider === 'sqlite' || !sshTunnelForm.enabled ? null : sshTunnelForm.username,
+        password: createConnectionForm.provider === 'sqlite' || !sshTunnelForm.enabled || sshTunnelForm.authentication === 'publicKey' ? null : sshTunnelForm.password,
+        privateKeyPath: createConnectionForm.provider === 'sqlite' || !sshTunnelForm.enabled || sshTunnelForm.authentication !== 'publicKey' ? null : (sshTunnelForm.privateKeyPath || null),
+        passphrase: createConnectionForm.provider === 'sqlite' || !sshTunnelForm.enabled || sshTunnelForm.authentication !== 'publicKey' ? null : (sshTunnelForm.passphrase || null),
+      },
     };
 
     if (editingConnectionId.value) {
@@ -1871,24 +1883,30 @@ async function testCurrentConnection() {
       connectionId: editingConnectionId.value,
       name: createConnectionForm.name,
       provider: createConnectionForm.provider,
-      authentication: createConnectionForm.authentication,
       host: createConnectionForm.host,
       port: createConnectionForm.provider === 'sqlite' || !Number.isFinite(Number(createConnectionForm.port)) ? null : Number(createConnectionForm.port),
-      username: createConnectionForm.provider === 'sqlite' || createConnectionForm.authentication === 'windows' ? null : createConnectionForm.username,
-      password: createConnectionForm.provider === 'sqlite' || createConnectionForm.authentication === 'windows' ? null : (createConnectionForm.password || null),
-      trustServerCertificate: createConnectionForm.trustServerCertificate,
-      sqliteOpenMode: createConnectionForm.provider === 'sqlite' ? createConnectionForm.sqliteOpenMode : null,
-      sshTunnel: {
-        enabled: createConnectionForm.provider !== 'sqlite' && createConnectionForm.sshEnabled,
-        authentication: createConnectionForm.sshAuthentication,
-        host: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled ? null : createConnectionForm.sshHost,
-        port: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled || !Number.isFinite(Number(createConnectionForm.sshPort)) ? null : Number(createConnectionForm.sshPort),
-        username: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled ? null : createConnectionForm.sshUsername,
-        password: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled || createConnectionForm.sshAuthentication === 'publicKey' ? null : (createConnectionForm.sshPassword || null),
-        privateKeyPath: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled || createConnectionForm.sshAuthentication !== 'publicKey' ? null : (createConnectionForm.sshPrivateKeyPath || null),
-        passphrase: createConnectionForm.provider === 'sqlite' || !createConnectionForm.sshEnabled || createConnectionForm.sshAuthentication !== 'publicKey' ? null : (createConnectionForm.sshPassphrase || null),
+      username: createConnectionForm.provider === 'sqlite' || sqlServerConnectionForm.authenticationMode === 'windows' ? null : createConnectionForm.username,
+      password: createConnectionForm.provider === 'sqlite' || sqlServerConnectionForm.authenticationMode === 'windows' ? null : (createConnectionForm.password || null),
+      sqlServer: {
+        authenticationMode: sqlServerConnectionForm.authenticationMode,
+        trustServerCertificate: sqlServerConnectionForm.trustServerCertificate,
       },
-      sqliteCipher: buildSqliteCipherPayload(),
+      mySql: {},
+      postgreSql: {},
+      sqlite: {
+        openMode: createConnectionForm.provider === 'sqlite' ? sqliteConnectionForm.openMode : null,
+        cipher: buildSqliteCipherPayload(),
+      },
+      sshTunnel: {
+        enabled: createConnectionForm.provider !== 'sqlite' && sshTunnelForm.enabled,
+        authentication: sshTunnelForm.authentication,
+        host: createConnectionForm.provider === 'sqlite' || !sshTunnelForm.enabled ? null : sshTunnelForm.host,
+        port: createConnectionForm.provider === 'sqlite' || !sshTunnelForm.enabled || !Number.isFinite(Number(sshTunnelForm.port)) ? null : Number(sshTunnelForm.port),
+        username: createConnectionForm.provider === 'sqlite' || !sshTunnelForm.enabled ? null : sshTunnelForm.username,
+        password: createConnectionForm.provider === 'sqlite' || !sshTunnelForm.enabled || sshTunnelForm.authentication === 'publicKey' ? null : (sshTunnelForm.password || null),
+        privateKeyPath: createConnectionForm.provider === 'sqlite' || !sshTunnelForm.enabled || sshTunnelForm.authentication !== 'publicKey' ? null : (sshTunnelForm.privateKeyPath || null),
+        passphrase: createConnectionForm.provider === 'sqlite' || !sshTunnelForm.enabled || sshTunnelForm.authentication !== 'publicKey' ? null : (sshTunnelForm.passphrase || null),
+      },
     });
   }
   catch (error) {
@@ -2634,9 +2652,9 @@ watch(() => store.connectedConnectionIds, (newIds) => {
                 <div v-if="createConnectionForm.provider !== 'sqlite'" class="connection-parameter-row">
                   <div class="connection-parameter-meta" title="认证方式。SQL Server 支持 Windows 身份验证。">
                     <span class="connection-parameter-label">认证方式</span>
-                    <span class="connection-parameter-key">authentication</span>
+                    <span class="connection-parameter-key">sql_server_authentication_mode</span>
                   </div>
-                  <NSelect v-model:value="createConnectionForm.authentication" :options="authenticationOptions" class="connection-parameter-control" />
+                  <NSelect v-model:value="sqlServerConnectionForm.authenticationMode" :options="sqlServerAuthenticationModeOptions" class="connection-parameter-control" />
                 </div>
 
                 <div class="connection-parameter-row">
@@ -2656,7 +2674,7 @@ watch(() => store.connectedConnectionIds, (newIds) => {
                     <span class="connection-parameter-label">打开方式</span>
                     <span class="connection-parameter-key">open_mode</span>
                   </div>
-                  <NSelect v-model:value="createConnectionForm.sqliteOpenMode" :options="sqliteOpenModeOptions" class="connection-parameter-control" />
+                  <NSelect v-model:value="sqliteConnectionForm.openMode" :options="sqliteOpenModeOptions" class="connection-parameter-control" />
                 </div>
 
                 <div v-if="createConnectionForm.provider !== 'sqlite'" class="connection-parameter-row">
@@ -2667,7 +2685,7 @@ watch(() => store.connectedConnectionIds, (newIds) => {
                   <NInput v-model:value="createConnectionForm.port" class="connection-parameter-control" placeholder="输入端口" inputmode="numeric" />
                 </div>
 
-                <div v-if="createConnectionForm.provider !== 'sqlite' && createConnectionForm.authentication !== 'windows'" class="connection-parameter-row">
+                <div v-if="createConnectionForm.provider !== 'sqlite' && sqlServerConnectionForm.authenticationMode !== 'windows'" class="connection-parameter-row">
                   <div class="connection-parameter-meta" title="登录用户名。">
                     <span class="connection-parameter-label">用户名</span>
                     <span class="connection-parameter-key">username</span>
@@ -2675,7 +2693,7 @@ watch(() => store.connectedConnectionIds, (newIds) => {
                   <NInput v-model:value="createConnectionForm.username" class="connection-parameter-control" placeholder="输入用户名" />
                 </div>
 
-                <div v-if="createConnectionForm.provider !== 'sqlite' && createConnectionForm.authentication !== 'windows'" class="connection-parameter-row">
+                <div v-if="createConnectionForm.provider !== 'sqlite' && sqlServerConnectionForm.authenticationMode !== 'windows'" class="connection-parameter-row">
                   <div class="connection-parameter-meta" :title="editingConnectionId ? '编辑已有连接时留空会保持原密码。' : '数据库登录密码。'">
                     <span class="connection-parameter-label">密码</span>
                     <span class="connection-parameter-key">password</span>
@@ -2695,7 +2713,7 @@ watch(() => store.connectedConnectionIds, (newIds) => {
                     <span class="connection-parameter-label">信任服务器证书</span>
                     <span class="connection-parameter-key">trust_server_certificate</span>
                   </div>
-                  <NCheckbox v-model:checked="createConnectionForm.trustServerCertificate">启用</NCheckbox>
+                  <NCheckbox v-model:checked="sqlServerConnectionForm.trustServerCertificate">启用</NCheckbox>
                 </div>
               </div>
               <NText v-if="createConnectionForm.provider === 'sqlite'" depth="3">SQLite 文件会在首次连接时自动创建。</NText>
@@ -2711,31 +2729,31 @@ watch(() => store.connectedConnectionIds, (newIds) => {
                   <span class="connection-parameter-label">启用加密</span>
                   <span class="connection-parameter-key">enabled</span>
                 </div>
-                <NCheckbox v-model:checked="createConnectionForm.sqliteCipherEnabled" :disabled="lockExistingUnencryptedSqliteCipherSettings">启用 SQLCipher 加密</NCheckbox>
+                <NCheckbox v-model:checked="sqliteConnectionForm.cipherEnabled" :disabled="lockExistingUnencryptedSqliteCipherSettings">启用 SQLCipher 加密</NCheckbox>
               </div>
               <NText depth="3">留空表示跟随默认值。</NText>
-              <template v-if="createConnectionForm.sqliteCipherEnabled && !lockExistingUnencryptedSqliteCipherSettings">
+              <template v-if="sqliteConnectionForm.cipherEnabled && !lockExistingUnencryptedSqliteCipherSettings">
                 <div class="connection-parameter-grid">
                   <div class="connection-parameter-row">
                     <div class="connection-parameter-meta" title="选择口令或十六进制原始密钥格式。">
                       <span class="connection-parameter-label">密钥格式</span>
                       <span class="connection-parameter-key">key_format</span>
                     </div>
-                    <NSelect v-model:value="createConnectionForm.sqliteCipherKeyFormat" :options="sqliteCipherKeyFormatOptions" class="connection-parameter-control" />
+                    <NSelect v-model:value="sqliteConnectionForm.cipherKeyFormat" :options="sqliteCipherKeyFormatOptions" class="connection-parameter-control" />
                   </div>
 
                   <div class="connection-parameter-row">
-                    <div class="connection-parameter-meta" :title="editingConnectionId && createConnectionForm.sqliteCipherHasStoredPassword ? '编辑连接时留空会保留当前保存的密钥。' : createConnectionForm.sqliteCipherKeyFormat === 'hex' ? '请输入偶数长度的 HEX 字符串。' : '数据库加密口令。'">
+                    <div class="connection-parameter-meta" :title="editingConnectionId && sqliteConnectionForm.cipherHasStoredPassword ? '编辑连接时留空会保留当前保存的密钥。' : sqliteConnectionForm.cipherKeyFormat === 'hex' ? '请输入偶数长度的 HEX 字符串。' : '数据库加密口令。'">
                       <span class="connection-parameter-label">密钥</span>
                       <span class="connection-parameter-key">key</span>
                     </div>
                     <StoredMaskedPasswordInput
-                      :model-value="createConnectionForm.sqliteCipherPassword"
+                      :model-value="sqliteConnectionForm.cipherPassword"
                       :has-stored-value="showStoredSqliteCipherPasswordMask"
                       class="connection-parameter-control"
-                      :placeholder="editingConnectionId && createConnectionForm.sqliteCipherHasStoredPassword ? '留空则保持当前密钥' : createConnectionForm.sqliteCipherKeyFormat === 'hex' ? '例如 0011AABB' : '输入 SQLCipher 密码'"
+                      :placeholder="editingConnectionId && sqliteConnectionForm.cipherHasStoredPassword ? '留空则保持当前密钥' : sqliteConnectionForm.cipherKeyFormat === 'hex' ? '例如 0011AABB' : '输入 SQLCipher 密码'"
                       @begin-edit="beginSqliteCipherPasswordEdit"
-                      @update:model-value="(value) => { createConnectionForm.sqliteCipherPassword = value }"
+                      @update:model-value="(value) => { sqliteConnectionForm.cipherPassword = value }"
                     />
                   </div>
 
@@ -2744,7 +2762,7 @@ watch(() => store.connectedConnectionIds, (newIds) => {
                       <span class="connection-parameter-label">页面大小</span>
                       <span class="connection-parameter-key">cipher_page_size</span>
                     </div>
-                    <NInput v-model:value="createConnectionForm.sqliteCipherPageSize" class="connection-parameter-control" placeholder="例如 4096" inputmode="numeric" />
+                    <NInput v-model:value="sqliteConnectionForm.cipherPageSize" class="connection-parameter-control" placeholder="例如 4096" inputmode="numeric" />
                   </div>
 
                   <div class="connection-parameter-row">
@@ -2752,7 +2770,7 @@ watch(() => store.connectedConnectionIds, (newIds) => {
                       <span class="connection-parameter-label">KDF 迭代</span>
                       <span class="connection-parameter-key">kdf_iter</span>
                     </div>
-                    <NInput v-model:value="createConnectionForm.sqliteCipherKdfIter" class="connection-parameter-control" placeholder="例如 256000" inputmode="numeric" />
+                    <NInput v-model:value="sqliteConnectionForm.cipherKdfIter" class="connection-parameter-control" placeholder="例如 256000" inputmode="numeric" />
                   </div>
 
                   <div class="connection-parameter-row">
@@ -2760,7 +2778,7 @@ watch(() => store.connectedConnectionIds, (newIds) => {
                       <span class="connection-parameter-label">兼容版本</span>
                       <span class="connection-parameter-key">cipher_compatibility</span>
                     </div>
-                    <NInput v-model:value="createConnectionForm.sqliteCipherCompatibility" class="connection-parameter-control" placeholder="例如 4" inputmode="numeric" />
+                    <NInput v-model:value="sqliteConnectionForm.cipherCompatibility" class="connection-parameter-control" placeholder="例如 4" inputmode="numeric" />
                   </div>
 
                   <div class="connection-parameter-row">
@@ -2768,7 +2786,7 @@ watch(() => store.connectedConnectionIds, (newIds) => {
                       <span class="connection-parameter-label">纯文本头</span>
                       <span class="connection-parameter-key">cipher_plaintext_header_size</span>
                     </div>
-                    <NInput v-model:value="createConnectionForm.sqliteCipherPlaintextHeaderSize" class="connection-parameter-control" placeholder="例如 0 或 32" inputmode="numeric" />
+                    <NInput v-model:value="sqliteConnectionForm.cipherPlaintextHeaderSize" class="connection-parameter-control" placeholder="例如 0 或 32" inputmode="numeric" />
                   </div>
 
                   <div class="connection-parameter-row">
@@ -2776,7 +2794,7 @@ watch(() => store.connectedConnectionIds, (newIds) => {
                       <span class="connection-parameter-label">跳过字节</span>
                       <span class="connection-parameter-key">skip_bytes</span>
                     </div>
-                    <NInput v-model:value="createConnectionForm.sqliteCipherSkipBytes" class="connection-parameter-control" placeholder="例如 1024" inputmode="numeric" />
+                    <NInput v-model:value="sqliteConnectionForm.cipherSkipBytes" class="connection-parameter-control" placeholder="例如 1024" inputmode="numeric" />
                   </div>
 
                   <div class="connection-parameter-row">
@@ -2784,7 +2802,7 @@ watch(() => store.connectedConnectionIds, (newIds) => {
                       <span class="connection-parameter-label">HMAC 校验</span>
                       <span class="connection-parameter-key">cipher_use_hmac</span>
                     </div>
-                    <NSelect v-model:value="createConnectionForm.sqliteCipherUseHmac" :options="sqliteCipherUseHmacOptions" class="connection-parameter-control" />
+                    <NSelect v-model:value="sqliteConnectionForm.cipherUseHmac" :options="sqliteCipherUseHmacOptions" class="connection-parameter-control" />
                   </div>
 
                   <div class="connection-parameter-row">
@@ -2792,7 +2810,7 @@ watch(() => store.connectedConnectionIds, (newIds) => {
                       <span class="connection-parameter-label">KDF 算法</span>
                       <span class="connection-parameter-key">cipher_kdf_algorithm</span>
                     </div>
-                    <NSelect v-model:value="createConnectionForm.sqliteCipherKdfAlgorithm" :options="sqliteCipherKdfAlgorithmOptions" class="connection-parameter-control" />
+                    <NSelect v-model:value="sqliteConnectionForm.cipherKdfAlgorithm" :options="sqliteCipherKdfAlgorithmOptions" class="connection-parameter-control" />
                   </div>
 
                   <div class="connection-parameter-row">
@@ -2800,7 +2818,7 @@ watch(() => store.connectedConnectionIds, (newIds) => {
                       <span class="connection-parameter-label">HMAC 算法</span>
                       <span class="connection-parameter-key">cipher_hmac_algorithm</span>
                     </div>
-                    <NSelect v-model:value="createConnectionForm.sqliteCipherHmacAlgorithm" :options="sqliteCipherHmacAlgorithmOptions" class="connection-parameter-control" />
+                    <NSelect v-model:value="sqliteConnectionForm.cipherHmacAlgorithm" :options="sqliteCipherHmacAlgorithmOptions" class="connection-parameter-control" />
                   </div>
                 </div>
               </template>
@@ -2813,16 +2831,16 @@ watch(() => store.connectedConnectionIds, (newIds) => {
                   <span class="connection-parameter-label">SSH 隧道</span>
                   <span class="connection-parameter-key">ssh.enabled</span>
                 </div>
-                <NCheckbox v-model:checked="createConnectionForm.sshEnabled">启用</NCheckbox>
+                <NCheckbox v-model:checked="sshTunnelForm.enabled">启用</NCheckbox>
               </div>
-              <template v-if="createConnectionForm.sshEnabled">
+              <template v-if="sshTunnelForm.enabled">
                 <div class="connection-parameter-grid">
                   <div class="connection-parameter-row">
                     <div class="connection-parameter-meta" title="SSH 跳板主机地址。">
                       <span class="connection-parameter-label">SSH 主机</span>
                       <span class="connection-parameter-key">ssh.host</span>
                     </div>
-                    <NInput v-model:value="createConnectionForm.sshHost" class="connection-parameter-control" placeholder="例如 jump.example.com" />
+                    <NInput v-model:value="sshTunnelForm.host" class="connection-parameter-control" placeholder="例如 jump.example.com" />
                   </div>
 
                   <div class="connection-parameter-row">
@@ -2830,7 +2848,7 @@ watch(() => store.connectedConnectionIds, (newIds) => {
                       <span class="connection-parameter-label">SSH 端口</span>
                       <span class="connection-parameter-key">ssh.port</span>
                     </div>
-                    <NInput v-model:value="createConnectionForm.sshPort" class="connection-parameter-control" placeholder="输入端口" inputmode="numeric" />
+                    <NInput v-model:value="sshTunnelForm.port" class="connection-parameter-control" placeholder="输入端口" inputmode="numeric" />
                   </div>
 
                   <div class="connection-parameter-row">
@@ -2838,7 +2856,7 @@ watch(() => store.connectedConnectionIds, (newIds) => {
                       <span class="connection-parameter-label">SSH 用户名</span>
                       <span class="connection-parameter-key">ssh.username</span>
                     </div>
-                    <NInput v-model:value="createConnectionForm.sshUsername" class="connection-parameter-control" placeholder="输入用户名" />
+                    <NInput v-model:value="sshTunnelForm.username" class="connection-parameter-control" placeholder="输入用户名" />
                   </div>
 
                   <div class="connection-parameter-row">
@@ -2846,21 +2864,21 @@ watch(() => store.connectedConnectionIds, (newIds) => {
                       <span class="connection-parameter-label">SSH 认证</span>
                       <span class="connection-parameter-key">ssh.authentication</span>
                     </div>
-                    <NSelect v-model:value="createConnectionForm.sshAuthentication" :options="sshAuthenticationOptions" class="connection-parameter-control" />
+                    <NSelect v-model:value="sshTunnelForm.authentication" :options="sshAuthenticationOptions" class="connection-parameter-control" />
                   </div>
 
-                  <div v-if="createConnectionForm.sshAuthentication === 'password'" class="connection-parameter-row">
+                  <div v-if="sshTunnelForm.authentication === 'password'" class="connection-parameter-row">
                     <div class="connection-parameter-meta" :title="editingConnectionId ? '编辑已有连接时留空会保持原 SSH 密码。' : 'SSH 登录密码。'">
                       <span class="connection-parameter-label">SSH 密码</span>
                       <span class="connection-parameter-key">ssh.password</span>
                     </div>
                     <StoredMaskedPasswordInput
-                      :model-value="createConnectionForm.sshPassword"
+                      :model-value="sshTunnelForm.password"
                       :has-stored-value="showStoredSshPasswordMask"
                       class="connection-parameter-control"
                       :placeholder="editingConnectionId && hasStoredSshPassword ? '留空则保持原密码' : '输入 SSH 密码'"
                       @begin-edit="beginSshPasswordEdit"
-                      @update:model-value="(value: string) => { createConnectionForm.sshPassword = value }"
+                      @update:model-value="(value: string) => { sshTunnelForm.password = value }"
                     />
                   </div>
 
@@ -2871,7 +2889,7 @@ watch(() => store.connectedConnectionIds, (newIds) => {
                         <span class="connection-parameter-key">ssh.private_key_path</span>
                       </div>
                       <div class="connection-dialog-inline-row connection-parameter-control">
-                        <NInput v-model:value="createConnectionForm.sshPrivateKeyPath" placeholder="留空自动尝试默认私钥" />
+                        <NInput v-model:value="sshTunnelForm.privateKeyPath" placeholder="留空自动尝试默认私钥" />
                         <NButton tertiary @click="browseSshPrivateKeyFile">选择...</NButton>
                       </div>
                     </div>
@@ -2882,12 +2900,12 @@ watch(() => store.connectedConnectionIds, (newIds) => {
                         <span class="connection-parameter-key">ssh.passphrase</span>
                       </div>
                       <StoredMaskedPasswordInput
-                        :model-value="createConnectionForm.sshPassphrase"
+                        :model-value="sshTunnelForm.passphrase"
                         :has-stored-value="showStoredSshPassphraseMask"
                         class="connection-parameter-control"
                         :placeholder="editingConnectionId && hasStoredSshPassphrase ? '留空则保持原通行短语' : '可选'"
                         @begin-edit="beginSshPassphraseEdit"
-                        @update:model-value="(value: string) => { createConnectionForm.sshPassphrase = value }"
+                        @update:model-value="(value: string) => { sshTunnelForm.passphrase = value }"
                       />
                     </div>
                   </template>

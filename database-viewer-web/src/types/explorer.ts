@@ -1,19 +1,36 @@
-export type ProviderType = 'sqlserver' | 'mysql' | 'postgresql' | 'sqlite'
-export type AuthenticationMode = 'windows' | 'password'
+export type DatabaseProviderType = 'sqlserver' | 'mysql' | 'postgresql' | 'sqlite'
+export type SqlServerAuthenticationMode = 'windows' | 'password'
 export type SqliteOpenMode = 'readwrite' | 'readonly'
 export type CellValue = string | number | boolean | null
 export type DatabaseObjectType = 'table' | 'view'
 export type CatalogObjectType = 'synonym' | 'sequence' | 'rule' | 'default' | 'user-defined-type' | 'database-trigger' | 'xml-schema-collection' | 'assembly'
 
+export interface SqlServerConnectionSummary {
+  authenticationMode: SqlServerAuthenticationMode
+  trustServerCertificate: boolean
+}
+
+export interface MySqlConnectionSummary {
+}
+
+export interface PostgreSqlConnectionSummary {
+}
+
+export interface SqliteConnectionSummary {
+  openMode: SqliteOpenMode
+}
+
 export interface ConnectionInfo {
   id: string
   name: string
-  provider: ProviderType
+  provider: DatabaseProviderType
   host: string
   port?: number
-  authentication: AuthenticationMode
+  sqlServer: SqlServerConnectionSummary
+  mySql: MySqlConnectionSummary
+  postgreSql: PostgreSqlConnectionSummary
+  sqlite: SqliteConnectionSummary
   accent: string
-  sqliteOpenMode?: SqliteOpenMode | null
   error?: string | null
   databases: DatabaseInfo[]
 }
@@ -29,16 +46,48 @@ export interface WorkspaceLayout {
 
 export interface CreateConnectionRequest {
   name: string
-  provider: ProviderType
-  authentication: AuthenticationMode
+  provider: DatabaseProviderType
   host: string
   port?: number | null
   username?: string | null
   password?: string | null
-  trustServerCertificate: boolean
-  sqliteOpenMode?: SqliteOpenMode | null
+  sqlServer: SqlServerConnectionRequest
+  mySql: MySqlConnectionRequest
+  postgreSql: PostgreSqlConnectionRequest
+  sqlite: SqliteConnectionRequest
   sshTunnel: SshTunnelRequest
-  sqliteCipher: SqliteCipherRequest
+}
+
+export interface SqlServerConnectionRequest {
+  authenticationMode?: SqlServerAuthenticationMode | null
+  trustServerCertificate?: boolean | null
+}
+
+export interface SqlServerConnectionConfig {
+  authenticationMode: SqlServerAuthenticationMode
+  trustServerCertificate: boolean
+}
+
+export interface MySqlConnectionRequest {
+}
+
+export interface MySqlConnectionConfig {
+}
+
+export interface PostgreSqlConnectionRequest {
+}
+
+export interface PostgreSqlConnectionConfig {
+}
+
+export interface SqliteConnectionRequest {
+  openMode?: SqliteOpenMode | null
+  cipher: SqliteCipherRequest
+}
+
+export interface SqliteConnectionConfig {
+  openMode: SqliteOpenMode
+  cipher: SqliteCipherConfig
 }
 
 export interface SqliteCipherRequest {
@@ -80,16 +129,16 @@ export interface SshTunnelConfig {
 export interface ConnectionConfig {
   id: string
   name: string
-  provider: ProviderType
-  authentication: AuthenticationMode
+  provider: DatabaseProviderType
   host: string
   port?: number | null
   username?: string | null
   hasPassword: boolean
-  trustServerCertificate: boolean
-  sqliteOpenMode?: SqliteOpenMode | null
+  sqlServer: SqlServerConnectionConfig
+  mySql: MySqlConnectionConfig
+  postgreSql: PostgreSqlConnectionConfig
+  sqlite: SqliteConnectionConfig
   sshTunnel: SshTunnelConfig
-  sqliteCipher: SqliteCipherConfig
 }
 
 export interface SqliteCipherConfig {
@@ -202,7 +251,7 @@ export interface CatalogObjectProperty {
 export interface CatalogObjectDetail {
   connectionId: string
   database: string
-  provider: ProviderType
+  provider: DatabaseProviderType
   objectType: CatalogObjectType
   schema?: string | null
   name: string
@@ -352,7 +401,7 @@ export interface SqlContextTable {
 export interface SqlContext {
   connectionId: string
   database: string
-  provider: ProviderType
+  provider: DatabaseProviderType
   tables: SqlContextTable[]
 }
 
@@ -391,7 +440,7 @@ export interface DatabasePermissionInfo {
 export interface DatabaseProperties {
   connectionId: string
   database: string
-  provider: ProviderType
+  provider: DatabaseProviderType
   generalProperties: CatalogObjectProperty[]
   files: DatabaseFileInfo[]
   permissions: DatabasePermissionInfo[]
@@ -434,7 +483,7 @@ export interface TableDesign {
   tableKey: string
   connectionId: string
   database: string
-  provider: ProviderType
+  provider: DatabaseProviderType
   objectType: DatabaseObjectType
   schema?: string | null
   name: string
@@ -455,7 +504,7 @@ export interface TableDesignWorkspaceTab {
   createContext?: {
     connectionId: string
     database: string
-    provider: ProviderType
+    provider: DatabaseProviderType
     schema?: string | null
     tableName: string
   } | null

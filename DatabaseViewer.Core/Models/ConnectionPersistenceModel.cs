@@ -8,8 +8,6 @@ public sealed class ConnectionPersistenceModel
 
     public DatabaseProviderType ProviderType { get; set; }
 
-    public AuthenticationMode AuthenticationMode { get; set; } = AuthenticationMode.UsernamePassword;
-
     public string Host { get; set; } = string.Empty;
 
     public int Port { get; set; }
@@ -18,13 +16,37 @@ public sealed class ConnectionPersistenceModel
 
     public string EncryptedPassword { get; set; } = string.Empty;
 
-    public bool TrustServerCertificate { get; set; }
+    public ConnectionSqlServerPersistenceModel SqlServer { get; set; } = new();
 
-    public SqliteOpenMode SqliteOpenMode { get; set; } = SqliteOpenMode.ReadWrite;
+    public ConnectionMySqlPersistenceModel MySql { get; set; } = new();
 
-    public ConnectionSqliteCipherPersistenceModel SqliteCipher { get; set; } = new();
+    public ConnectionPostgreSqlPersistenceModel PostgreSql { get; set; } = new();
+
+    public ConnectionSqlitePersistenceModel Sqlite { get; set; } = new();
 
     public ConnectionSshPersistenceModel Ssh { get; set; } = new();
+}
+
+public sealed class ConnectionSqlServerPersistenceModel
+{
+    public SqlServerAuthenticationMode AuthenticationMode { get; set; } = SqlServerAuthenticationMode.UsernamePassword;
+
+    public bool TrustServerCertificate { get; set; } = true;
+}
+
+public sealed class ConnectionMySqlPersistenceModel
+{
+}
+
+public sealed class ConnectionPostgreSqlPersistenceModel
+{
+}
+
+public sealed class ConnectionSqlitePersistenceModel
+{
+    public SqliteOpenMode OpenMode { get; set; } = SqliteOpenMode.ReadWrite;
+
+    public ConnectionSqliteCipherPersistenceModel Cipher { get; set; } = new();
 }
 
 public sealed class ConnectionSqliteCipherPersistenceModel

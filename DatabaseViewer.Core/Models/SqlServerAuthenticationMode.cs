@@ -1,6 +1,6 @@
 namespace DatabaseViewer.Core.Models;
 
-public enum AuthenticationMode
+public enum SqlServerAuthenticationMode
 {
     UsernamePassword,
     WindowsIntegrated,

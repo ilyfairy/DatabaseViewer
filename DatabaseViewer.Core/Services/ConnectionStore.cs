@@ -37,27 +37,35 @@ public sealed class ConnectionStore
             Id = item.Id,
             Name = item.Name,
             ProviderType = item.ProviderType,
-            AuthenticationMode = item.AuthenticationMode,
             Host = item.Host,
             Port = item.Port,
             Username = item.Username,
             Password = _codec.Decode(item.EncryptedPassword),
-            SqliteOpenMode = item.SqliteOpenMode,
-            SqliteCipher = new SqliteCipherOptions
+            SqlServer = new SqlServerConnectionOptions
             {
-                Enabled = item.SqliteCipher.Enabled,
-                Password = string.IsNullOrWhiteSpace(item.SqliteCipher.EncryptedPassword) ? string.Empty : _codec.Decode(item.SqliteCipher.EncryptedPassword),
-                KeyFormat = item.SqliteCipher.KeyFormat,
-                PageSize = item.SqliteCipher.PageSize,
-                KdfIter = item.SqliteCipher.KdfIter,
-                CipherCompatibility = item.SqliteCipher.CipherCompatibility,
-                PlaintextHeaderSize = item.SqliteCipher.PlaintextHeaderSize,
-                SkipBytes = item.SqliteCipher.SkipBytes,
-                UseHmac = item.SqliteCipher.UseHmac,
-                KdfAlgorithm = item.SqliteCipher.KdfAlgorithm,
-                HmacAlgorithm = item.SqliteCipher.HmacAlgorithm,
+                AuthenticationMode = item.SqlServer.AuthenticationMode,
+                TrustServerCertificate = item.SqlServer.TrustServerCertificate,
             },
-            TrustServerCertificate = item.TrustServerCertificate,
+            MySql = new MySqlConnectionOptions(),
+            PostgreSql = new PostgreSqlConnectionOptions(),
+            Sqlite = new SqliteConnectionOptions
+            {
+                OpenMode = item.Sqlite.OpenMode,
+                Cipher = new SqliteCipherOptions
+                {
+                    Enabled = item.Sqlite.Cipher.Enabled,
+                    Password = string.IsNullOrWhiteSpace(item.Sqlite.Cipher.EncryptedPassword) ? string.Empty : _codec.Decode(item.Sqlite.Cipher.EncryptedPassword),
+                    KeyFormat = item.Sqlite.Cipher.KeyFormat,
+                    PageSize = item.Sqlite.Cipher.PageSize,
+                    KdfIter = item.Sqlite.Cipher.KdfIter,
+                    CipherCompatibility = item.Sqlite.Cipher.CipherCompatibility,
+                    PlaintextHeaderSize = item.Sqlite.Cipher.PlaintextHeaderSize,
+                    SkipBytes = item.Sqlite.Cipher.SkipBytes,
+                    UseHmac = item.Sqlite.Cipher.UseHmac,
+                    KdfAlgorithm = item.Sqlite.Cipher.KdfAlgorithm,
+                    HmacAlgorithm = item.Sqlite.Cipher.HmacAlgorithm,
+                },
+            },
             SshTunnel = new SshTunnelOptions
             {
                 Enabled = item.Ssh.Enabled,
@@ -79,26 +87,34 @@ public sealed class ConnectionStore
             Id = item.Id,
             Name = item.Name,
             ProviderType = item.ProviderType,
-            AuthenticationMode = item.AuthenticationMode,
             Host = item.Host,
             Port = item.Port,
             Username = item.Username,
             EncryptedPassword = _codec.Encode(item.Password),
-            SqliteOpenMode = item.SqliteOpenMode,
-            TrustServerCertificate = item.TrustServerCertificate,
-            SqliteCipher = new ConnectionSqliteCipherPersistenceModel
+            SqlServer = new ConnectionSqlServerPersistenceModel
             {
-                Enabled = item.SqliteCipher.Enabled,
-                EncryptedPassword = string.IsNullOrWhiteSpace(item.SqliteCipher.Password) ? string.Empty : _codec.Encode(item.SqliteCipher.Password),
-                KeyFormat = item.SqliteCipher.KeyFormat,
-                PageSize = item.SqliteCipher.PageSize,
-                KdfIter = item.SqliteCipher.KdfIter,
-                CipherCompatibility = item.SqliteCipher.CipherCompatibility,
-                PlaintextHeaderSize = item.SqliteCipher.PlaintextHeaderSize,
-                SkipBytes = item.SqliteCipher.SkipBytes,
-                UseHmac = item.SqliteCipher.UseHmac,
-                KdfAlgorithm = item.SqliteCipher.KdfAlgorithm,
-                HmacAlgorithm = item.SqliteCipher.HmacAlgorithm,
+                AuthenticationMode = item.SqlServer.AuthenticationMode,
+                TrustServerCertificate = item.SqlServer.TrustServerCertificate,
+            },
+            MySql = new ConnectionMySqlPersistenceModel(),
+            PostgreSql = new ConnectionPostgreSqlPersistenceModel(),
+            Sqlite = new ConnectionSqlitePersistenceModel
+            {
+                OpenMode = item.Sqlite.OpenMode,
+                Cipher = new ConnectionSqliteCipherPersistenceModel
+                {
+                    Enabled = item.Sqlite.Cipher.Enabled,
+                    EncryptedPassword = string.IsNullOrWhiteSpace(item.Sqlite.Cipher.Password) ? string.Empty : _codec.Encode(item.Sqlite.Cipher.Password),
+                    KeyFormat = item.Sqlite.Cipher.KeyFormat,
+                    PageSize = item.Sqlite.Cipher.PageSize,
+                    KdfIter = item.Sqlite.Cipher.KdfIter,
+                    CipherCompatibility = item.Sqlite.Cipher.CipherCompatibility,
+                    PlaintextHeaderSize = item.Sqlite.Cipher.PlaintextHeaderSize,
+                    SkipBytes = item.Sqlite.Cipher.SkipBytes,
+                    UseHmac = item.Sqlite.Cipher.UseHmac,
+                    KdfAlgorithm = item.Sqlite.Cipher.KdfAlgorithm,
+                    HmacAlgorithm = item.Sqlite.Cipher.HmacAlgorithm,
+                },
             },
             Ssh = new ConnectionSshPersistenceModel
             {

@@ -1,7 +1,7 @@
 import { fakerDE, fakerEN_US, fakerFR, fakerJA, fakerZH_CN } from '@faker-js/faker';
 import dayjs from 'dayjs';
 import RandExp from 'randexp';
-import type { ProviderType, TableColumn, TableDesign, TableSummary } from '../types/explorer';
+import type { DatabaseProviderType, TableColumn, TableDesign, TableSummary } from '../types/explorer';
 
 export type MockBeforeInsertStrategy = 'none' | 'truncate' | 'delete';
 
@@ -140,7 +140,7 @@ export interface MockColumnRule {
 }
 
 export interface MockDataPlan {
-  provider: ProviderType;
+  provider: DatabaseProviderType;
   connectionId: string;
   database: string;
   table: TableSummary;
@@ -359,7 +359,7 @@ function isDatetimeColumn(column: TableColumn): boolean {
   return datetimeTypePattern.test(column.type);
 }
 
-function quoteIdentifier(provider: ProviderType, identifier: string): string {
+function quoteIdentifier(provider: DatabaseProviderType, identifier: string): string {
   if (provider === 'mysql') {
     return `\`${identifier.replace(/`/g, '``')}\``;
   }
@@ -371,7 +371,7 @@ function quoteIdentifier(provider: ProviderType, identifier: string): string {
   return `[${identifier.replace(/\]/g, ']]')}]`;
 }
 
-function quoteQualifiedTable(provider: ProviderType, table: TableSummary): string {
+function quoteQualifiedTable(provider: DatabaseProviderType, table: TableSummary): string {
   const parts = [] as string[];
   if (table.schema) {
     parts.push(quoteIdentifier(provider, table.schema));
@@ -381,7 +381,7 @@ function quoteQualifiedTable(provider: ProviderType, table: TableSummary): strin
   return parts.join('.');
 }
 
-function currentDatetimeExpression(provider: ProviderType): string {
+function currentDatetimeExpression(provider: DatabaseProviderType): string {
   if (provider === 'sqlserver') {
     return 'SYSDATETIME()';
   }
@@ -917,7 +917,7 @@ export function createRuleOptionsForType(column: TableColumn, ruleType: MockRule
 }
 
 export function buildDefaultMockPlan(input: {
-  provider: ProviderType;
+  provider: DatabaseProviderType;
   connectionId: string;
   database: string;
   table: TableSummary;
@@ -1577,7 +1577,7 @@ function escapeSqlString(value: string): string {
   return value.replace(/'/g, "''");
 }
 
-function valueToSqlLiteral(provider: ProviderType, value: SqlLiteralValue): string {
+function valueToSqlLiteral(provider: DatabaseProviderType, value: SqlLiteralValue): string {
   if (value === null) {
     return 'NULL';
   }

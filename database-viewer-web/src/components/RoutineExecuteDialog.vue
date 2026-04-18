@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
 import { NButton, NCheckbox, NInput, NModal } from 'naive-ui';
-import type { ProviderType, RoutineInfo } from '../types/explorer';
+import type { DatabaseProviderType, RoutineInfo } from '../types/explorer';
 
 const props = defineProps<{
   show: boolean;
   connectionId: string;
   database: string;
-  provider: ProviderType;
+  provider: DatabaseProviderType;
   routine: RoutineInfo;
 }>();
 
@@ -63,7 +63,7 @@ function buildExecuteSql(): string {
   return `-- 不支持的数据库类型`;
 }
 
-function buildQualifiedName(provider: ProviderType, routine: RoutineInfo): string {
+function buildQualifiedName(provider: DatabaseProviderType, routine: RoutineInfo): string {
   if (!routine.schema) {
     return quoteId(provider, routine.name);
   }
@@ -75,7 +75,7 @@ function buildQualifiedName(provider: ProviderType, routine: RoutineInfo): strin
   return `${quoteId(provider, routine.schema)}.${quoteId(provider, routine.name)}`;
 }
 
-function quoteId(provider: ProviderType, name: string): string {
+function quoteId(provider: DatabaseProviderType, name: string): string {
   if (provider === 'mysql') {
     return `\`${name.replace(/`/g, '``')}\``;
   }

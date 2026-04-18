@@ -6,7 +6,7 @@ import type { DropdownOption } from 'naive-ui';
 import ContextDropdown from './ContextDropdown.vue';
 import { attachSmoothHorizontalWheelScroll } from '../lib/smooth-horizontal-wheel-scroll';
 import { useExplorerStore } from '../stores/explorer';
-import type { TableColumn, TableDesign, TableDesignSection, TableDesignWorkspaceTab, ProviderType } from '../types/explorer';
+import type { TableColumn, TableDesign, TableDesignSection, TableDesignWorkspaceTab, DatabaseProviderType } from '../types/explorer';
 
 type TypeEditorMode = 'none' | 'length' | 'length-or-max' | 'precision' | 'precision-scale' | 'scale'
 
@@ -152,7 +152,7 @@ function bindTableDesignSubtabsWheelScroll() {
   detachTableDesignSubtabsWheelScroll = attachSmoothHorizontalWheelScroll(nextScrollElement);
 }
 
-const PROVIDER_TYPE_CATALOG: Record<ProviderType, TypeCatalogEntry[]> = {
+const PROVIDER_TYPE_CATALOG: Record<DatabaseProviderType, TypeCatalogEntry[]> = {
   sqlserver: [
     { label: 'bigint', value: 'bigint', base: 'bigint', mode: 'none' },
     { label: 'binary(50)', value: 'binary(50)', base: 'binary', mode: 'length', defaultLength: '50' },
@@ -264,16 +264,16 @@ function normalizeTypeKey(value: string) {
   return value.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
-function providerCatalog(provider: ProviderType) {
+function providerCatalog(provider: DatabaseProviderType) {
   return PROVIDER_TYPE_CATALOG[provider] ?? [];
 }
 
-function findTypeEntry(provider: ProviderType, rawType: string) {
+function findTypeEntry(provider: DatabaseProviderType, rawType: string) {
   const normalized = normalizeTypeKey(rawType);
   return providerCatalog(provider).find((entry) => normalizeTypeKey(entry.value) === normalized || normalizeTypeKey(entry.base) === normalized) ?? null;
 }
 
-function inferEditorMode(provider: ProviderType, baseType: string, length: string, precision: string, scale: string): TypeEditorMode {
+function inferEditorMode(provider: DatabaseProviderType, baseType: string, length: string, precision: string, scale: string): TypeEditorMode {
   const entry = findTypeEntry(provider, baseType);
   if (entry) {
     return entry.mode;
@@ -327,7 +327,7 @@ function buildTypeInput(baseType: string, mode: TypeEditorMode, length: string, 
   return base;
 }
 
-function parseTypeInput(provider: ProviderType, rawInput: string, fallback?: Partial<EditableColumn>) {
+function parseTypeInput(provider: DatabaseProviderType, rawInput: string, fallback?: Partial<EditableColumn>) {
   const trimmed = rawInput.trim();
   const match = /^([^()]+?)(?:\(([^)]*)\))?$/.exec(trimmed);
   const baseType = match?.[1]?.trim() || trimmed || fallback?.typeBase || '';
@@ -382,7 +382,7 @@ function parseTypeInput(provider: ProviderType, rawInput: string, fallback?: Par
   };
 }
 
-function buildNewEditableColumn(provider: ProviderType, index: number): EditableColumn {
+function buildNewEditableColumn(provider: DatabaseProviderType, index: number): EditableColumn {
   return {
     draftKey: createEditableColumnDraftKey('new-column'),
     originalName: null,
@@ -1049,7 +1049,7 @@ watch(typeMenuRowKey, (rowKey, _, onCleanup) => {
   });
 });
 
-function quoteIdentifier(provider: ProviderType, value: string) {
+function quoteIdentifier(provider: DatabaseProviderType, value: string) {
   if (provider === 'mysql') {
     return `\`${value.replace(/`/g, '``')}\``;
   }
@@ -1061,11 +1061,11 @@ function quoteIdentifier(provider: ProviderType, value: string) {
   return `[${value.replace(/\]/g, ']]')}]`;
 }
 
-function quoteIndexName(provider: ProviderType, value: string) {
+function quoteIndexName(provider: DatabaseProviderType, value: string) {
   return quoteIdentifier(provider, value);
 }
 
-function qualifiedTable(provider: ProviderType, schema: string | null | undefined, tableName: string) {
+function qualifiedTable(provider: DatabaseProviderType, schema: string | null | undefined, tableName: string) {
   return schema
     ? `${quoteIdentifier(provider, schema)}.${quoteIdentifier(provider, tableName)}`
     : quoteIdentifier(provider, tableName);
@@ -1211,7 +1211,7 @@ function sqlUnicodeLiteral(value: string) {
   return `N'${value.replace(/'/g, "''")}'`;
 }
 
-function buildTableCommentStatements(provider: ProviderType, schema: string | null | undefined, tableName: string, comment: string | null | undefined) {
+function buildTableCommentStatements(provider: DatabaseProviderType, schema: string | null | undefined, tableName: string, comment: string | null | undefined) {
   const normalized = normalizeComment(comment);
   if (!normalized) {
     return [];
@@ -1237,7 +1237,7 @@ function buildTableCommentStatements(provider: ProviderType, schema: string | nu
   return [];
 }
 
-function buildCommentStatements(provider: ProviderType, schema: string | null | undefined, tableName: string, columnName: string, previousComment: string | null | undefined, nextComment: string | null | undefined) {
+function buildCommentStatements(provider: DatabaseProviderType, schema: string | null | undefined, tableName: string, columnName: string, previousComment: string | null | undefined, nextComment: string | null | undefined) {
   const before = normalizeComment(previousComment);
   const after = normalizeComment(nextComment);
   if (before === after) {
