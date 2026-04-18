@@ -74,16 +74,7 @@ public sealed class ExplorerApiService
 
         foreach (var connection in connections)
         {
-            result.Add(new ConnectionNodeDto(
-                connection.Id,
-                connection.Name,
-                ToProviderKey(connection.ProviderType),
-                connection.Host,
-                connection.Port > 0 ? connection.Port : null,
-                connection.AuthenticationMode == AuthenticationMode.WindowsIntegrated ? "windows" : "password",
-                PickAccent(connection.ProviderType),
-                null,
-                Array.Empty<DatabaseNodeDto>()));
+            result.Add(BuildConnectionNode(connection, null, Array.Empty<DatabaseNodeDto>()));
         }
 
         return new BootstrapResponse(result);
@@ -92,9 +83,7 @@ public sealed class ExplorerApiService
     public async Task<ConnectionNodeDto> ConnectAsync(Guid connectionId)
     {
         var settings = await _applicationSettingsStore.LoadAsync();
-        var connection = (await _connectionStore.LoadAsync()).FirstOrDefault(item => item.Id == connectionId)
-            ?? throw new InvalidOperationException("Connection not found.");
-
+        var connection = await GetStoredConnectionAsync(connectionId);
         return await LoadConnectionMetadataAsync(connection, settings);
     }
 
@@ -282,50 +271,29 @@ public sealed class ExplorerApiService
                         routines));
                 }
 
-                return new ConnectionNodeDto(
-                    connection.Id,
-                    connection.Name,
-                    ToProviderKey(connection.ProviderType),
-                    connection.Host,
-                    connection.Port > 0 ? connection.Port : null,
-                    connection.AuthenticationMode == AuthenticationMode.WindowsIntegrated ? "windows" : "password",
-                    PickAccent(connection.ProviderType),
-                    null,
-                    databaseNodes);
+                return BuildConnectionNode(connection, null, databaseNodes);
             }
             catch (Exception ex)
             {
-                return new ConnectionNodeDto(
-                    connection.Id,
-                    connection.Name,
-                    ToProviderKey(connection.ProviderType),
-                    connection.Host,
-                    connection.Port > 0 ? connection.Port : null,
-                    connection.AuthenticationMode == AuthenticationMode.WindowsIntegrated ? "windows" : "password",
-                    PickAccent(connection.ProviderType),
-                    ex.Message,
-                    Array.Empty<DatabaseNodeDto>());
+                return BuildConnectionNode(connection, ex.Message, Array.Empty<DatabaseNodeDto>());
             }
     }
 
     public async Task<IReadOnlyList<string>> GetDatabaseNamesAsync(Guid connectionId)
     {
-        var connection = (await _connectionStore.LoadAsync()).FirstOrDefault(item => item.Id == connectionId)
-            ?? throw new InvalidOperationException("Connection not found.");
+        var connection = await GetEffectiveConnectionAsync(connectionId);
         return await _metadataService.GetDatabasesAsync(connection);
     }
 
     public async Task<IReadOnlyList<string>> GetCollationsAsync(Guid connectionId, string database)
     {
-        var connection = (await _connectionStore.LoadAsync()).FirstOrDefault(item => item.Id == connectionId)
-            ?? throw new InvalidOperationException("Connection not found.");
+        var connection = await GetEffectiveConnectionAsync(connectionId);
         return await _metadataService.GetCollationsAsync(connection, database);
     }
 
     public async Task<DatabaseGraphResponse> GetDatabaseGraphAsync(Guid connectionId, string database)
     {
-        var connection = (await _connectionStore.LoadAsync()).FirstOrDefault(item => item.Id == connectionId)
-            ?? throw new InvalidOperationException("Connection not found.");
+        var connection = await GetEffectiveConnectionAsync(connectionId);
         var tables = await EnsureTablesAsync(connection, database);
 
         var schemas = await Task.WhenAll(tables.Select(async table => await GetSchemaAsync(connection, table)));
@@ -389,14 +357,14 @@ public sealed class ExplorerApiService
             definition.Port > 0 ? definition.Port : null,
             definition.AuthenticationMode == AuthenticationMode.WindowsIntegrated ? "windows" : "password",
             PickAccent(definition.ProviderType),
+            ToSqliteOpenModeKey(definition),
             null,
             Array.Empty<DatabaseNodeDto>());
     }
 
     public async Task<ConnectionConfigResponse> GetConnectionConfigAsync(Guid connectionId)
     {
-        var connection = (await _connectionStore.LoadAsync()).FirstOrDefault(item => item.Id == connectionId)
-            ?? throw new InvalidOperationException("Connection not found.");
+        var connection = await GetStoredConnectionAsync(connectionId);
 
         return new ConnectionConfigResponse(
             connection.Id,
@@ -408,6 +376,7 @@ public sealed class ExplorerApiService
             string.IsNullOrWhiteSpace(connection.Username) ? null : connection.Username,
             !string.IsNullOrWhiteSpace(connection.Password),
             connection.TrustServerCertificate,
+            ToSqliteOpenModeKey(connection),
             new SshTunnelConfigResponse(
                 connection.SshTunnel.Enabled,
                 ToSshAuthenticationKey(connection.SshTunnel.AuthenticationMode),
@@ -445,6 +414,7 @@ public sealed class ExplorerApiService
             request.Username,
             request.Password,
             request.TrustServerCertificate,
+            request.SqliteOpenMode,
             request.SshTunnel,
             request.SqliteCipher), existing);
 
@@ -537,16 +507,7 @@ public sealed class ExplorerApiService
             _viewsCache.Remove(cacheKey);
         }
 
-        return new ConnectionNodeDto(
-            updated.Id,
-            updated.Name,
-            ToProviderKey(updated.ProviderType),
-            updated.Host,
-            updated.Port > 0 ? updated.Port : null,
-            updated.AuthenticationMode == AuthenticationMode.WindowsIntegrated ? "windows" : "password",
-            PickAccent(updated.ProviderType),
-            null,
-            Array.Empty<DatabaseNodeDto>());
+        return BuildConnectionNode(updated, null, Array.Empty<DatabaseNodeDto>());
     }
 
     public async Task<TablePageResponse> GetTablePageAsync(string tableKey, int offset, int pageSize, string? sortColumn, string? sortDirection)
@@ -640,8 +601,7 @@ public sealed class ExplorerApiService
             throw new InvalidOperationException("Database is required.");
         }
 
-        var connection = (await _connectionStore.LoadAsync()).FirstOrDefault(item => item.Id == connectionId)
-            ?? throw new InvalidOperationException("Connection not found.");
+        var connection = await GetEffectiveConnectionAsync(connectionId);
         var tables = connection.ProviderType == DatabaseProviderType.SqlServer
             ? await _metadataService.GetTablesAsync(connection, database, includeSystemObjects: true)
             : await EnsureTablesAsync(connection, database);
@@ -673,8 +633,7 @@ public sealed class ExplorerApiService
             throw new InvalidOperationException("Object name is required.");
         }
 
-        var connection = (await _connectionStore.LoadAsync()).FirstOrDefault(item => item.Id == connectionId)
-            ?? throw new InvalidOperationException("Connection not found.");
+        var connection = await GetEffectiveConnectionAsync(connectionId);
         var resolvedType = ParseCatalogObjectType(objectType);
         var detail = await _metadataService.GetCatalogObjectDetailAsync(connection, database, resolvedType, schema, name)
             ?? throw new InvalidOperationException("Catalog object not found.");
@@ -1102,6 +1061,9 @@ public sealed class ExplorerApiService
 
         var sqliteCipherRequest = request.SqliteCipher ?? new SqliteCipherRequest(false, null, null, null, null, null, null, null, null, null, null);
         var sqliteCipher = ResolveSqliteCipherOptions(providerType, sqliteCipherRequest, existing?.SqliteCipher);
+        var sqliteOpenMode = providerType == DatabaseProviderType.Sqlite
+            ? ParseSqliteOpenMode(request.SqliteOpenMode)
+            : SqliteOpenMode.ReadWrite;
 
         var sshTunnel = request.SshTunnel ?? new SshTunnelRequest(false, "password", null, null, null, null, null, null);
         var sshAuthenticationMode = ParseSshAuthenticationMode(sshTunnel.Authentication);
@@ -1162,6 +1124,7 @@ public sealed class ExplorerApiService
             Port = request.Port ?? GetDefaultPort(providerType),
             Username = resolvedUsername,
             Password = resolvedPassword,
+            SqliteOpenMode = sqliteOpenMode,
             SqliteCipher = sqliteCipher,
             TrustServerCertificate = request.TrustServerCertificate,
             SshTunnel = new SshTunnelOptions
@@ -1308,6 +1271,7 @@ public sealed class ExplorerApiService
             Username = source.Username,
             Password = source.Password,
             TrustServerCertificate = source.TrustServerCertificate,
+            SqliteOpenMode = source.SqliteOpenMode,
             SqliteCipher = CloneSqliteCipherOptions(source.SqliteCipher),
             SshTunnel = new SshTunnelOptions
             {
@@ -1344,6 +1308,48 @@ public sealed class ExplorerApiService
     private static string ToSqliteCipherKeyFormatKey(SqliteCipherKeyFormat value)
     {
         return value == SqliteCipherKeyFormat.Hex ? "hex" : "passphrase";
+    }
+
+    private static SqliteOpenMode ParseSqliteOpenMode(string? value)
+    {
+        return value?.ToLowerInvariant() switch
+        {
+            "readonly" => SqliteOpenMode.ReadOnly,
+            _ => SqliteOpenMode.ReadWrite,
+        };
+    }
+
+    private static string? ToSqliteOpenModeKey(ConnectionDefinition connection)
+    {
+        return connection.ProviderType == DatabaseProviderType.Sqlite
+            ? connection.SqliteOpenMode == SqliteOpenMode.ReadOnly ? "readonly" : "readwrite"
+            : null;
+    }
+
+    private ConnectionNodeDto BuildConnectionNode(ConnectionDefinition connection, string? error, IReadOnlyList<DatabaseNodeDto> databases)
+    {
+        return new ConnectionNodeDto(
+            connection.Id,
+            connection.Name,
+            ToProviderKey(connection.ProviderType),
+            connection.Host,
+            connection.Port > 0 ? connection.Port : null,
+            connection.AuthenticationMode == AuthenticationMode.WindowsIntegrated ? "windows" : "password",
+            PickAccent(connection.ProviderType),
+            ToSqliteOpenModeKey(connection),
+            error,
+            databases);
+    }
+
+    private async Task<ConnectionDefinition> GetStoredConnectionAsync(Guid connectionId)
+    {
+        return (await _connectionStore.LoadAsync()).FirstOrDefault(item => item.Id == connectionId)
+            ?? throw new InvalidOperationException("Connection not found.");
+    }
+
+    private async Task<ConnectionDefinition> GetEffectiveConnectionAsync(Guid connectionId)
+    {
+        return await GetStoredConnectionAsync(connectionId);
     }
 
     private static InvalidOperationException BuildConnectionFailureException(ConnectionDefinition definition)
@@ -1825,8 +1831,7 @@ public sealed class ExplorerApiService
     private async Task<(ConnectionDefinition Connection, DbTableInfo Table)> ResolveContextAsync(string tableKey)
     {
         var parsed = ParseTableKey(tableKey);
-        var connection = (await _connectionStore.LoadAsync()).FirstOrDefault(item => item.Id == parsed.ConnectionId)
-            ?? throw new InvalidOperationException("Connection not found.");
+        var connection = await GetEffectiveConnectionAsync(parsed.ConnectionId);
         return (connection, new DbTableInfo
         {
             DatabaseName = parsed.Database,
@@ -1885,8 +1890,7 @@ public sealed class ExplorerApiService
             throw new InvalidOperationException("Database is required.");
         }
 
-        var connection = (await _connectionStore.LoadAsync()).FirstOrDefault(item => item.Id == connectionId)
-            ?? throw new InvalidOperationException("Connection not found.");
+        var connection = await GetEffectiveConnectionAsync(connectionId);
 
         var properties = await _metadataService.GetDatabasePropertiesAsync(connection, database)
             ?? throw new InvalidOperationException("Database properties not available for this provider.");

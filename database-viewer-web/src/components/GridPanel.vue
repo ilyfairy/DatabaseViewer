@@ -253,7 +253,8 @@ const hasRows = computed(() => rows.value.length > 0);
 const loadedRowCount = computed(() => searchActive.value ? (searchState.value?.rows.length ?? 0) : (table.value?.rows.length ?? 0));
 const totalRowCount = computed(() => searchActive.value ? (searchState.value?.totalMatches ?? 0) : (tableMeta.value?.rowCount ?? loadedRowCount.value));
 const hasMoreRows = computed(() => searchActive.value ? !!searchState.value?.hasMoreRows : !!table.value?.hasMoreRows);
-const canEnableEditMode = computed(() => !!table.value && visibleColumns.value.some((column) => isEditableColumn(column) || isWritableOnInsert(column)));
+const isReadOnlyConnection = computed(() => store.isTableConnectionReadOnly(props.tableKey));
+const canEnableEditMode = computed(() => !isReadOnlyConnection.value && !!table.value && visibleColumns.value.some((column) => isEditableColumn(column) || isWritableOnInsert(column)));
 const draftRowHasValues = computed(() => Object.values(draftRowValues.value).some((item) => item.setNull || item.base64Value !== null || item.textValue.trim().length > 0));
 const selectedRowCount = computed(() => selectedRowKeys.value.length);
 const contextMenuDeleteRowCount = computed(() => {
@@ -275,25 +276,28 @@ const contextMenuOptions = computed<DropdownOption[]>(() => {
 
   const options: DropdownOption[] = [];
   if (isBinaryColumn(menu.column.name, menu.column.type)) {
+    if (!isReadOnlyConnection.value) {
+      options.push({ label: '替换二进制文件...', key: 'replace-binary' });
+    }
+
     options.push(
-      { label: '替换二进制文件...', key: 'replace-binary' },
       { label: '预览二进制', key: 'preview-binary' },
       { label: '保存二进制到文件...', key: 'save-binary' },
     );
   }
 
-  if (isEditableColumn(menu.column)) {
+  if (!isReadOnlyConnection.value && isEditableColumn(menu.column)) {
     options.push({ label: '编辑单元格...', key: 'edit-cell' });
     if (!editMode.value) {
       options.push({ label: '进入编辑模式', key: 'enter-edit-mode' });
     }
   }
 
-  if (menu.column.isNullable && (menu.draft ? isWritableOnInsert(menu.column) : isEditableColumn(menu.column))) {
+  if (!isReadOnlyConnection.value && menu.column.isNullable && (menu.draft ? isWritableOnInsert(menu.column) : isEditableColumn(menu.column))) {
     options.push({ label: '设为 NULL', key: 'set-null' });
   }
 
-  if (!menu.draft) {
+  if (!isReadOnlyConnection.value && !menu.draft) {
     options.push({ label: contextMenuDeleteLabel.value, key: 'delete-row' });
   }
 
@@ -962,6 +966,10 @@ function closeContextMenu() {
 
 /** 判断右键菜单是否有可用操作 */
 function hasCellContextActions(column: VisibleColumn, draft: boolean) {
+  if (isReadOnlyConnection.value) {
+    return isBinaryColumn(column.name, column.type);
+  }
+
   // 非草稿行始终有「删除行」操作可用
   if (!draft) {
     return true;

@@ -8,7 +8,7 @@ import ContextDropdown from './ContextDropdown.vue';
 import StoredMaskedPasswordInput from './StoredMaskedPasswordInput.vue';
 import { buildSqliteDatabaseToolSql, findSqliteDatabaseTool, getSqliteDatabaseTools } from '../lib/sqliteDatabaseTools';
 import { useExplorerStore } from '../stores/explorer';
-import type { AuthenticationMode, CatalogObjectType, ProviderType, RoutineInfo, SynonymInfo, TableColumn, TableDesignSection, TableSummary } from '../types/explorer';
+import type { AuthenticationMode, CatalogObjectType, ProviderType, RoutineInfo, SqliteOpenMode, SynonymInfo, TableColumn, TableDesignSection, TableSummary } from '../types/explorer';
 
 const store = useExplorerStore();
 const expandedConnections = ref<string[]>([]);
@@ -69,6 +69,7 @@ const createConnectionForm = reactive({
   sshPassword: '',
   sshPrivateKeyPath: '',
   sshPassphrase: '',
+  sqliteOpenMode: 'readwrite' as SqliteOpenMode,
   sqliteCipherEnabled: false,
   sqliteCipherHasStoredPassword: false,
   sqliteCipherPassword: '',
@@ -158,13 +159,18 @@ const databaseContextMenuOptions = computed<DropdownOption[]>(() => {
     return [];
   }
 
+  const isReadOnlyConnection = store.isConnectionReadOnly(databaseContextMenu.value.connectionId);
+
   const options: DropdownOption[] = [
     { label: '新建查询', key: 'new-query' },
-    { label: '新建表...', key: 'new-table' },
     { label: '刷新数据库', key: 'refresh-database' },
     { label: '查看关系总览', key: 'graph-overview' },
     { label: '属性...', key: 'database-properties' },
   ];
+
+  if (!isReadOnlyConnection) {
+    options.splice(1, 0, { label: '新建表...', key: 'new-table' });
+  }
 
   const connection = store.getConnectionInfo(databaseContextMenu.value.connectionId);
   const sqliteTools = connection ? getSqliteDatabaseTools(connection.provider) : [];
@@ -186,23 +192,31 @@ const tableContextMenuOptions = computed<DropdownOption[]>(() => {
     return [];
   }
 
-  return [
+  const isReadOnlyConnection = store.isConnectionReadOnly(tableContextMenu.value.connectionId);
+
+  const options: DropdownOption[] = [
     { label: '表设计...', key: 'table-design' },
     { label: '生成 Mock 数据...', key: 'mock-data' },
-    { label: '重命名表...', key: 'rename-table' },
-    {
-      label: '编写脚本为',
-      key: 'table-script',
-      children: [
-        { label: 'CREATE 到', key: 'script:create' },
-        { label: 'DROP 到', key: 'script:drop' },
-        { label: 'SELECT 到', key: 'script:select' },
-        { label: 'INSERT 到', key: 'script:insert' },
-        { label: 'UPDATE 到', key: 'script:update' },
-        { label: 'DELETE 到', key: 'script:delete' },
-      ],
-    },
   ];
+
+  if (!isReadOnlyConnection) {
+    options.push({ label: '重命名表...', key: 'rename-table' });
+  }
+
+  options.push({
+    label: '编写脚本为',
+    key: 'table-script',
+    children: [
+      { label: 'CREATE 到', key: 'script:create' },
+      { label: 'DROP 到', key: 'script:drop' },
+      { label: 'SELECT 到', key: 'script:select' },
+      { label: 'INSERT 到', key: 'script:insert' },
+      { label: 'UPDATE 到', key: 'script:update' },
+      { label: 'DELETE 到', key: 'script:delete' },
+    ],
+  });
+
+  return options;
 });
 const routineContextMenuOptions = computed<DropdownOption[]>(() => {
   if (!routineContextMenu.value) {
@@ -218,6 +232,10 @@ const routineContextMenuOptions = computed<DropdownOption[]>(() => {
 });
 const designEntryContextMenuOptions = computed<DropdownOption[]>(() => {
   if (!designEntryContextMenu.value) {
+    return [];
+  }
+
+  if (store.isTableConnectionReadOnly(designEntryContextMenu.value.tableKey)) {
     return [];
   }
 
@@ -267,6 +285,11 @@ const providerOptions = [
   { label: 'MySQL', value: 'mysql' },
   { label: 'PostgreSQL', value: 'postgresql' },
   { label: 'SQLite', value: 'sqlite' },
+];
+
+const sqliteOpenModeOptions = [
+  { label: '读写', value: 'readwrite' },
+  { label: '只读', value: 'readonly' },
 ];
 const sshAuthenticationOptions = [
   { label: '密码', value: 'password' },
@@ -781,6 +804,7 @@ async function openEditConnectionDialog() {
     createConnectionForm.sshPassphrase = '';
     hasStoredSshPassphrase.value = config.sshTunnel.hasPassphrase;
     sshPassphraseEdited.value = false;
+    createConnectionForm.sqliteOpenMode = config.sqliteOpenMode ?? 'readwrite';
     createConnectionForm.sqliteCipherEnabled = config.sqliteCipher.enabled;
     createConnectionForm.sqliteCipherHasStoredPassword = config.sqliteCipher.hasPassword;
     sqliteCipherPasswordEdited.value = false;
@@ -1653,6 +1677,7 @@ function resetCreateConnectionForm() {
   createConnectionForm.sshPassword = '';
   createConnectionForm.sshPrivateKeyPath = '';
   createConnectionForm.sshPassphrase = '';
+  createConnectionForm.sqliteOpenMode = 'readwrite';
   hasStoredSshPassword.value = false;
   sshPasswordEdited.value = false;
   hasStoredSshPassphrase.value = false;
@@ -1808,6 +1833,7 @@ async function submitCreateConnection() {
       username: createConnectionForm.provider === 'sqlite' || createConnectionForm.authentication === 'windows' ? null : createConnectionForm.username,
       password: createConnectionForm.provider === 'sqlite' || createConnectionForm.authentication === 'windows' ? null : createConnectionForm.password,
       trustServerCertificate: createConnectionForm.trustServerCertificate,
+      sqliteOpenMode: createConnectionForm.provider === 'sqlite' ? createConnectionForm.sqliteOpenMode : null,
       sshTunnel: {
         enabled: createConnectionForm.provider !== 'sqlite' && createConnectionForm.sshEnabled,
         authentication: createConnectionForm.sshAuthentication,
@@ -1851,6 +1877,7 @@ async function testCurrentConnection() {
       username: createConnectionForm.provider === 'sqlite' || createConnectionForm.authentication === 'windows' ? null : createConnectionForm.username,
       password: createConnectionForm.provider === 'sqlite' || createConnectionForm.authentication === 'windows' ? null : (createConnectionForm.password || null),
       trustServerCertificate: createConnectionForm.trustServerCertificate,
+      sqliteOpenMode: createConnectionForm.provider === 'sqlite' ? createConnectionForm.sqliteOpenMode : null,
       sshTunnel: {
         enabled: createConnectionForm.provider !== 'sqlite' && createConnectionForm.sshEnabled,
         authentication: createConnectionForm.sshAuthentication,
@@ -2622,6 +2649,14 @@ watch(() => store.connectedConnectionIds, (newIds) => {
                     <NButton tertiary type="primary" @click="browseSqliteDatabaseFile">选择...</NButton>
                   </div>
                   <NInput v-else v-model:value="createConnectionForm.host" class="connection-parameter-control" :placeholder="hostPlaceholder" />
+                </div>
+
+                <div v-if="createConnectionForm.provider === 'sqlite'" class="connection-parameter-row">
+                  <div class="connection-parameter-meta" title="控制 SQLite 默认以读写还是只读方式打开。右键菜单里的“只读连接”会在当前会话里临时覆盖这里的默认值。">
+                    <span class="connection-parameter-label">打开方式</span>
+                    <span class="connection-parameter-key">open_mode</span>
+                  </div>
+                  <NSelect v-model:value="createConnectionForm.sqliteOpenMode" :options="sqliteOpenModeOptions" class="connection-parameter-control" />
                 </div>
 
                 <div v-if="createConnectionForm.provider !== 'sqlite'" class="connection-parameter-row">

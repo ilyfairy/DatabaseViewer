@@ -42,6 +42,7 @@ public sealed class ConnectionStore
             Port = item.Port,
             Username = item.Username,
             Password = _codec.Decode(item.EncryptedPassword),
+            SqliteOpenMode = item.SqliteOpenMode,
             SqliteCipher = new SqliteCipherOptions
             {
                 Enabled = item.SqliteCipher.Enabled,
@@ -83,6 +84,7 @@ public sealed class ConnectionStore
             Port = item.Port,
             Username = item.Username,
             EncryptedPassword = _codec.Encode(item.Password),
+            SqliteOpenMode = item.SqliteOpenMode,
             TrustServerCertificate = item.TrustServerCertificate,
             SqliteCipher = new ConnectionSqliteCipherPersistenceModel
             {

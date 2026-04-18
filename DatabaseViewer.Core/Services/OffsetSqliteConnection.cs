@@ -19,12 +19,14 @@ internal static unsafe class NativeSqliteMethods
 
 internal static class OffsetSqliteConnectionFactory
 {
-    public static DbConnection Create(string filePath, SqliteCipherOptions options)
+    public static DbConnection Create(string filePath, SqliteCipherOptions options, SqliteOpenMode openMode)
     {
         SqliteOffsetVfs.Register();
         SqliteOffsetVfs.SetOffset(filePath, options.SkipBytes.GetValueOrDefault());
 
-        var openFlags = raw.SQLITE_OPEN_READWRITE | raw.SQLITE_OPEN_CREATE;
+        var openFlags = openMode == SqliteOpenMode.ReadOnly
+            ? raw.SQLITE_OPEN_READONLY
+            : raw.SQLITE_OPEN_READWRITE | raw.SQLITE_OPEN_CREATE;
         var openResult = raw.sqlite3_open_v2(filePath, out var databaseHandle, openFlags, SqliteOffsetVfs.VfsName);
         if (openResult != raw.SQLITE_OK)
         {

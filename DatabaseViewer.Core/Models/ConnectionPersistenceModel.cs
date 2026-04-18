@@ -20,6 +20,8 @@ public sealed class ConnectionPersistenceModel
 
     public bool TrustServerCertificate { get; set; }
 
+    public SqliteOpenMode SqliteOpenMode { get; set; } = SqliteOpenMode.ReadWrite;
+
     public ConnectionSqliteCipherPersistenceModel SqliteCipher { get; set; } = new();
 
     public ConnectionSshPersistenceModel Ssh { get; set; } = new();

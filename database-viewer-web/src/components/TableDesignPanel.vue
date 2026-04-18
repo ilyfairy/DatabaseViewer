@@ -111,6 +111,7 @@ const createIndexUnique = ref(false);
 const createIndexColumns = ref<string[]>([]);
 const designContextMenu = ref<{ kind: 'column' | 'index'; name: string; x: number; y: number } | null>(null);
 const designContextMenuOptions = computed<DropdownOption[]>(() => designContextMenu.value
+  && !isReadOnlyObject.value
   ? [{ label: designContextMenu.value.kind === 'column' ? '删除字段' : '删除索引', key: 'delete-design-entry' }]
   : []);
 const tableDesignSubtabsRef = ref<HTMLElement | { $el?: Element | null } | null>(null);
@@ -471,7 +472,17 @@ const selectedColumn = computed(() => {
 
   return draftColumns.value.find((column) => (column.originalName ?? column.name) === selectedEntry.value) ?? null;
 });
-const isReadOnlyObject = computed(() => !isCreateMode.value && design.value?.objectType === 'view');
+const isReadOnlyObject = computed(() => {
+  if (isCreateMode.value) {
+    return createContext.value ? store.isConnectionReadOnly(createContext.value.connectionId) : false;
+  }
+
+  if (design.value?.objectType === 'view') {
+    return true;
+  }
+
+  return design.value ? store.isConnectionReadOnly(design.value.connectionId) : false;
+});
 const objectLabel = computed(() => design.value?.objectType === 'view' ? '视图' : '表');
 const supportsCreateTableSchema = computed(() => createContext.value?.provider === 'sqlserver' || createContext.value?.provider === 'postgresql');
 const supportsIdentitySpec = computed(() => design.value?.provider === 'sqlserver' || design.value?.provider === 'postgresql');
@@ -1128,6 +1139,12 @@ async function submitCreateIndex() {
 
 function openDesignContextMenu(event: MouseEvent, kind: 'column' | 'index', name: string) {
   event.preventDefault();
+
+  if (isReadOnlyObject.value) {
+    closeDesignContextMenu();
+    return;
+  }
+
   focusSection(kind === 'column' ? 'columns' : 'indexes', name);
   designContextMenu.value = {
     kind,
@@ -1700,7 +1717,7 @@ watch(sectionTabs, (tabs) => {
       </div>
 
       <NAlert v-if="isReadOnlyObject" type="info" :show-icon="false" class="panel-inline-alert">
-        当前对象是视图。这里提供对象结构浏览，不提供字段级修改。
+        {{ design?.objectType === 'view' ? '当前对象是视图。这里提供对象结构浏览，不提供字段级修改。' : '当前 SQLite 连接以只读方式打开。这里提供对象结构浏览，不提供结构修改。' }}
       </NAlert>
 
       <NTabs

@@ -22,6 +22,8 @@ public sealed class ConnectionDefinition
 
     public SshTunnelOptions SshTunnel { get; set; } = new();
 
+    public SqliteOpenMode SqliteOpenMode { get; set; } = SqliteOpenMode.ReadWrite;
+
     public SqliteCipherOptions SqliteCipher { get; set; } = new();
 
     public string DisplayLabel => $"{Name} ({ProviderType})";

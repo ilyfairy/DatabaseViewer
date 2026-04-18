@@ -1116,6 +1116,21 @@ export const useExplorerStore = defineStore('explorer', () => {
   function getConnectionForTable(tableKey: string) {
     return connections.value.find((connection) => connection.databases.some((database) => [...database.tables, ...database.views].some((table) => table.key === tableKey)));
   }
+  function isConnectionReadOnly(connectionId: string) {
+    const connection = connections.value.find((entry) => entry.id === connectionId);
+    return connection?.provider === 'sqlite' && connection.sqliteOpenMode === 'readonly';
+  }
+
+  function isTableConnectionReadOnly(tableKey: string) {
+    const connection = getConnectionForTable(tableKey);
+    return connection?.provider === 'sqlite' && connection.sqliteOpenMode === 'readonly';
+  }
+
+  function assertTableWritable(tableKey: string, actionLabel: string) {
+    if (isTableConnectionReadOnly(tableKey)) {
+      throw new Error(`当前 SQLite 连接以只读方式打开，不能${actionLabel}。`);
+    }
+  }
 
   async function ensureTableLoaded(tableKey: string, forceReload = false) {
     const cached = loadedTables.value[tableKey];
@@ -1550,6 +1565,7 @@ export const useExplorerStore = defineStore('explorer', () => {
   }
 
   async function executeTableDesignSql(tableKey: string, sql: string, successMessage = '表设计已更新') {
+    assertTableWritable(tableKey, '修改表结构');
     const design = getTableDesign(tableKey);
     if (!design) {
       throw new Error('表设计尚未加载完成。');
@@ -1707,6 +1723,7 @@ export const useExplorerStore = defineStore('explorer', () => {
   }
 
   async function updateTableCell(request: TableCellUpdateRequest) {
+    assertTableWritable(request.tableKey, '修改数据');
     try {
       const response = await requestJson<TableCellUpdateResponse>('/api/explorer/table-cell', {
         method: 'POST',
@@ -1732,6 +1749,7 @@ export const useExplorerStore = defineStore('explorer', () => {
   }
 
   async function insertTableRow(request: TableRowInsertRequest) {
+    assertTableWritable(request.tableKey, '插入新行');
     try {
       const response = await requestJson<TableRowInsertResponse>('/api/explorer/table-row', {
         method: 'POST',
@@ -1764,6 +1782,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     if (!rowKeys.length) {
       return;
     }
+    assertTableWritable(tableKey, '删除行');
 
     try {
       for (const rowKey of rowKeys) {
@@ -3155,6 +3174,8 @@ export const useExplorerStore = defineStore('explorer', () => {
     getCatalogObject,
     getCatalogObjectState,
     getLoadedTable,
+    isConnectionReadOnly,
+    isTableConnectionReadOnly,
     ensureTableLoaded,
     ensureTableDesignLoaded,
     ensureCatalogObjectLoaded,

@@ -1,5 +1,6 @@
 export type ProviderType = 'sqlserver' | 'mysql' | 'postgresql' | 'sqlite'
 export type AuthenticationMode = 'windows' | 'password'
+export type SqliteOpenMode = 'readwrite' | 'readonly'
 export type CellValue = string | number | boolean | null
 export type DatabaseObjectType = 'table' | 'view'
 export type CatalogObjectType = 'synonym' | 'sequence' | 'rule' | 'default' | 'user-defined-type' | 'database-trigger' | 'xml-schema-collection' | 'assembly'
@@ -12,6 +13,7 @@ export interface ConnectionInfo {
   port?: number
   authentication: AuthenticationMode
   accent: string
+  sqliteOpenMode?: SqliteOpenMode | null
   error?: string | null
   databases: DatabaseInfo[]
 }
@@ -34,6 +36,7 @@ export interface CreateConnectionRequest {
   username?: string | null
   password?: string | null
   trustServerCertificate: boolean
+  sqliteOpenMode?: SqliteOpenMode | null
   sshTunnel: SshTunnelRequest
   sqliteCipher: SqliteCipherRequest
 }
@@ -84,6 +87,7 @@ export interface ConnectionConfig {
   username?: string | null
   hasPassword: boolean
   trustServerCertificate: boolean
+  sqliteOpenMode?: SqliteOpenMode | null
   sshTunnel: SshTunnelConfig
   sqliteCipher: SqliteCipherConfig
 }

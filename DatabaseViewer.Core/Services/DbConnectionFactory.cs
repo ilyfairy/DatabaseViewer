@@ -123,20 +123,25 @@ public static class DbConnectionFactory
 
         var filePath = Path.GetFullPath(definition.Host.Trim());
         var directory = Path.GetDirectoryName(filePath);
-        if (!string.IsNullOrWhiteSpace(directory))
+        if (!File.Exists(filePath) && definition.SqliteOpenMode == Models.SqliteOpenMode.ReadOnly)
+        {
+            throw new InvalidOperationException("SQLite 只读连接要求数据库文件已存在。", null);
+        }
+
+        if (definition.SqliteOpenMode != Models.SqliteOpenMode.ReadOnly && !string.IsNullOrWhiteSpace(directory))
         {
             Directory.CreateDirectory(directory);
         }
 
         if (definition.SqliteCipher.SkipBytes.GetValueOrDefault() > 0)
         {
-            return OffsetSqliteConnectionFactory.Create(filePath, definition.SqliteCipher);
+            return OffsetSqliteConnectionFactory.Create(filePath, definition.SqliteCipher, definition.SqliteOpenMode);
         }
 
         var builder = new SqliteConnectionStringBuilder
         {
             DataSource = filePath,
-            Mode = SqliteOpenMode.ReadWriteCreate,
+            Mode = definition.SqliteOpenMode == Models.SqliteOpenMode.ReadOnly ? Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly : Microsoft.Data.Sqlite.SqliteOpenMode.ReadWriteCreate,
             Cache = SqliteCacheMode.Shared,
             ForeignKeys = !definition.SqliteCipher.Enabled,
         };

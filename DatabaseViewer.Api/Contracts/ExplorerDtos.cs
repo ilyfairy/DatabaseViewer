@@ -18,6 +18,7 @@ public sealed record ConnectionNodeDto(
     int? Port,
     string Authentication,
     string Accent,
+    string? SqliteOpenMode,
     string? Error,
     IReadOnlyList<DatabaseNodeDto> Databases);
 
@@ -282,6 +283,7 @@ public sealed record CreateConnectionRequest(
     string? Username,
     string? Password,
     bool TrustServerCertificate,
+    string? SqliteOpenMode,
     SshTunnelRequest? SshTunnel,
     SqliteCipherRequest? SqliteCipher);
 
@@ -295,6 +297,7 @@ public sealed record ConnectionConfigResponse(
     string? Username,
     bool HasPassword,
     bool TrustServerCertificate,
+    string? SqliteOpenMode,
     SshTunnelConfigResponse SshTunnel,
     SqliteCipherConfigResponse SqliteCipher);
 
@@ -308,6 +311,7 @@ public sealed record TestConnectionRequest(
     string? Username,
     string? Password,
     bool TrustServerCertificate,
+    string? SqliteOpenMode,
     SshTunnelRequest? SshTunnel,
     SqliteCipherRequest? SqliteCipher);
 
