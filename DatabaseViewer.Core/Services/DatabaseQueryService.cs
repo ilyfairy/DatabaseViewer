@@ -105,8 +105,12 @@ public sealed class DatabaseQueryService
             null => null,
             DBNull => null,
             int intValue => intValue,
+            uint uintValue when uintValue <= int.MaxValue => (int)uintValue,
+            uint uintValue => int.MaxValue,
             long longValue when longValue <= int.MaxValue && longValue >= int.MinValue => (int)longValue,
             long longValue => (int)Math.Clamp(longValue, int.MinValue, int.MaxValue),
+            ulong ulongValue when ulongValue <= int.MaxValue => (int)ulongValue,
+            ulong => int.MaxValue,
             decimal decimalValue => (int)decimalValue,
             _ => Convert.ToInt32(scalar, System.Globalization.CultureInfo.InvariantCulture),
         };
