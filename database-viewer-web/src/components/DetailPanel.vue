@@ -376,7 +376,7 @@ onBeforeUnmount(() => {
               :key="column.name"
               class="detail-field-row"
             >
-              <div class="detail-field-label">{{ column.name }}</div>
+              <div class="detail-field-label" :title="column.name">{{ column.name }}</div>
               <div
                 class="detail-field-value"
                 :class="{ 'detail-field-value-binary': isBinaryColumn(column.name, column.type) }"
@@ -542,14 +542,13 @@ onBeforeUnmount(() => {
 // ── Detail fields ──
 .detail-fields {
   display: grid;
-  gap: $gap-xs;
+  grid-template-columns: fit-content(124px) minmax(0, 1fr);
+  column-gap: 3px;
+  row-gap: $gap-xs;
 }
 
 .detail-field-row {
-  display: grid;
-  grid-template-columns: 64px minmax(0, 1fr);
-  gap: 3px;
-  align-items: center;
+  display: contents;
 }
 
 .detail-field-label {
@@ -562,6 +561,9 @@ onBeforeUnmount(() => {
   color: $color-text-heading;
   font-size: 9.5px;
   font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .detail-field-value {
