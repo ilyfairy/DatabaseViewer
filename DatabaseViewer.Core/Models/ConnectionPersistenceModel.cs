@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace DatabaseViewer.Core.Models;
 
 public sealed class ConnectionPersistenceModel
@@ -16,15 +18,15 @@ public sealed class ConnectionPersistenceModel
 
     public string EncryptedPassword { get; set; } = string.Empty;
 
-    public ConnectionSqlServerPersistenceModel SqlServer { get; set; } = new();
+    public ConnectionSqlServerPersistenceModel? SqlServer { get; set; }
 
-    public ConnectionMySqlPersistenceModel MySql { get; set; } = new();
+    public ConnectionMySqlPersistenceModel? MySql { get; set; }
 
-    public ConnectionPostgreSqlPersistenceModel PostgreSql { get; set; } = new();
+    public ConnectionPostgreSqlPersistenceModel? PostgreSql { get; set; }
 
-    public ConnectionSqlitePersistenceModel Sqlite { get; set; } = new();
+    public ConnectionSqlitePersistenceModel? Sqlite { get; set; }
 
-    public ConnectionSshPersistenceModel Ssh { get; set; } = new();
+    public ConnectionSshPersistenceModel? Ssh { get; set; }
 }
 
 public sealed class ConnectionSqlServerPersistenceModel
@@ -47,6 +49,8 @@ public sealed class ConnectionSqlitePersistenceModel
     public SqliteOpenMode OpenMode { get; set; } = SqliteOpenMode.ReadWrite;
 
     public ConnectionSqliteCipherPersistenceModel Cipher { get; set; } = new();
+
+    public ConnectionSqliteVfsPersistenceModel Vfs { get; set; } = new();
 }
 
 public sealed class ConnectionSqliteCipherPersistenceModel
@@ -65,13 +69,30 @@ public sealed class ConnectionSqliteCipherPersistenceModel
 
     public int? PlaintextHeaderSize { get; set; }
 
-    public int? SkipBytes { get; set; }
-
     public bool? UseHmac { get; set; }
 
     public string KdfAlgorithm { get; set; } = string.Empty;
 
     public string HmacAlgorithm { get; set; } = string.Empty;
+}
+
+public sealed class ConnectionSqliteVfsPersistenceModel
+{
+    public SqliteVfsKind Kind { get; set; } = SqliteVfsKind.Default;
+
+    public ConnectionSqliteBuiltInOffsetVfsPersistenceModel BuiltInOffset { get; set; } = new();
+
+    public ConnectionSqliteNamedVfsPersistenceModel Named { get; set; } = new();
+}
+
+public sealed class ConnectionSqliteBuiltInOffsetVfsPersistenceModel
+{
+    public int? SkipBytes { get; set; }
+}
+
+public sealed class ConnectionSqliteNamedVfsPersistenceModel
+{
+    public string Name { get; set; } = string.Empty;
 }
 
 public sealed class ConnectionSshPersistenceModel

@@ -476,6 +476,11 @@ public sealed class DatabaseQueryService
             };
         }
 
+        if (connection is OffsetSqliteConnection sqliteConnection)
+        {
+            return OffsetSqliteScriptExecutor.Execute(sqliteConnection, sql, MaxSqlResultRows);
+        }
+
         await using var command = connection.CreateCommand();
         command.CommandText = sql;
         command.CommandTimeout = 90;

@@ -4,6 +4,8 @@ public sealed class ApplicationSettings
 {
     public bool ShowTableRowCounts { get; set; } = true;
 
+    public List<SqliteLoadableExtensionOptions> SqliteExtensions { get; set; } = [];
+
     public WorkspaceLayoutSettings WorkspaceLayout { get; set; } = new();
 }
 

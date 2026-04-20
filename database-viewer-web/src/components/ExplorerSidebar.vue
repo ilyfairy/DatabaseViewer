@@ -8,7 +8,7 @@ import ContextDropdown from './ContextDropdown.vue';
 import StoredMaskedPasswordInput from './StoredMaskedPasswordInput.vue';
 import { buildSqliteDatabaseToolSql, findSqliteDatabaseTool, getSqliteDatabaseTools } from '../lib/sqliteDatabaseTools';
 import { useExplorerStore } from '../stores/explorer';
-import type { CatalogObjectType, DatabaseProviderType, RoutineInfo, SqliteOpenMode, SqlServerAuthenticationMode, SynonymInfo, TableColumn, TableDesignSection, TableSummary } from '../types/explorer';
+import type { CatalogObjectType, DatabaseProviderType, RoutineInfo, SqliteOpenMode, SqliteVfsKind, SqlServerAuthenticationMode, SynonymInfo, TableColumn, TableDesignSection, TableSummary } from '../types/explorer';
 
 const store = useExplorerStore();
 const expandedConnections = ref<string[]>([]);
@@ -51,7 +51,7 @@ const sqliteRekeyVisible = ref(false);
 const sqliteRekeyLoading = ref(false);
 const sqliteRekeyError = ref<string | null>(null);
 const sqliteRekeyTarget = ref<{ connectionId: string; connectionName: string; currentEncrypted: boolean } | null>(null);
-const activeConnectionSettingsTab = ref<'general' | 'ssh' | 'cipher'>('general');
+const activeConnectionSettingsTab = ref<'general' | 'ssh' | 'cipher' | 'vfs'>('general');
 const createConnectionForm = reactive({
   name: '',
   provider: 'sqlserver' as DatabaseProviderType,
@@ -74,10 +74,14 @@ const sqliteConnectionForm = reactive({
   cipherKdfIter: '',
   cipherCompatibility: '',
   cipherPlaintextHeaderSize: '',
-  cipherSkipBytes: '',
   cipherUseHmac: 'default' as 'default' | 'enabled' | 'disabled',
   cipherKdfAlgorithm: '' as '' | 'PBKDF2_HMAC_SHA1' | 'PBKDF2_HMAC_SHA256' | 'PBKDF2_HMAC_SHA512',
   cipherHmacAlgorithm: '' as '' | 'HMAC_SHA1' | 'HMAC_SHA256' | 'HMAC_SHA512',
+});
+const sqliteVfsForm = reactive({
+  kind: 'default' as SqliteVfsKind,
+  builtInOffsetSkipBytes: '',
+  namedName: '',
 });
 const sshTunnelForm = reactive({
   enabled: false,
@@ -296,6 +300,11 @@ const providerOptions = [
 const sqliteOpenModeOptions = [
   { label: '读写', value: 'readwrite' },
   { label: '只读', value: 'readonly' },
+];
+const sqliteVfsKindOptions = [
+  { label: '默认 SQLite VFS', value: 'default' },
+  { label: '内置偏移 VFS', value: 'builtInOffset' },
+  { label: '命名 VFS', value: 'named' },
 ];
 const sshAuthenticationOptions = [
   { label: '密码', value: 'password' },
@@ -822,9 +831,6 @@ async function openEditConnectionDialog() {
     sqliteConnectionForm.cipherPlaintextHeaderSize = config.sqlite.cipher.plaintextHeaderSize !== null && config.sqlite.cipher.plaintextHeaderSize !== undefined
       ? String(config.sqlite.cipher.plaintextHeaderSize)
       : '';
-    sqliteConnectionForm.cipherSkipBytes = config.sqlite.cipher.skipBytes !== null && config.sqlite.cipher.skipBytes !== undefined
-      ? String(config.sqlite.cipher.skipBytes)
-      : '';
     sqliteConnectionForm.cipherUseHmac = config.sqlite.cipher.useHmac === true
       ? 'enabled'
       : config.sqlite.cipher.useHmac === false
@@ -832,6 +838,11 @@ async function openEditConnectionDialog() {
         : 'default';
     sqliteConnectionForm.cipherKdfAlgorithm = config.sqlite.cipher.kdfAlgorithm ?? '';
     sqliteConnectionForm.cipherHmacAlgorithm = config.sqlite.cipher.hmacAlgorithm ?? '';
+    sqliteVfsForm.kind = config.sqlite.vfs.kind;
+    sqliteVfsForm.namedName = config.sqlite.vfs.named.name ?? '';
+    sqliteVfsForm.builtInOffsetSkipBytes = config.sqlite.vfs.builtInOffset.skipBytes !== null && config.sqlite.vfs.builtInOffset.skipBytes !== undefined
+      ? String(config.sqlite.vfs.builtInOffset.skipBytes)
+      : '';
     activeConnectionSettingsTab.value = 'general';
     createConnectionVisible.value = true;
   }
@@ -1697,10 +1708,12 @@ function resetCreateConnectionForm() {
   sqliteConnectionForm.cipherKdfIter = '';
   sqliteConnectionForm.cipherCompatibility = '';
   sqliteConnectionForm.cipherPlaintextHeaderSize = '';
-  sqliteConnectionForm.cipherSkipBytes = '';
   sqliteConnectionForm.cipherUseHmac = 'default';
   sqliteConnectionForm.cipherKdfAlgorithm = '';
   sqliteConnectionForm.cipherHmacAlgorithm = '';
+  sqliteVfsForm.kind = 'default';
+  sqliteVfsForm.builtInOffsetSkipBytes = '';
+  sqliteVfsForm.namedName = '';
   activeConnectionSettingsTab.value = 'general';
   createConnectionError.value = null;
 }
@@ -1730,7 +1743,7 @@ function handleProviderChange(provider: DatabaseProviderType) {
     activeConnectionSettingsTab.value = 'general';
   }
 
-  if (provider !== 'sqlite' && activeConnectionSettingsTab.value === 'cipher') {
+  if (provider !== 'sqlite' && (activeConnectionSettingsTab.value === 'cipher' || activeConnectionSettingsTab.value === 'vfs')) {
     activeConnectionSettingsTab.value = 'general';
   }
 }
@@ -1767,7 +1780,6 @@ function buildSqliteCipherPayload() {
       kdfIter: null,
       cipherCompatibility: null,
       plaintextHeaderSize: null,
-      skipBytes: null,
       useHmac: null,
       kdfAlgorithm: null,
       hmacAlgorithm: null,
@@ -1784,7 +1796,6 @@ function buildSqliteCipherPayload() {
     kdfIter: sqliteConnectionForm.cipherEnabled ? toNullableNumber(sqliteConnectionForm.cipherKdfIter) : null,
     cipherCompatibility: sqliteConnectionForm.cipherEnabled ? toNullableNumber(sqliteConnectionForm.cipherCompatibility) : null,
     plaintextHeaderSize: sqliteConnectionForm.cipherEnabled ? toNullableNumber(sqliteConnectionForm.cipherPlaintextHeaderSize) : null,
-    skipBytes: sqliteConnectionForm.cipherEnabled ? toNullableNumber(sqliteConnectionForm.cipherSkipBytes) : null,
     useHmac: sqliteConnectionForm.cipherEnabled ? toNullableSqliteCipherUseHmac(sqliteConnectionForm.cipherUseHmac) : null,
     kdfAlgorithm: sqliteConnectionForm.cipherEnabled && sqliteConnectionForm.cipherKdfAlgorithm
       ? sqliteConnectionForm.cipherKdfAlgorithm
@@ -1792,6 +1803,34 @@ function buildSqliteCipherPayload() {
     hmacAlgorithm: sqliteConnectionForm.cipherEnabled && sqliteConnectionForm.cipherHmacAlgorithm
       ? sqliteConnectionForm.cipherHmacAlgorithm
       : null,
+  };
+}
+
+function buildSqliteVfsPayload() {
+  if (createConnectionForm.provider !== 'sqlite') {
+    return {
+      kind: null,
+      builtInOffset: {
+        skipBytes: null,
+      },
+      named: {
+        name: null,
+      },
+    };
+  }
+
+  return {
+    kind: sqliteVfsForm.kind,
+    builtInOffset: {
+      skipBytes: sqliteVfsForm.kind === 'builtInOffset'
+        ? toNullableNumber(sqliteVfsForm.builtInOffsetSkipBytes)
+        : null,
+    },
+    named: {
+      name: sqliteVfsForm.kind === 'named' && sqliteVfsForm.namedName.trim()
+        ? sqliteVfsForm.namedName.trim()
+        : null,
+    },
   };
 }
 
@@ -1846,6 +1885,7 @@ async function submitCreateConnection() {
       sqlite: {
         openMode: createConnectionForm.provider === 'sqlite' ? sqliteConnectionForm.openMode : null,
         cipher: buildSqliteCipherPayload(),
+        vfs: buildSqliteVfsPayload(),
       },
       sshTunnel: {
         enabled: createConnectionForm.provider !== 'sqlite' && sshTunnelForm.enabled,
@@ -1896,6 +1936,7 @@ async function testCurrentConnection() {
       sqlite: {
         openMode: createConnectionForm.provider === 'sqlite' ? sqliteConnectionForm.openMode : null,
         cipher: buildSqliteCipherPayload(),
+        vfs: buildSqliteVfsPayload(),
       },
       sshTunnel: {
         enabled: createConnectionForm.provider !== 'sqlite' && sshTunnelForm.enabled,
@@ -2670,7 +2711,7 @@ watch(() => store.connectedConnectionIds, (newIds) => {
                 </div>
 
                 <div v-if="createConnectionForm.provider === 'sqlite'" class="connection-parameter-row">
-                  <div class="connection-parameter-meta" title="控制 SQLite 默认以读写还是只读方式打开。右键菜单里的“只读连接”会在当前会话里临时覆盖这里的默认值。">
+                  <div class="connection-parameter-meta" title="控制 SQLite 默认以读写还是只读方式打开。">
                     <span class="connection-parameter-label">打开方式</span>
                     <span class="connection-parameter-key">open_mode</span>
                   </div>
@@ -2790,14 +2831,6 @@ watch(() => store.connectedConnectionIds, (newIds) => {
                   </div>
 
                   <div class="connection-parameter-row">
-                    <div class="connection-parameter-meta" title="读取数据库前跳过的头部字节数。普通 SQLite 留空即可。">
-                      <span class="connection-parameter-label">跳过字节</span>
-                      <span class="connection-parameter-key">skip_bytes</span>
-                    </div>
-                    <NInput v-model:value="sqliteConnectionForm.cipherSkipBytes" class="connection-parameter-control" placeholder="例如 1024" inputmode="numeric" />
-                  </div>
-
-                  <div class="connection-parameter-row">
                     <div class="connection-parameter-meta" title="是否启用页级 HMAC 校验。默认通常跟随 SQLCipher 版本。">
                       <span class="connection-parameter-label">HMAC 校验</span>
                       <span class="connection-parameter-key">cipher_use_hmac</span>
@@ -2822,6 +2855,38 @@ watch(() => store.connectedConnectionIds, (newIds) => {
                   </div>
                 </div>
               </template>
+            </div>
+          </NTabPane>
+          <NTabPane v-if="createConnectionForm.provider === 'sqlite'" name="vfs" tab="VFS">
+            <div class="connection-dialog-form connection-dialog-form-section">
+              <div class="connection-parameter-grid">
+                <div class="connection-parameter-row">
+                  <div class="connection-parameter-meta" title="选择 SQLite 打开数据库时使用的虚拟文件系统。默认情况下使用 SQLite 自身的默认 VFS。">
+                    <span class="connection-parameter-label">VFS 类型</span>
+                    <span class="connection-parameter-key">vfs.kind</span>
+                  </div>
+                  <NSelect v-model:value="sqliteVfsForm.kind" :options="sqliteVfsKindOptions" class="connection-parameter-control" />
+                </div>
+
+                <div v-if="sqliteVfsForm.kind === 'builtInOffset'" class="connection-parameter-row">
+                  <div class="connection-parameter-meta" title="内置偏移 VFS 会先跳过文件头部指定字节数，再把后续内容当作 SQLite 数据库读取。">
+                    <span class="connection-parameter-label">跳过字节</span>
+                    <span class="connection-parameter-key">vfs.built_in_offset.skip_bytes</span>
+                  </div>
+                  <NInput v-model:value="sqliteVfsForm.builtInOffsetSkipBytes" class="connection-parameter-control" placeholder="例如 1024" inputmode="numeric" />
+                </div>
+
+                <div v-if="sqliteVfsForm.kind === 'named'" class="connection-parameter-row">
+                  <div class="connection-parameter-meta" title="填写要使用的命名 SQLite VFS。它要么来自应用启动时就已存在的内建 VFS，要么来自全局设置中配置并已加载的 SQLite 扩展。">
+                    <span class="connection-parameter-label">VFS 名称</span>
+                    <span class="connection-parameter-key">vfs.named.name</span>
+                  </div>
+                  <NInput v-model:value="sqliteVfsForm.namedName" class="connection-parameter-control" placeholder="例如 my_custom_vfs" />
+                </div>
+              </div>
+              <NText depth="3">
+                内置偏移 VFS 适合“文件头前面还有额外字节、真正 SQLite 内容从中间开始”的场景；命名 VFS 只负责选择要使用的 VFS 名称。真正的 SQLite 扩展加载统一在全局设置里配置。
+              </NText>
             </div>
           </NTabPane>
           <NTabPane v-if="createConnectionForm.provider !== 'sqlite'" name="ssh" tab="SSH">

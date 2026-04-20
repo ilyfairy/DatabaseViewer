@@ -33,20 +33,26 @@ public sealed class ExplorerApiService
     public async Task<ExplorerSettingsDto> GetSettingsAsync()
     {
         var settings = await _applicationSettingsStore.LoadAsync();
-        return new ExplorerSettingsDto(settings.ShowTableRowCounts);
+        return new ExplorerSettingsDto(
+            settings.ShowTableRowCounts,
+            settings.SqliteExtensions.Select(ToSqliteLoadableExtensionConfigResponse).ToArray());
     }
 
     public async Task<ExplorerSettingsDto> UpdateSettingsAsync(UpdateExplorerSettingsRequest request)
     {
+        var existingSettings = await _applicationSettingsStore.LoadAsync();
         var settings = new ApplicationSettings
         {
             ShowTableRowCounts = request.ShowTableRowCounts,
-            WorkspaceLayout = (await _applicationSettingsStore.LoadAsync()).WorkspaceLayout,
+            SqliteExtensions = ResolveGlobalSqliteLoadableExtensions(request.SqliteExtensions),
+            WorkspaceLayout = existingSettings.WorkspaceLayout,
         };
 
         await _applicationSettingsStore.SaveAsync(settings);
         InvalidateMetadataCaches();
-        return new ExplorerSettingsDto(settings.ShowTableRowCounts);
+        return new ExplorerSettingsDto(
+            settings.ShowTableRowCounts,
+            settings.SqliteExtensions.Select(ToSqliteLoadableExtensionConfigResponse).ToArray());
     }
 
     public async Task<WorkspaceLayoutDto> GetWorkspaceLayoutAsync()
@@ -379,10 +385,14 @@ public sealed class ExplorerApiService
                     connection.Sqlite.Cipher.KdfIter,
                     connection.Sqlite.Cipher.CipherCompatibility,
                     connection.Sqlite.Cipher.PlaintextHeaderSize,
-                    connection.Sqlite.Cipher.SkipBytes,
                     connection.Sqlite.Cipher.UseHmac,
                     string.IsNullOrWhiteSpace(connection.Sqlite.Cipher.KdfAlgorithm) ? null : connection.Sqlite.Cipher.KdfAlgorithm,
-                    string.IsNullOrWhiteSpace(connection.Sqlite.Cipher.HmacAlgorithm) ? null : connection.Sqlite.Cipher.HmacAlgorithm)),
+                    string.IsNullOrWhiteSpace(connection.Sqlite.Cipher.HmacAlgorithm) ? null : connection.Sqlite.Cipher.HmacAlgorithm),
+                new SqliteVfsConfigResponse(
+                    ToSqliteVfsKindKey(connection.Sqlite.Vfs.Kind),
+                    new SqliteBuiltInOffsetVfsConfigResponse(connection.Sqlite.Vfs.BuiltInOffset.SkipBytes),
+                    new SqliteNamedVfsConfigResponse(
+                        string.IsNullOrWhiteSpace(connection.Sqlite.Vfs.Named.Name) ? null : connection.Sqlite.Vfs.Named.Name))),
             new SshTunnelConfigResponse(
                 connection.SshTunnel.Enabled,
                 ToSshAuthenticationKey(connection.SshTunnel.AuthenticationMode),
@@ -1054,9 +1064,10 @@ public sealed class ExplorerApiService
             ? string.Empty
             : request.Password ?? existing?.Password ?? string.Empty;
 
-        var sqliteRequest = request.Sqlite ?? new SqliteConnectionRequest(null, null);
-        var sqliteCipherRequest = sqliteRequest.Cipher ?? new SqliteCipherRequest(false, null, null, null, null, null, null, null, null, null, null);
+        var sqliteRequest = request.Sqlite ?? new SqliteConnectionRequest(null, null, null);
+        var sqliteCipherRequest = sqliteRequest.Cipher ?? new SqliteCipherRequest(false, null, null, null, null, null, null, null, null, null);
         var sqliteCipher = ResolveSqliteCipherOptions(providerType, sqliteCipherRequest, existing?.Sqlite.Cipher);
+        var sqliteVfs = ResolveSqliteVfsOptions(providerType, sqliteRequest.Vfs, existing?.Sqlite.Vfs);
         var sqliteOpenMode = providerType == DatabaseProviderType.Sqlite
             ? ParseSqliteOpenMode(sqliteRequest.OpenMode ?? ToSqliteOpenModeKey(existing?.Sqlite.OpenMode ?? SqliteOpenMode.ReadWrite))
             : SqliteOpenMode.ReadWrite;
@@ -1130,6 +1141,7 @@ public sealed class ExplorerApiService
             {
                 OpenMode = sqliteOpenMode,
                 Cipher = sqliteCipher,
+                Vfs = sqliteVfs,
             },
             SshTunnel = new SshTunnelOptions
             {
@@ -1206,7 +1218,6 @@ public sealed class ExplorerApiService
         ValidateSqliteCipherNumber(request.KdfIter, "kdf_iter", minimumValue: 1);
         ValidateSqliteCipherNumber(request.CipherCompatibility, "cipher_compatibility", minimumValue: 1, maximumValue: 4);
         ValidateSqliteCipherNumber(request.PlaintextHeaderSize, "cipher_plaintext_header_size", minimumValue: 0);
-        ValidateSqliteCipherNumber(request.SkipBytes, "skip_bytes", minimumValue: 0);
 
         return new SqliteCipherOptions
         {
@@ -1217,11 +1228,67 @@ public sealed class ExplorerApiService
             KdfIter = request.KdfIter,
             CipherCompatibility = request.CipherCompatibility,
             PlaintextHeaderSize = request.PlaintextHeaderSize,
-            SkipBytes = request.SkipBytes,
             UseHmac = request.UseHmac,
             KdfAlgorithm = normalizedKdfAlgorithm,
             HmacAlgorithm = normalizedHmacAlgorithm,
         };
+    }
+
+    private static SqliteVfsOptions ResolveSqliteVfsOptions(DatabaseProviderType providerType, SqliteVfsRequest? request, SqliteVfsOptions? existing)
+    {
+        if (providerType != DatabaseProviderType.Sqlite)
+        {
+            return new SqliteVfsOptions();
+        }
+
+        var kind = ParseSqliteVfsKind(request?.Kind ?? ToSqliteVfsKindKey(existing?.Kind ?? SqliteVfsKind.Default));
+        var namedVfsName = request?.Named?.Name ?? existing?.Named.Name ?? string.Empty;
+        var skipBytes = request?.BuiltInOffset?.SkipBytes ?? existing?.BuiltInOffset.SkipBytes;
+
+        if (kind == SqliteVfsKind.BuiltInOffset)
+        {
+            ValidateSqliteVfsNumber(skipBytes, "skip_bytes", minimumValue: 1);
+        }
+
+        if (kind == SqliteVfsKind.Named && string.IsNullOrWhiteSpace(namedVfsName))
+        {
+            throw new InvalidOperationException("自定义 SQLite VFS 需要填写已注册的 VFS 名称。", null);
+        }
+
+        return new SqliteVfsOptions
+        {
+            Kind = kind,
+            BuiltInOffset = new SqliteBuiltInOffsetVfsOptions
+            {
+                SkipBytes = kind == SqliteVfsKind.BuiltInOffset ? skipBytes : null,
+            },
+            Named = new SqliteNamedVfsOptions
+            {
+                Name = kind == SqliteVfsKind.Named ? namedVfsName.Trim() : string.Empty,
+            },
+        };
+    }
+
+    private static List<SqliteLoadableExtensionOptions> ResolveGlobalSqliteLoadableExtensions(IReadOnlyList<SqliteLoadableExtensionRequest>? requests)
+    {
+        return requests
+            ?.Where(request => !string.IsNullOrWhiteSpace(request.Path))
+            .Select(request => new SqliteLoadableExtensionOptions
+            {
+                Path = request.Path!.Trim(),
+                EntryPoint = string.IsNullOrWhiteSpace(request.EntryPoint) ? string.Empty : request.EntryPoint.Trim(),
+                Phase = ParseSqliteLoadableExtensionPhase(request.Phase),
+            })
+            .ToList()
+            ?? [];
+    }
+
+    private static SqliteLoadableExtensionConfigResponse ToSqliteLoadableExtensionConfigResponse(SqliteLoadableExtensionOptions extension)
+    {
+        return new SqliteLoadableExtensionConfigResponse(
+            string.IsNullOrWhiteSpace(extension.Path) ? null : extension.Path,
+            string.IsNullOrWhiteSpace(extension.EntryPoint) ? null : extension.EntryPoint,
+            ToSqliteLoadableExtensionPhaseKey(extension.Phase));
     }
 
     private static void ValidateSqliteCipherNumber(int? value, string optionName, int minimumValue, int? maximumValue = null)
@@ -1234,6 +1301,19 @@ public sealed class ExplorerApiService
         if (value.Value < minimumValue || (maximumValue.HasValue && value.Value > maximumValue.Value))
         {
             throw new InvalidOperationException($"SQLite 加密参数 {optionName} 超出允许范围。", null);
+        }
+    }
+
+    private static void ValidateSqliteVfsNumber(int? value, string optionName, int minimumValue)
+    {
+        if (!value.HasValue)
+        {
+            throw new InvalidOperationException($"SQLite VFS 参数 {optionName} 不能为空。", null);
+        }
+
+        if (value.Value < minimumValue)
+        {
+            throw new InvalidOperationException($"SQLite VFS 参数 {optionName} 超出允许范围。", null);
         }
     }
 
@@ -1262,6 +1342,27 @@ public sealed class ExplorerApiService
         };
     }
 
+    private static SqliteVfsKind ParseSqliteVfsKind(string? value)
+    {
+        return value?.ToLowerInvariant() switch
+        {
+            "builtinoffset" => SqliteVfsKind.BuiltInOffset,
+            "built-in-offset" => SqliteVfsKind.BuiltInOffset,
+            "named" => SqliteVfsKind.Named,
+            _ => SqliteVfsKind.Default,
+        };
+    }
+
+    private static SqliteLoadableExtensionPhase ParseSqliteLoadableExtensionPhase(string? value)
+    {
+        return value?.ToLowerInvariant() switch
+        {
+            "postopen" => SqliteLoadableExtensionPhase.PostOpen,
+            "post-open" => SqliteLoadableExtensionPhase.PostOpen,
+            _ => SqliteLoadableExtensionPhase.PreOpen,
+        };
+    }
+
     private static ConnectionDefinition CloneConnectionDefinition(ConnectionDefinition source)
     {
         return new ConnectionDefinition
@@ -1284,6 +1385,7 @@ public sealed class ExplorerApiService
             {
                 OpenMode = source.Sqlite.OpenMode,
                 Cipher = CloneSqliteCipherOptions(source.Sqlite.Cipher),
+                Vfs = CloneSqliteVfsOptions(source.Sqlite.Vfs),
             },
             SshTunnel = new SshTunnelOptions
             {
@@ -1310,16 +1412,46 @@ public sealed class ExplorerApiService
             KdfIter = source.KdfIter,
             CipherCompatibility = source.CipherCompatibility,
             PlaintextHeaderSize = source.PlaintextHeaderSize,
-            SkipBytes = source.SkipBytes,
             UseHmac = source.UseHmac,
             KdfAlgorithm = source.KdfAlgorithm,
             HmacAlgorithm = source.HmacAlgorithm,
         };
     }
 
+    private static SqliteVfsOptions CloneSqliteVfsOptions(SqliteVfsOptions source)
+    {
+        return new SqliteVfsOptions
+        {
+            Kind = source.Kind,
+            BuiltInOffset = new SqliteBuiltInOffsetVfsOptions
+            {
+                SkipBytes = source.BuiltInOffset.SkipBytes,
+            },
+            Named = new SqliteNamedVfsOptions
+            {
+                Name = source.Named.Name,
+            },
+        };
+    }
+
     private static string ToSqliteCipherKeyFormatKey(SqliteCipherKeyFormat value)
     {
         return value == SqliteCipherKeyFormat.Hex ? "hex" : "passphrase";
+    }
+
+    private static string ToSqliteVfsKindKey(SqliteVfsKind value)
+    {
+        return value switch
+        {
+            SqliteVfsKind.BuiltInOffset => "builtInOffset",
+            SqliteVfsKind.Named => "named",
+            _ => "default",
+        };
+    }
+
+    private static string ToSqliteLoadableExtensionPhaseKey(SqliteLoadableExtensionPhase value)
+    {
+        return value == SqliteLoadableExtensionPhase.PostOpen ? "postOpen" : "preOpen";
     }
 
     private static SqliteOpenMode ParseSqliteOpenMode(string? value)

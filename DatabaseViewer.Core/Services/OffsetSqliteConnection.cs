@@ -1,8 +1,9 @@
 using System.Data;
-using System.Data.Common;
 using System.Collections.Concurrent;
+using System.Data.Common;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text;
 using SQLitePCL;
 using DatabaseViewer.Core.Models;
 
@@ -17,26 +18,29 @@ internal static unsafe class NativeSqliteMethods
     public static extern int sqlite3_vfs_register(nint vfsPointer, int makeDflt);
 }
 
-internal static class OffsetSqliteConnectionFactory
+internal static class SqliteVfsConnectionFactory
 {
-    public static DbConnection Create(string filePath, SqliteCipherOptions options, SqliteOpenMode openMode)
+    public static sqlite3 OpenHandle(string filePath, SqliteConnectionOptions sqliteOptions)
     {
-        SqliteOffsetVfs.Register();
-        SqliteOffsetVfs.SetOffset(filePath, options.SkipBytes.GetValueOrDefault());
+        SqliteLoadableExtensionRegistry.ValidatePreOpenExtensionUsage(sqliteOptions);
+        SqliteLoadableExtensionRegistry.ValidateNamedVfsAvailability(sqliteOptions);
+        SqliteLoadableExtensionRegistry.EnsurePreOpenExtensionsLoaded(sqliteOptions.Extensions);
+        var vfsName = ResolveVfsName(filePath, sqliteOptions);
 
-        var openFlags = openMode == SqliteOpenMode.ReadOnly
+        var openFlags = sqliteOptions.OpenMode == SqliteOpenMode.ReadOnly
             ? raw.SQLITE_OPEN_READONLY
             : raw.SQLITE_OPEN_READWRITE | raw.SQLITE_OPEN_CREATE;
-        var openResult = raw.sqlite3_open_v2(filePath, out var databaseHandle, openFlags, SqliteOffsetVfs.VfsName);
+        var openResult = raw.sqlite3_open_v2(filePath, out var databaseHandle, openFlags, vfsName);
         if (openResult != raw.SQLITE_OK)
         {
-            throw new InvalidOperationException($"无法打开带偏移的 SQLite 数据库，SQLite 错误码: {openResult}", null);
+            throw new InvalidOperationException($"无法打开使用 VFS 的 SQLite 数据库，SQLite 错误码: {openResult}", null);
         }
 
         try
         {
-            ApplyCipherOptions(databaseHandle, options);
-            return new OffsetSqliteConnection(databaseHandle, filePath);
+            ApplyConnectionOptions(databaseHandle, sqliteOptions);
+            SqliteLoadableExtensionRegistry.LoadPostOpenExtensions(databaseHandle, sqliteOptions.Extensions);
+            return databaseHandle;
         }
         catch
         {
@@ -45,53 +49,90 @@ internal static class OffsetSqliteConnectionFactory
         }
     }
 
-    private static void ApplyCipherOptions(sqlite3 databaseHandle, SqliteCipherOptions options)
+    private static string ResolveVfsName(string filePath, SqliteConnectionOptions sqliteOptions)
     {
-        if (!options.Enabled)
+        return sqliteOptions.Vfs.Kind switch
         {
-            return;
+            SqliteVfsKind.BuiltInOffset => PrepareBuiltInOffsetVfs(filePath, sqliteOptions.Vfs),
+            _ => SqliteLoadableExtensionRegistry.ResolvePinnedVfsName(sqliteOptions),
+        };
+    }
+
+    private static string PrepareBuiltInOffsetVfs(string filePath, SqliteVfsOptions vfsOptions)
+    {
+        var skipBytes = vfsOptions.BuiltInOffset.SkipBytes.GetValueOrDefault();
+        if (skipBytes <= 0)
+        {
+            throw new InvalidOperationException("内置偏移 VFS 需要填写大于 0 的跳过字节数。", null);
         }
 
-        if (string.IsNullOrWhiteSpace(options.Password))
+        SqliteOffsetVfs.Register();
+        SqliteOffsetVfs.SetOffset(filePath, skipBytes);
+        return SqliteOffsetVfs.VfsName;
+    }
+
+    internal static unsafe bool IsRegisteredVfs(string vfsName)
+    {
+        var utf8Bytes = Encoding.UTF8.GetBytes(vfsName + "\0");
+        fixed (byte* vfsNamePointer = utf8Bytes)
         {
-            throw new InvalidOperationException("启用 SQLCipher 时必须提供密码或十六进制密钥。", null);
+            return NativeSqliteMethods.sqlite3_vfs_find(vfsNamePointer) != IntPtr.Zero;
+        }
+    }
+
+    private static void ApplyConnectionOptions(sqlite3 databaseHandle, SqliteConnectionOptions options)
+    {
+        var cipherOptions = options.Cipher;
+        if (cipherOptions.Enabled)
+        {
+            if (string.IsNullOrWhiteSpace(cipherOptions.Password))
+            {
+                throw new InvalidOperationException("启用 SQLCipher 时必须提供密码或十六进制密钥。", null);
+            }
+
+            Execute(databaseHandle, cipherOptions.KeyFormat == SqliteCipherKeyFormat.Hex
+                ? $"PRAGMA hexkey = '{DbConnectionFactory.NormalizeSqliteHexKey(cipherOptions.Password)}';"
+                : $"PRAGMA key = '{DbConnectionFactory.EscapeSqliteTextLiteral(cipherOptions.Password)}';");
+
+            if (cipherOptions.PageSize.HasValue)
+            {
+                Execute(databaseHandle, $"PRAGMA cipher_page_size = {cipherOptions.PageSize.Value};");
+            }
+
+            if (cipherOptions.KdfIter.HasValue)
+            {
+                Execute(databaseHandle, $"PRAGMA kdf_iter = {cipherOptions.KdfIter.Value};");
+            }
+
+            if (cipherOptions.CipherCompatibility.HasValue)
+            {
+                Execute(databaseHandle, $"PRAGMA cipher_compatibility = {cipherOptions.CipherCompatibility.Value};");
+            }
+
+            if (cipherOptions.PlaintextHeaderSize.HasValue)
+            {
+                Execute(databaseHandle, $"PRAGMA cipher_plaintext_header_size = {cipherOptions.PlaintextHeaderSize.Value};");
+            }
+
+            if (cipherOptions.UseHmac.HasValue)
+            {
+                Execute(databaseHandle, $"PRAGMA cipher_use_hmac = {(cipherOptions.UseHmac.Value ? "ON" : "OFF")};");
+            }
+
+            if (!string.IsNullOrWhiteSpace(cipherOptions.KdfAlgorithm))
+            {
+                Execute(databaseHandle, $"PRAGMA cipher_kdf_algorithm = {NormalizeKdfAlgorithm(cipherOptions.KdfAlgorithm)};");
+            }
+
+            if (!string.IsNullOrWhiteSpace(cipherOptions.HmacAlgorithm))
+            {
+                Execute(databaseHandle, $"PRAGMA cipher_hmac_algorithm = {NormalizeHmacAlgorithm(cipherOptions.HmacAlgorithm)};");
+            }
+
+            Execute(databaseHandle, "SELECT count(*) FROM sqlite_master;");
         }
 
-        Execute(databaseHandle, options.KeyFormat == SqliteCipherKeyFormat.Hex
-            ? $"PRAGMA hexkey = '{DbConnectionFactory.NormalizeSqliteHexKey(options.Password)}';"
-            : $"PRAGMA key = '{DbConnectionFactory.EscapeSqliteTextLiteral(options.Password)}';");
-
-        if (options.PageSize.HasValue)
-        {
-            Execute(databaseHandle, $"PRAGMA cipher_page_size = {options.PageSize.Value};");
-        }
-
-        if (options.KdfIter.HasValue)
-        {
-            Execute(databaseHandle, $"PRAGMA kdf_iter = {options.KdfIter.Value};");
-        }
-
-        if (!string.IsNullOrWhiteSpace(options.HmacAlgorithm))
-        {
-            Execute(databaseHandle, $"PRAGMA cipher_hmac_algorithm = {NormalizeHmacAlgorithm(options.HmacAlgorithm)};");
-        }
-
-        if (!string.IsNullOrWhiteSpace(options.KdfAlgorithm))
-        {
-            Execute(databaseHandle, $"PRAGMA cipher_default_kdf_algorithm = {NormalizeKdfAlgorithm(options.KdfAlgorithm)};");
-        }
-
-        if (options.PlaintextHeaderSize.HasValue)
-        {
-            Execute(databaseHandle, $"PRAGMA cipher_plaintext_header_size = {options.PlaintextHeaderSize.Value};");
-        }
-
-        if (options.UseHmac.HasValue)
-        {
-            Execute(databaseHandle, $"PRAGMA cipher_use_hmac = {(options.UseHmac.Value ? "ON" : "OFF")};");
-        }
-
-        Execute(databaseHandle, "SELECT count(*) FROM sqlite_master;");
+        Execute(databaseHandle, "PRAGMA foreign_keys = ON;");
     }
 
     private static string NormalizeHmacAlgorithm(string value)
@@ -112,7 +153,7 @@ internal static class OffsetSqliteConnectionFactory
             "PBKDF2_HMAC_SHA1" => "PBKDF2_HMAC_SHA1",
             "PBKDF2_HMAC_SHA256" => "PBKDF2_HMAC_SHA256",
             "PBKDF2_HMAC_SHA512" => "PBKDF2_HMAC_SHA512",
-            _ => throw new InvalidOperationException("SQLite 加密参数 cipher_default_kdf_algorithm 不受支持。", null),
+            _ => throw new InvalidOperationException("SQLite 加密参数 cipher_kdf_algorithm 不受支持。", null),
         };
     }
 
@@ -128,20 +169,181 @@ internal static class OffsetSqliteConnectionFactory
     }
 }
 
-    internal sealed class OffsetSqliteConnection : DbConnection
+internal static class OffsetSqliteScriptExecutor
 {
-    private sqlite3 _databaseHandle;
-    private readonly string _databaseFilePath;
-    private ConnectionState _state = ConnectionState.Open;
-    private bool _disposed;
-
-    public OffsetSqliteConnection(sqlite3 databaseHandle, string databaseFilePath)
+    public static SqlExecutionResult Execute(OffsetSqliteConnection connection, string sql, int maxSqlResultRows)
     {
-        _databaseHandle = databaseHandle;
-        _databaseFilePath = databaseFilePath;
+        var resultSets = new List<SqlExecutionResultSet>();
+        int? affectedRows = null;
+        var remainingSql = sql;
+
+        while (!string.IsNullOrWhiteSpace(remainingSql))
+        {
+            var prepareResult = raw.sqlite3_prepare_v2(connection.Handle, remainingSql, out var statementHandle, out var tailSql);
+            if (prepareResult != raw.SQLITE_OK)
+            {
+                throw new InvalidOperationException($"SQL 准备失败: {raw.sqlite3_errmsg(connection.Handle).utf8_to_string()}", null);
+            }
+
+            var preparedSql = remainingSql;
+            remainingSql = tailSql;
+
+            if (statementHandle is null)
+            {
+                if (string.Equals(preparedSql, remainingSql, StringComparison.Ordinal))
+                {
+                    break;
+                }
+
+                continue;
+            }
+
+            try
+            {
+                var fieldCount = raw.sqlite3_column_count(statementHandle);
+                if (fieldCount > 0)
+                {
+                    var columns = Enumerable.Range(0, fieldCount)
+                        .Select(index => new SqlExecutionColumn
+                        {
+                            Name = raw.sqlite3_column_name(statementHandle, index).utf8_to_string(),
+                            Type = InferScriptColumnType(statementHandle, index),
+                        })
+                        .ToArray();
+
+                    var rows = new List<Dictionary<string, object?>>();
+                    var totalRows = 0;
+                    while (true)
+                    {
+                        var stepResult = raw.sqlite3_step(statementHandle);
+                        if (stepResult == raw.SQLITE_ROW)
+                        {
+                            totalRows += 1;
+                            if (rows.Count < maxSqlResultRows)
+                            {
+                                var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+                                for (var index = 0; index < columns.Length; index += 1)
+                                {
+                                    row[columns[index].Name] = ReadScriptValue(statementHandle, index);
+                                }
+
+                                rows.Add(row);
+                            }
+
+                            continue;
+                        }
+
+                        if (stepResult == raw.SQLITE_DONE)
+                        {
+                            break;
+                        }
+
+                        throw new InvalidOperationException($"SQL 执行失败: {raw.sqlite3_errmsg(connection.Handle).utf8_to_string()} (code {stepResult})", null);
+                    }
+
+                    resultSets.Add(new SqlExecutionResultSet
+                    {
+                        Name = string.Empty,
+                        Columns = columns,
+                        Rows = rows,
+                        RowCount = totalRows,
+                        Truncated = totalRows > rows.Count,
+                    });
+                }
+                else
+                {
+                    while (true)
+                    {
+                        var stepResult = raw.sqlite3_step(statementHandle);
+                        if (stepResult == raw.SQLITE_DONE)
+                        {
+                            var changes = raw.sqlite3_changes(connection.Handle);
+                            affectedRows = (affectedRows ?? 0) + changes;
+                            break;
+                        }
+
+                        if (stepResult == raw.SQLITE_ROW)
+                        {
+                            continue;
+                        }
+
+                        throw new InvalidOperationException($"SQL 执行失败: {raw.sqlite3_errmsg(connection.Handle).utf8_to_string()} (code {stepResult})", null);
+                    }
+                }
+            }
+            finally
+            {
+                raw.sqlite3_finalize(statementHandle);
+            }
+        }
+
+        return new SqlExecutionResult
+        {
+            ExecutedSql = sql,
+            AffectedRows = affectedRows,
+            ElapsedMs = 0,
+            ResultSets = resultSets,
+        };
     }
 
-    internal sqlite3 Handle => _databaseHandle;
+    private static string InferScriptColumnType(sqlite3_stmt statementHandle, int ordinal)
+    {
+        var declaredType = raw.sqlite3_column_decltype(statementHandle, ordinal).utf8_to_string();
+        if (!string.IsNullOrWhiteSpace(declaredType))
+        {
+            return declaredType;
+        }
+
+        return raw.sqlite3_column_type(statementHandle, ordinal) switch
+        {
+            raw.SQLITE_INTEGER => typeof(long).Name,
+            raw.SQLITE_FLOAT => typeof(double).Name,
+            raw.SQLITE_BLOB => typeof(byte[]).Name,
+            _ => typeof(string).Name,
+        };
+    }
+
+    private static object? ReadScriptValue(sqlite3_stmt statementHandle, int ordinal)
+    {
+        return raw.sqlite3_column_type(statementHandle, ordinal) switch
+        {
+            raw.SQLITE_INTEGER => raw.sqlite3_column_int64(statementHandle, ordinal),
+            raw.SQLITE_FLOAT => raw.sqlite3_column_double(statementHandle, ordinal),
+            raw.SQLITE_TEXT => raw.sqlite3_column_text(statementHandle, ordinal).utf8_to_string(),
+            raw.SQLITE_BLOB => raw.sqlite3_column_blob(statementHandle, ordinal).ToArray(),
+            raw.SQLITE_NULL => null,
+            _ => null,
+        };
+    }
+}
+
+internal sealed class OffsetSqliteConnection : DbConnection
+{
+    private readonly string _databaseFilePath;
+    private readonly SqliteConnectionOptions _sqliteOptions;
+    private sqlite3 _databaseHandle = null!;
+    private bool _hasOpenHandle;
+    private ConnectionState _state = ConnectionState.Closed;
+    private bool _disposed;
+
+    public OffsetSqliteConnection(string databaseFilePath, SqliteConnectionOptions sqliteOptions)
+    {
+        _databaseFilePath = databaseFilePath;
+        _sqliteOptions = sqliteOptions;
+    }
+
+    internal sqlite3 Handle
+    {
+        get
+        {
+            if (!_hasOpenHandle)
+            {
+                throw new InvalidOperationException("连接未打开。", null);
+            }
+
+            return _databaseHandle;
+        }
+    }
 
 #pragma warning disable CS8765
     public override string ConnectionString
@@ -162,7 +364,22 @@ internal static class OffsetSqliteConnectionFactory
     public override void Open()
     {
         ThrowIfDisposed();
+        if (_hasOpenHandle)
+        {
+            _state = ConnectionState.Open;
+            return;
+        }
+
+        _databaseHandle = SqliteVfsConnectionFactory.OpenHandle(_databaseFilePath, _sqliteOptions);
+        _hasOpenHandle = true;
         _state = ConnectionState.Open;
+    }
+
+    public override Task OpenAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Open();
+        return Task.CompletedTask;
     }
 
     public override void Close()
@@ -172,7 +389,20 @@ internal static class OffsetSqliteConnectionFactory
             return;
         }
 
+        if (_hasOpenHandle)
+        {
+            raw.sqlite3_close_v2(_databaseHandle);
+            _databaseHandle = null!;
+            _hasOpenHandle = false;
+        }
+
         _state = ConnectionState.Closed;
+    }
+
+    public override Task CloseAsync()
+    {
+        Close();
+        return Task.CompletedTask;
     }
 
     public override void ChangeDatabase(string databaseName)
@@ -206,9 +436,8 @@ internal static class OffsetSqliteConnectionFactory
     {
         if (disposing && !_disposed)
         {
-            raw.sqlite3_close_v2(_databaseHandle);
+            Close();
             _disposed = true;
-            _state = ConnectionState.Closed;
         }
 
         base.Dispose(disposing);
@@ -566,6 +795,9 @@ internal sealed class OffsetSqliteDataReader : DbDataReader
     private sqlite3_stmt _statementHandle;
     private bool _isClosed;
     private DataTable? _schemaTable;
+    private int? _bufferedStepResult;
+    private bool _hasRowsKnown;
+    private bool _hasRows;
 
     public OffsetSqliteDataReader(sqlite3 databaseHandle, sqlite3_stmt statementHandle)
     {
@@ -575,7 +807,26 @@ internal sealed class OffsetSqliteDataReader : DbDataReader
 
     public override int FieldCount => raw.sqlite3_column_count(_statementHandle);
 
-    public override bool HasRows => true;
+    public override bool HasRows
+    {
+        get
+        {
+            if (_isClosed)
+            {
+                return false;
+            }
+
+            if (_hasRowsKnown)
+            {
+                return _hasRows;
+            }
+
+            var stepResult = EnsureBufferedStepResult();
+            _hasRowsKnown = true;
+            _hasRows = stepResult == raw.SQLITE_ROW;
+            return _hasRows;
+        }
+    }
 
     public override bool IsClosed => _isClosed;
 
@@ -594,14 +845,18 @@ internal sealed class OffsetSqliteDataReader : DbDataReader
             return false;
         }
 
-        var stepResult = raw.sqlite3_step(_statementHandle);
+        var stepResult = EnsureBufferedStepResult();
+        _bufferedStepResult = null;
         if (stepResult == raw.SQLITE_ROW)
         {
+            _hasRowsKnown = true;
+            _hasRows = true;
             return true;
         }
 
         if (stepResult == raw.SQLITE_DONE)
         {
+            _hasRowsKnown = true;
             return false;
         }
 
@@ -791,6 +1046,7 @@ internal sealed class OffsetSqliteDataReader : DbDataReader
 
         raw.sqlite3_finalize(_statementHandle);
         _isClosed = true;
+        _bufferedStepResult = null;
     }
 
     protected override void Dispose(bool disposing)
@@ -860,6 +1116,18 @@ internal sealed class OffsetSqliteDataReader : DbDataReader
         }
 
         return raw.SQLITE_TEXT;
+    }
+
+    private int EnsureBufferedStepResult()
+    {
+        if (_bufferedStepResult.HasValue)
+        {
+            return _bufferedStepResult.Value;
+        }
+
+        var stepResult = raw.sqlite3_step(_statementHandle);
+        _bufferedStepResult = stepResult;
+        return stepResult;
     }
 }
 

@@ -1,6 +1,8 @@
 export type DatabaseProviderType = 'sqlserver' | 'mysql' | 'postgresql' | 'sqlite'
 export type SqlServerAuthenticationMode = 'windows' | 'password'
 export type SqliteOpenMode = 'readwrite' | 'readonly'
+export type SqliteVfsKind = 'default' | 'builtInOffset' | 'named'
+export type SqliteLoadableExtensionPhase = 'preOpen' | 'postOpen'
 export type CellValue = string | number | boolean | null
 export type DatabaseObjectType = 'table' | 'view'
 export type CatalogObjectType = 'synonym' | 'sequence' | 'rule' | 'default' | 'user-defined-type' | 'database-trigger' | 'xml-schema-collection' | 'assembly'
@@ -37,6 +39,7 @@ export interface ConnectionInfo {
 
 export interface ExplorerSettings {
   showTableRowCounts: boolean
+  sqliteExtensions: SqliteLoadableExtensionConfig[]
 }
 
 export interface WorkspaceLayout {
@@ -83,11 +86,53 @@ export interface PostgreSqlConnectionConfig {
 export interface SqliteConnectionRequest {
   openMode?: SqliteOpenMode | null
   cipher: SqliteCipherRequest
+  vfs: SqliteVfsRequest
 }
 
 export interface SqliteConnectionConfig {
   openMode: SqliteOpenMode
   cipher: SqliteCipherConfig
+  vfs: SqliteVfsConfig
+}
+
+export interface SqliteVfsRequest {
+  kind?: SqliteVfsKind | null
+  builtInOffset: SqliteBuiltInOffsetVfsRequest
+  named: SqliteNamedVfsRequest
+}
+
+export interface SqliteBuiltInOffsetVfsRequest {
+  skipBytes?: number | null
+}
+
+export interface SqliteNamedVfsRequest {
+  name?: string | null
+}
+
+export interface SqliteVfsConfig {
+  kind: SqliteVfsKind
+  builtInOffset: SqliteBuiltInOffsetVfsConfig
+  named: SqliteNamedVfsConfig
+}
+
+export interface SqliteBuiltInOffsetVfsConfig {
+  skipBytes?: number | null
+}
+
+export interface SqliteNamedVfsConfig {
+  name?: string | null
+}
+
+export interface SqliteLoadableExtensionRequest {
+  path?: string | null
+  entryPoint?: string | null
+  phase?: SqliteLoadableExtensionPhase | null
+}
+
+export interface SqliteLoadableExtensionConfig {
+  path?: string | null
+  entryPoint?: string | null
+  phase: SqliteLoadableExtensionPhase
 }
 
 export interface SqliteCipherRequest {
@@ -98,7 +143,6 @@ export interface SqliteCipherRequest {
   kdfIter?: number | null
   cipherCompatibility?: number | null
   plaintextHeaderSize?: number | null
-  skipBytes?: number | null
   useHmac?: boolean | null
   kdfAlgorithm?: 'PBKDF2_HMAC_SHA1' | 'PBKDF2_HMAC_SHA256' | 'PBKDF2_HMAC_SHA512' | null
   hmacAlgorithm?: 'HMAC_SHA1' | 'HMAC_SHA256' | 'HMAC_SHA512' | null
@@ -149,7 +193,6 @@ export interface SqliteCipherConfig {
   kdfIter?: number | null
   cipherCompatibility?: number | null
   plaintextHeaderSize?: number | null
-  skipBytes?: number | null
   useHmac?: boolean | null
   kdfAlgorithm?: 'PBKDF2_HMAC_SHA1' | 'PBKDF2_HMAC_SHA256' | 'PBKDF2_HMAC_SHA512' | null
   hmacAlgorithm?: 'HMAC_SHA1' | 'HMAC_SHA256' | 'HMAC_SHA512' | null

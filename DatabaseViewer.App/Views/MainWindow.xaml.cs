@@ -441,6 +441,48 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (string.Equals(request.Command, "pick-sqlite-extension", StringComparison.Ordinal))
+        {
+            try
+            {
+                var payload = request.Payload.Deserialize<PickSqliteExtensionPayload>(JsonOptions)
+                    ?? throw new InvalidOperationException("无效的 SQLite 扩展文件选择请求。");
+
+                var dialog = new OpenFileDialog
+                {
+                    Filter = "SQLite 扩展动态库 (*.dll)|*.dll|所有文件 (*.*)|*.*",
+                    CheckFileExists = true,
+                    Multiselect = false,
+                };
+
+                if (!string.IsNullOrWhiteSpace(payload.FilePath))
+                {
+                    var initialDirectory = Path.GetDirectoryName(payload.FilePath);
+                    if (!string.IsNullOrWhiteSpace(initialDirectory) && Directory.Exists(initialDirectory))
+                    {
+                        dialog.InitialDirectory = initialDirectory;
+                    }
+
+                    dialog.FileName = Path.GetFileName(payload.FilePath);
+                }
+
+                var accepted = dialog.ShowDialog(this) == true;
+                if (!accepted)
+                {
+                    PostHostResponse(new HostResponse(request.Id, true, new { canceled = true, filePath = payload.FilePath }, null));
+                    return;
+                }
+
+                PostHostResponse(new HostResponse(request.Id, true, new { canceled = false, filePath = dialog.FileName }, null));
+            }
+            catch (Exception ex)
+            {
+                PostHostResponse(new HostResponse(request.Id, false, null, ex.Message));
+            }
+
+            return;
+        }
+
         if (!string.Equals(request.Command, "save-sql-file", StringComparison.Ordinal))
         {
             return;
@@ -636,6 +678,7 @@ public partial class MainWindow : Window
 
     private sealed record PickSqliteDatabasePayload(string? FilePath, string SuggestedFileName);
 
+    private sealed record PickSqliteExtensionPayload(string? FilePath);
     private sealed record PickSshPrivateKeyPayload(string? FilePath);
 
     private sealed record CloseAppResponsePayload(string Result);

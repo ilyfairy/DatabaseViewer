@@ -2,9 +2,9 @@ namespace DatabaseViewer.Api.Contracts;
 
 public sealed record BootstrapResponse(IReadOnlyList<ConnectionNodeDto> Connections);
 
-public sealed record ExplorerSettingsDto(bool ShowTableRowCounts);
+public sealed record ExplorerSettingsDto(bool ShowTableRowCounts, IReadOnlyList<SqliteLoadableExtensionConfigResponse> SqliteExtensions);
 
-public sealed record UpdateExplorerSettingsRequest(bool ShowTableRowCounts);
+public sealed record UpdateExplorerSettingsRequest(bool ShowTableRowCounts, IReadOnlyList<SqliteLoadableExtensionRequest>? SqliteExtensions);
 
 public sealed record WorkspaceLayoutDto(double SidebarPaneSize, double DetailPaneSize);
 
@@ -266,7 +266,6 @@ public sealed record SqliteCipherRequest(
     int? KdfIter,
     int? CipherCompatibility,
     int? PlaintextHeaderSize,
-    int? SkipBytes,
     bool? UseHmac,
     string? KdfAlgorithm,
     string? HmacAlgorithm);
@@ -279,10 +278,25 @@ public sealed record SqliteCipherConfigResponse(
     int? KdfIter,
     int? CipherCompatibility,
     int? PlaintextHeaderSize,
-    int? SkipBytes,
     bool? UseHmac,
     string? KdfAlgorithm,
     string? HmacAlgorithm);
+
+public sealed record SqliteBuiltInOffsetVfsRequest(int? SkipBytes);
+
+public sealed record SqliteBuiltInOffsetVfsConfigResponse(int? SkipBytes);
+
+public sealed record SqliteNamedVfsRequest(string? Name);
+
+public sealed record SqliteNamedVfsConfigResponse(string? Name);
+
+public sealed record SqliteLoadableExtensionRequest(string? Path, string? EntryPoint, string? Phase);
+
+public sealed record SqliteLoadableExtensionConfigResponse(string? Path, string? EntryPoint, string Phase);
+
+public sealed record SqliteVfsRequest(string? Kind, SqliteBuiltInOffsetVfsRequest? BuiltInOffset, SqliteNamedVfsRequest? Named);
+
+public sealed record SqliteVfsConfigResponse(string Kind, SqliteBuiltInOffsetVfsConfigResponse BuiltInOffset, SqliteNamedVfsConfigResponse Named);
 
 public sealed record SqlServerConnectionRequest(string? AuthenticationMode, bool? TrustServerCertificate);
 
@@ -296,9 +310,9 @@ public sealed record PostgreSqlConnectionRequest();
 
 public sealed record PostgreSqlConnectionConfigResponse();
 
-public sealed record SqliteConnectionRequest(string? OpenMode, SqliteCipherRequest? Cipher);
+public sealed record SqliteConnectionRequest(string? OpenMode, SqliteCipherRequest? Cipher, SqliteVfsRequest? Vfs);
 
-public sealed record SqliteConnectionConfigResponse(string OpenMode, SqliteCipherConfigResponse Cipher);
+public sealed record SqliteConnectionConfigResponse(string OpenMode, SqliteCipherConfigResponse Cipher, SqliteVfsConfigResponse Vfs);
 
 public sealed record CreateConnectionRequest(
     string Name,

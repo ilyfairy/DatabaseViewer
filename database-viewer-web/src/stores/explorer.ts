@@ -183,6 +183,24 @@ function normalizeCellValue(value: CellValue | undefined): CellValue {
   return value ?? null;
 }
 
+function cloneExplorerSettings(settings: ExplorerSettings): ExplorerSettings {
+  return {
+    showTableRowCounts: settings.showTableRowCounts,
+    sqliteExtensions: settings.sqliteExtensions.map((extension) => ({ ...extension })),
+  }
+}
+
+function buildExplorerSettingsSignature(settings: ExplorerSettings) {
+  return JSON.stringify({
+    showTableRowCounts: settings.showTableRowCounts,
+    sqliteExtensions: settings.sqliteExtensions.map((extension) => ({
+      path: extension.path ?? null,
+      entryPoint: extension.entryPoint ?? null,
+      phase: extension.phase,
+    })),
+  })
+}
+
 function quoteSqlIdentifier(provider: DatabaseProviderType, value: string) {
   if (provider === 'mysql') {
     return `\`${value.replace(/`/g, '``')}\``;
@@ -245,8 +263,8 @@ export const useExplorerStore = defineStore('explorer', () => {
   const detailCache = ref<Record<string, RecordDetail>>({});
   const activeConnectionId = useLocalStorage<string | null>('dbv-active-connection', null);
   const activeTabId = useLocalStorage<string | null>('dbv-active-tab', null);
-  const explorerSettings = ref<ExplorerSettings>({ showTableRowCounts: true });
-  const settingsDraft = ref<ExplorerSettings>({ showTableRowCounts: true });
+  const explorerSettings = ref<ExplorerSettings>({ showTableRowCounts: true, sqliteExtensions: [] });
+  const settingsDraft = ref<ExplorerSettings>({ showTableRowCounts: true, sqliteExtensions: [] });
   const explorerSettingsLoaded = ref(false);
   const workspaceLayout = ref<WorkspaceLayout>({ sidebarPaneSize: 22, detailPaneSize: 32 });
   const workspaceLayoutLoaded = ref(false);
@@ -337,7 +355,7 @@ export const useExplorerStore = defineStore('explorer', () => {
   const activeSqlServerLoginEditorTab = computed(() => activeTab.value?.type === 'sqlserver-login-editor' ? activeTab.value as SqlServerLoginEditorWorkspaceTab : undefined);
   const activeDatabasePropertiesTab = computed(() => activeTab.value?.type === 'database-properties' ? activeTab.value as DatabasePropertiesWorkspaceTab : undefined);
   const showTableRowCounts = computed(() => explorerSettings.value.showTableRowCounts);
-  const isSettingsDirty = computed(() => explorerSettingsLoaded.value && settingsDraft.value.showTableRowCounts !== explorerSettings.value.showTableRowCounts);
+  const isSettingsDirty = computed(() => explorerSettingsLoaded.value && buildExplorerSettingsSignature(settingsDraft.value) !== buildExplorerSettingsSignature(explorerSettings.value));
   const gridPanel = computed(() => openPanels.value.find((panel) => panel.type === 'grid') as ExplorerGridPanel | undefined);
   const detailPanels = computed(() => openPanels.value.filter((panel) => panel.type === 'detail') as ExplorerDetailPanel[]);
   const activeTable = computed(() => (gridPanel.value ? getTable(gridPanel.value.tableKey) : undefined));
@@ -678,7 +696,7 @@ export const useExplorerStore = defineStore('explorer', () => {
 
     const settings = await requestJson<ExplorerSettings>('/api/explorer/settings');
     explorerSettings.value = settings;
-    settingsDraft.value = { ...settings };
+    settingsDraft.value = cloneExplorerSettings(settings);
     explorerSettingsLoaded.value = true;
     return settings;
   }
@@ -2189,7 +2207,7 @@ export const useExplorerStore = defineStore('explorer', () => {
   }
 
   function resetExplorerSettingsDraft() {
-    settingsDraft.value = { ...explorerSettings.value };
+    settingsDraft.value = cloneExplorerSettings(explorerSettings.value);
   }
 
   async function saveWorkspaceLayout(nextLayout: WorkspaceLayout) {
@@ -2215,7 +2233,7 @@ export const useExplorerStore = defineStore('explorer', () => {
         body: JSON.stringify(nextSettings),
       });
       explorerSettings.value = saved;
-      settingsDraft.value = { ...saved };
+      settingsDraft.value = cloneExplorerSettings(saved);
       explorerSettingsLoaded.value = true;
       await refreshBootstrap({ rehydrateConnectionIds: connectedConnectionIds.value });
     }
@@ -2507,6 +2525,13 @@ export const useExplorerStore = defineStore('explorer', () => {
 
   async function pickSshPrivateKeyFile(filePath: string | null) {
     const result = await requestHost<{ filePath: string | null }, HostFilePickerResult>('pick-ssh-private-key', {
+      filePath,
+    });
+
+    return result.canceled ? null : result.filePath;
+  }
+  async function pickSqliteExtensionFile(filePath: string | null) {
+    const result = await requestHost<{ filePath: string | null }, HostFilePickerResult>('pick-sqlite-extension', {
       filePath,
     });
 
@@ -3220,6 +3245,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     openSqlFileTab,
     openRoutineSource,
     pickSqliteDatabaseFile,
+    pickSqliteExtensionFile,
     pickSshPrivateKeyFile,
     updateSqlTabConnection,
     updateSqlTabDatabase,

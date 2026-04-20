@@ -13,6 +13,7 @@ namespace DatabaseViewer.Core.Services;
 
 public static class DbConnectionFactory
 {
+    private static readonly ApplicationSettingsStore SettingsStore = new();
     private static readonly Regex SqliteHexKeyRegex = new("^[0-9A-Fa-f]+$", RegexOptions.Compiled);
 
     private static readonly Regex SqlitePragmaNameRegex = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
@@ -133,43 +134,87 @@ public static class DbConnectionFactory
             Directory.CreateDirectory(directory);
         }
 
-        if (definition.Sqlite.Cipher.SkipBytes.GetValueOrDefault() > 0)
+        var sqliteOptions = ResolveSqliteConnectionOptions(definition.Sqlite);
+        SqliteLoadableExtensionRegistry.ValidatePreOpenExtensionUsage(sqliteOptions);
+
+        if (sqliteOptions.Vfs.Kind != Models.SqliteVfsKind.Default)
         {
-            return OffsetSqliteConnectionFactory.Create(filePath, definition.Sqlite.Cipher, definition.Sqlite.OpenMode);
+            return new OffsetSqliteConnection(filePath, sqliteOptions);
         }
 
         var builder = new SqliteConnectionStringBuilder
         {
             DataSource = filePath,
-            Mode = definition.Sqlite.OpenMode == Models.SqliteOpenMode.ReadOnly ? Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly : Microsoft.Data.Sqlite.SqliteOpenMode.ReadWriteCreate,
+            Mode = sqliteOptions.OpenMode == Models.SqliteOpenMode.ReadOnly ? Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly : Microsoft.Data.Sqlite.SqliteOpenMode.ReadWriteCreate,
             Cache = SqliteCacheMode.Shared,
-            ForeignKeys = !definition.Sqlite.Cipher.Enabled,
+            ForeignKeys = !sqliteOptions.Cipher.Enabled,
         };
 
-        return new ConfiguredSqliteConnection(new SqliteConnection(builder.ConnectionString), definition.Sqlite.Cipher);
+        return new ConfiguredSqliteConnection(new SqliteConnection(builder.ConnectionString), sqliteOptions);
     }
 
-    private static async Task ApplySqliteSessionConfigurationAsync(SqliteConnection connection, SqliteCipherOptions options, CancellationToken cancellationToken)
+    private static SqliteConnectionOptions ResolveSqliteConnectionOptions(SqliteConnectionOptions source)
     {
-        if (options.Enabled)
+        var settings = SettingsStore.LoadAsync().GetAwaiter().GetResult();
+        return new SqliteConnectionOptions
         {
-            if (string.IsNullOrWhiteSpace(options.Password))
+            OpenMode = source.OpenMode,
+            Cipher = new SqliteCipherOptions
+            {
+                Enabled = source.Cipher.Enabled,
+                Password = source.Cipher.Password,
+                KeyFormat = source.Cipher.KeyFormat,
+                PageSize = source.Cipher.PageSize,
+                KdfIter = source.Cipher.KdfIter,
+                CipherCompatibility = source.Cipher.CipherCompatibility,
+                PlaintextHeaderSize = source.Cipher.PlaintextHeaderSize,
+                UseHmac = source.Cipher.UseHmac,
+                KdfAlgorithm = source.Cipher.KdfAlgorithm,
+                HmacAlgorithm = source.Cipher.HmacAlgorithm,
+            },
+            Vfs = new SqliteVfsOptions
+            {
+                Kind = source.Vfs.Kind,
+                BuiltInOffset = new SqliteBuiltInOffsetVfsOptions
+                {
+                    SkipBytes = source.Vfs.BuiltInOffset.SkipBytes,
+                },
+                Named = new SqliteNamedVfsOptions
+                {
+                    Name = source.Vfs.Named.Name,
+                },
+            },
+            Extensions = settings.SqliteExtensions.Select(extension => new SqliteLoadableExtensionOptions
+            {
+                Path = extension.Path,
+                EntryPoint = extension.EntryPoint,
+                Phase = extension.Phase,
+            }).ToList(),
+        };
+    }
+
+    private static async Task ApplySqliteSessionConfigurationAsync(SqliteConnection connection, SqliteConnectionOptions options, CancellationToken cancellationToken)
+    {
+        if (options.Cipher.Enabled)
+        {
+            if (string.IsNullOrWhiteSpace(options.Cipher.Password))
             {
                 throw new InvalidOperationException("SQLCipher 已启用，但未配置密码。", null);
             }
 
-            await ExecutePragmaAsync(connection, BuildKeyPragma(options), cancellationToken);
-            await ExecuteOptionalIntegerPragmaAsync(connection, "cipher_page_size", options.PageSize, cancellationToken);
-            await ExecuteOptionalIntegerPragmaAsync(connection, "kdf_iter", options.KdfIter, cancellationToken);
-            await ExecuteOptionalIntegerPragmaAsync(connection, "cipher_compatibility", options.CipherCompatibility, cancellationToken);
-            await ExecuteOptionalIntegerPragmaAsync(connection, "cipher_plaintext_header_size", options.PlaintextHeaderSize, cancellationToken);
-            await ExecuteOptionalBooleanPragmaAsync(connection, "cipher_use_hmac", options.UseHmac, cancellationToken);
-            await ExecuteOptionalTextPragmaAsync(connection, "cipher_kdf_algorithm", options.KdfAlgorithm, cancellationToken);
-            await ExecuteOptionalTextPragmaAsync(connection, "cipher_hmac_algorithm", options.HmacAlgorithm, cancellationToken);
+            await ExecutePragmaAsync(connection, BuildKeyPragma(options.Cipher), cancellationToken);
+            await ExecuteOptionalIntegerPragmaAsync(connection, "cipher_page_size", options.Cipher.PageSize, cancellationToken);
+            await ExecuteOptionalIntegerPragmaAsync(connection, "kdf_iter", options.Cipher.KdfIter, cancellationToken);
+            await ExecuteOptionalIntegerPragmaAsync(connection, "cipher_compatibility", options.Cipher.CipherCompatibility, cancellationToken);
+            await ExecuteOptionalIntegerPragmaAsync(connection, "cipher_plaintext_header_size", options.Cipher.PlaintextHeaderSize, cancellationToken);
+            await ExecuteOptionalBooleanPragmaAsync(connection, "cipher_use_hmac", options.Cipher.UseHmac, cancellationToken);
+            await ExecuteOptionalTextPragmaAsync(connection, "cipher_kdf_algorithm", options.Cipher.KdfAlgorithm, cancellationToken);
+            await ExecuteOptionalTextPragmaAsync(connection, "cipher_hmac_algorithm", options.Cipher.HmacAlgorithm, cancellationToken);
             await ExecuteScalarAsync(connection, "SELECT COUNT(*) FROM sqlite_master;", cancellationToken);
         }
 
         await ExecutePragmaAsync(connection, "PRAGMA foreign_keys = ON;", cancellationToken);
+        SqliteLoadableExtensionRegistry.LoadPostOpenExtensions(connection, options.Extensions);
     }
 
     private static async Task ExecuteOptionalIntegerPragmaAsync(SqliteConnection connection, string pragmaName, int? value, CancellationToken cancellationToken)
@@ -274,13 +319,13 @@ public static class DbConnectionFactory
     private sealed class ConfiguredSqliteConnection : DbConnection
     {
         private readonly SqliteConnection _innerConnection;
-        private readonly SqliteCipherOptions _cipherOptions;
+        private readonly SqliteConnectionOptions _sqliteOptions;
         private bool _sessionConfigured;
 
-        public ConfiguredSqliteConnection(SqliteConnection innerConnection, SqliteCipherOptions cipherOptions)
+        public ConfiguredSqliteConnection(SqliteConnection innerConnection, SqliteConnectionOptions sqliteOptions)
         {
             _innerConnection = innerConnection;
-            _cipherOptions = cipherOptions;
+            _sqliteOptions = sqliteOptions;
         }
 
         [AllowNull]
@@ -329,7 +374,7 @@ public static class DbConnectionFactory
 
             try
             {
-                ApplySqliteSessionConfigurationAsync(_innerConnection, _cipherOptions, CancellationToken.None).GetAwaiter().GetResult();
+                ApplySqliteSessionConfigurationAsync(_innerConnection, _sqliteOptions, CancellationToken.None).GetAwaiter().GetResult();
                 _sessionConfigured = true;
             }
             catch
@@ -353,7 +398,7 @@ public static class DbConnectionFactory
 
             try
             {
-                await ApplySqliteSessionConfigurationAsync(_innerConnection, _cipherOptions, cancellationToken);
+                await ApplySqliteSessionConfigurationAsync(_innerConnection, _sqliteOptions, cancellationToken);
                 _sessionConfigured = true;
             }
             catch
@@ -364,15 +409,10 @@ public static class DbConnectionFactory
         }
 
         protected override DbTransaction BeginDbTransaction(IsolationLevel isolationLevel)
-        {
-            Open();
-            return _innerConnection.BeginTransaction(isolationLevel);
-        }
+            => _innerConnection.BeginTransaction(isolationLevel);
 
         protected override DbCommand CreateDbCommand()
-        {
-            return _innerConnection.CreateCommand();
-        }
+            => _innerConnection.CreateCommand();
 
         protected override void Dispose(bool disposing)
         {

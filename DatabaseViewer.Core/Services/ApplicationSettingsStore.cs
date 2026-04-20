@@ -26,15 +26,12 @@ public sealed class ApplicationSettingsStore
         }
 
         await using var stream = File.OpenRead(_filePath);
-        return await JsonSerializer.DeserializeAsync<ApplicationSettings>(stream) ?? new ApplicationSettings();
+        return await JsonSerializer.DeserializeAsync<ApplicationSettings>(stream, PersistenceJson.ApplicationSettingsOptions) ?? new ApplicationSettings();
     }
 
     public async Task SaveAsync(ApplicationSettings settings)
     {
         await using var stream = File.Create(_filePath);
-        await JsonSerializer.SerializeAsync(stream, settings, new JsonSerializerOptions
-        {
-            WriteIndented = true,
-        });
+        await JsonSerializer.SerializeAsync(stream, settings, PersistenceJson.ApplicationSettingsOptions);
     }
 }

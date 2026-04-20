@@ -1,5 +1,6 @@
 using System.Windows;
 using DatabaseViewer.Api;
+using DatabaseViewer.Core.Services;
 using DatabaseViewer.App.Views;
 
 namespace DatabaseViewer.App;
@@ -8,8 +9,15 @@ public partial class App : Application
 {
     private ApiRuntime? _apiRuntime;
 
-    protected override void OnStartup(StartupEventArgs e)
+    protected override async void OnStartup(StartupEventArgs e)
     {
+        var inspectionExitCode = await SqliteExtensionInspectionProcess.TryRunAsync(e.Args, Console.Out, Console.Error);
+        if (inspectionExitCode.HasValue)
+        {
+            Shutdown(inspectionExitCode.Value);
+            return;
+        }
+
         Startup += async (_, _) =>
         {
             _apiRuntime = await ApiHost.StartAsync();

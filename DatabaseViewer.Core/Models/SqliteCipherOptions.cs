@@ -17,8 +17,6 @@ public sealed class SqliteCipherOptions
 
     public int? PlaintextHeaderSize { get; set; }
 
-    public int? SkipBytes { get; set; }
-
     public bool? UseHmac { get; set; }
 
     public string KdfAlgorithm { get; set; } = string.Empty;

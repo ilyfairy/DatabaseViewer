@@ -117,7 +117,7 @@ watch(
 
 .catalog-object-actions {
   flex: 0 0 auto;
-  padding-right: 8px;
+  padding-right: 4px;
 }
 
 .catalog-object-summary-row {
