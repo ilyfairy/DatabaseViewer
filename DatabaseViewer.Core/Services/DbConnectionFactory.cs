@@ -146,6 +146,7 @@ public static class DbConnectionFactory
         {
             DataSource = filePath,
             Mode = sqliteOptions.OpenMode == Models.SqliteOpenMode.ReadOnly ? Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly : Microsoft.Data.Sqlite.SqliteOpenMode.ReadWriteCreate,
+            Pooling = false,
             Cache = SqliteCacheMode.Shared,
             ForeignKeys = !sqliteOptions.Cipher.Enabled,
         };

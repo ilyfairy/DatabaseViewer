@@ -101,188 +101,188 @@ public sealed class ExplorerApiService
             var databaseNodes = new List<DatabaseNodeDto>();
             foreach (var database in databases)
             {
-                    IReadOnlyList<DbTableInfo> tables = Array.Empty<DbTableInfo>();
-                    try
-                    {
-                        tables = await _metadataService.GetTablesAsync(connection, database, includeSystemObjects: false, settings.ShowTableRowCounts);
-                        _tablesCache[BuildTablesCacheKey(connection.Id, database)] = tables;
-                    }
-                    catch
-                    {
-                        // Keep the database visible even if table metadata cannot be read.
-                    }
-
-                    IReadOnlyList<DbTableInfo> views = Array.Empty<DbTableInfo>();
-                    try
-                    {
-                        views = await _metadataService.GetViewsAsync(connection, database);
-                        _viewsCache[BuildViewsCacheKey(connection.Id, database)] = views;
-                    }
-                    catch
-                    {
-                        // Keep other groups visible even if views fail.
-                    }
-
-                    IReadOnlyList<DbSynonymInfo> synonyms = Array.Empty<DbSynonymInfo>();
-                    try
-                    {
-                        synonyms = await _metadataService.GetSynonymsAsync(connection, database);
-                    }
-                    catch
-                    {
-                    }
-
-                    IReadOnlyList<DbSequenceInfo> sequences = Array.Empty<DbSequenceInfo>();
-                    try
-                    {
-                        sequences = await _metadataService.GetSequencesAsync(connection, database);
-                    }
-                    catch
-                    {
-                    }
-
-                    IReadOnlyList<DbRuleInfo> rules = Array.Empty<DbRuleInfo>();
-                    try
-                    {
-                        rules = await _metadataService.GetRulesAsync(connection, database);
-                    }
-                    catch
-                    {
-                    }
-
-                    IReadOnlyList<DbDefaultInfo> defaults = Array.Empty<DbDefaultInfo>();
-                    try
-                    {
-                        defaults = await _metadataService.GetDefaultsAsync(connection, database);
-                    }
-                    catch
-                    {
-                    }
-
-                    IReadOnlyList<DbUserDefinedTypeInfo> userDefinedTypes = Array.Empty<DbUserDefinedTypeInfo>();
-                    try
-                    {
-                        userDefinedTypes = await _metadataService.GetUserDefinedTypesAsync(connection, database);
-                    }
-                    catch
-                    {
-                    }
-
-                    IReadOnlyList<DbDatabaseTriggerInfo> databaseTriggers = Array.Empty<DbDatabaseTriggerInfo>();
-                    try
-                    {
-                        databaseTriggers = await _metadataService.GetDatabaseTriggersAsync(connection, database);
-                    }
-                    catch
-                    {
-                    }
-
-                    IReadOnlyList<DbXmlSchemaCollectionInfo> xmlSchemaCollections = Array.Empty<DbXmlSchemaCollectionInfo>();
-                    try
-                    {
-                        xmlSchemaCollections = await _metadataService.GetXmlSchemaCollectionsAsync(connection, database);
-                    }
-                    catch
-                    {
-                    }
-
-                    IReadOnlyList<DbAssemblyInfo> assemblies = Array.Empty<DbAssemblyInfo>();
-                    try
-                    {
-                        assemblies = await _metadataService.GetAssembliesAsync(connection, database);
-                    }
-                    catch
-                    {
-                    }
-
-                    var routines = Array.Empty<RoutineNodeDto>();
-                    try
-                    {
-                        var routineInfos = await _metadataService.GetRoutinesAsync(connection, database);
-                        routines = routineInfos.Select(r => new RoutineNodeDto(
-                            r.SchemaName,
-                            r.RoutineName,
-                            r.RoutineType,
-                            r.Parameters.Select(p => new RoutineParameterDto(p.Name, p.DataType, p.Direction, p.DefaultValue)).ToArray()
-                        )).ToArray();
-                    }
-                    catch
-                    {
-                        // 函数/存储过程加载失败不影响其它对象加载
-                    }
-
-                    databaseNodes.Add(new DatabaseNodeDto(
-                        database,
-                        tables.Select(table => new TableNodeDto(
-                            BuildTableKey(connection.Id, table),
-                            table.DatabaseName,
-                            table.SchemaName,
-                            table.TableName,
-                            ToObjectTypeKey(table.ObjectType),
-                            table.Comment,
-                            table.RowCount)).ToArray(),
-                        views.Select(view => new TableNodeDto(
-                            BuildTableKey(connection.Id, view),
-                            view.DatabaseName,
-                            view.SchemaName,
-                            view.TableName,
-                            ToObjectTypeKey(view.ObjectType),
-                            view.Comment,
-                            view.RowCount)).ToArray(),
-                        synonyms.Select(synonym => new SynonymNodeDto(
-                            synonym.DatabaseName,
-                            synonym.SchemaName,
-                            synonym.SynonymName,
-                            synonym.BaseObjectName)).ToArray(),
-                        sequences.Select(sequence => new SequenceNodeDto(
-                            sequence.DatabaseName,
-                            sequence.SchemaName,
-                            sequence.SequenceName,
-                            sequence.DataType,
-                            sequence.StartValue,
-                            sequence.IncrementValue)).ToArray(),
-                        rules.Select(rule => new RuleNodeDto(
-                            rule.DatabaseName,
-                            rule.SchemaName,
-                            rule.RuleName,
-                            rule.Definition)).ToArray(),
-                        defaults.Select(item => new DefaultNodeDto(
-                            item.DatabaseName,
-                            item.SchemaName,
-                            item.DefaultName,
-                            item.Definition)).ToArray(),
-                        userDefinedTypes.Select(item => new UserDefinedTypeNodeDto(
-                            item.DatabaseName,
-                            item.SchemaName,
-                            item.TypeName,
-                            item.BaseTypeName,
-                            item.IsTableType)).ToArray(),
-                        databaseTriggers.Select(item => new DatabaseTriggerNodeDto(
-                            item.DatabaseName,
-                            item.SchemaName,
-                            item.TriggerName,
-                            item.TriggerTiming,
-                            item.TriggerEvent)).ToArray(),
-                        xmlSchemaCollections.Select(item => new XmlSchemaCollectionNodeDto(
-                            item.DatabaseName,
-                            item.SchemaName,
-                            item.CollectionName,
-                            item.XmlNamespaceCount)).ToArray(),
-                        assemblies.Select(item => new AssemblyNodeDto(
-                            item.DatabaseName,
-                            item.AssemblyName,
-                            item.ClrName,
-                            item.PermissionSet,
-                            item.IsVisible)).ToArray(),
-                        routines));
+                IReadOnlyList<DbTableInfo> tables = Array.Empty<DbTableInfo>();
+                try
+                {
+                    tables = await _metadataService.GetTablesAsync(connection, database, includeSystemObjects: false, settings.ShowTableRowCounts);
+                    _tablesCache[BuildTablesCacheKey(connection.Id, database)] = tables;
+                }
+                catch
+                {
+                    // Keep the database visible even if table metadata cannot be read.
                 }
 
-                return BuildConnectionNode(connection, null, databaseNodes);
+                IReadOnlyList<DbTableInfo> views = Array.Empty<DbTableInfo>();
+                try
+                {
+                    views = await _metadataService.GetViewsAsync(connection, database);
+                    _viewsCache[BuildViewsCacheKey(connection.Id, database)] = views;
+                }
+                catch
+                {
+                    // Keep other groups visible even if views fail.
+                }
+
+                IReadOnlyList<DbSynonymInfo> synonyms = Array.Empty<DbSynonymInfo>();
+                try
+                {
+                    synonyms = await _metadataService.GetSynonymsAsync(connection, database);
+                }
+                catch
+                {
+                }
+
+                IReadOnlyList<DbSequenceInfo> sequences = Array.Empty<DbSequenceInfo>();
+                try
+                {
+                    sequences = await _metadataService.GetSequencesAsync(connection, database);
+                }
+                catch
+                {
+                }
+
+                IReadOnlyList<DbRuleInfo> rules = Array.Empty<DbRuleInfo>();
+                try
+                {
+                    rules = await _metadataService.GetRulesAsync(connection, database);
+                }
+                catch
+                {
+                }
+
+                IReadOnlyList<DbDefaultInfo> defaults = Array.Empty<DbDefaultInfo>();
+                try
+                {
+                    defaults = await _metadataService.GetDefaultsAsync(connection, database);
+                }
+                catch
+                {
+                }
+
+                IReadOnlyList<DbUserDefinedTypeInfo> userDefinedTypes = Array.Empty<DbUserDefinedTypeInfo>();
+                try
+                {
+                    userDefinedTypes = await _metadataService.GetUserDefinedTypesAsync(connection, database);
+                }
+                catch
+                {
+                }
+
+                IReadOnlyList<DbDatabaseTriggerInfo> databaseTriggers = Array.Empty<DbDatabaseTriggerInfo>();
+                try
+                {
+                    databaseTriggers = await _metadataService.GetDatabaseTriggersAsync(connection, database);
+                }
+                catch
+                {
+                }
+
+                IReadOnlyList<DbXmlSchemaCollectionInfo> xmlSchemaCollections = Array.Empty<DbXmlSchemaCollectionInfo>();
+                try
+                {
+                    xmlSchemaCollections = await _metadataService.GetXmlSchemaCollectionsAsync(connection, database);
+                }
+                catch
+                {
+                }
+
+                IReadOnlyList<DbAssemblyInfo> assemblies = Array.Empty<DbAssemblyInfo>();
+                try
+                {
+                    assemblies = await _metadataService.GetAssembliesAsync(connection, database);
+                }
+                catch
+                {
+                }
+
+                var routines = Array.Empty<RoutineNodeDto>();
+                try
+                {
+                    var routineInfos = await _metadataService.GetRoutinesAsync(connection, database);
+                    routines = routineInfos.Select(r => new RoutineNodeDto(
+                        r.SchemaName,
+                        r.RoutineName,
+                        r.RoutineType,
+                        r.Parameters.Select(p => new RoutineParameterDto(p.Name, p.DataType, p.Direction, p.DefaultValue)).ToArray()
+                    )).ToArray();
+                }
+                catch
+                {
+                    // 函数/存储过程加载失败不影响其它对象加载
+                }
+
+                databaseNodes.Add(new DatabaseNodeDto(
+                    database,
+                    tables.Select(table => new TableNodeDto(
+                        BuildTableKey(connection.Id, table),
+                        table.DatabaseName,
+                        table.SchemaName,
+                        table.TableName,
+                        ToObjectTypeKey(table.ObjectType),
+                        table.Comment,
+                        table.RowCount)).ToArray(),
+                    views.Select(view => new TableNodeDto(
+                        BuildTableKey(connection.Id, view),
+                        view.DatabaseName,
+                        view.SchemaName,
+                        view.TableName,
+                        ToObjectTypeKey(view.ObjectType),
+                        view.Comment,
+                        view.RowCount)).ToArray(),
+                    synonyms.Select(synonym => new SynonymNodeDto(
+                        synonym.DatabaseName,
+                        synonym.SchemaName,
+                        synonym.SynonymName,
+                        synonym.BaseObjectName)).ToArray(),
+                    sequences.Select(sequence => new SequenceNodeDto(
+                        sequence.DatabaseName,
+                        sequence.SchemaName,
+                        sequence.SequenceName,
+                        sequence.DataType,
+                        sequence.StartValue,
+                        sequence.IncrementValue)).ToArray(),
+                    rules.Select(rule => new RuleNodeDto(
+                        rule.DatabaseName,
+                        rule.SchemaName,
+                        rule.RuleName,
+                        rule.Definition)).ToArray(),
+                    defaults.Select(item => new DefaultNodeDto(
+                        item.DatabaseName,
+                        item.SchemaName,
+                        item.DefaultName,
+                        item.Definition)).ToArray(),
+                    userDefinedTypes.Select(item => new UserDefinedTypeNodeDto(
+                        item.DatabaseName,
+                        item.SchemaName,
+                        item.TypeName,
+                        item.BaseTypeName,
+                        item.IsTableType)).ToArray(),
+                    databaseTriggers.Select(item => new DatabaseTriggerNodeDto(
+                        item.DatabaseName,
+                        item.SchemaName,
+                        item.TriggerName,
+                        item.TriggerTiming,
+                        item.TriggerEvent)).ToArray(),
+                    xmlSchemaCollections.Select(item => new XmlSchemaCollectionNodeDto(
+                        item.DatabaseName,
+                        item.SchemaName,
+                        item.CollectionName,
+                        item.XmlNamespaceCount)).ToArray(),
+                    assemblies.Select(item => new AssemblyNodeDto(
+                        item.DatabaseName,
+                        item.AssemblyName,
+                        item.ClrName,
+                        item.PermissionSet,
+                        item.IsVisible)).ToArray(),
+                    routines));
             }
-            catch (Exception ex)
-            {
-                return BuildConnectionNode(connection, ex.Message, Array.Empty<DatabaseNodeDto>());
-            }
+
+            return BuildConnectionNode(connection, null, databaseNodes);
+        }
+        catch (Exception ex)
+        {
+            return BuildConnectionNode(connection, ex.Message, Array.Empty<DatabaseNodeDto>());
+        }
     }
 
     public async Task<IReadOnlyList<string>> GetDatabaseNamesAsync(Guid connectionId)

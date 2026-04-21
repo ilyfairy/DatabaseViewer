@@ -4,7 +4,9 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { IconFlask2, IconListDetails, IconSchema, IconSettings, IconSql, IconTable, IconTableOptions } from '@tabler/icons-vue';
 import { Close } from '@vicons/carbon';
 import { NButton, NIcon } from 'naive-ui';
+import type { DropdownOption } from 'naive-ui';
 import { useExplorerStore } from '../stores/explorer';
+import ContextDropdown from './ContextDropdown.vue';
 import { attachSmoothHorizontalWheelScroll } from '../lib/smooth-horizontal-wheel-scroll';
 import type { WorkspaceTab } from '../types/explorer';
 
@@ -12,10 +14,19 @@ const store = useExplorerStore();
 const tabs = computed(() => store.workspaceTabs);
 const activeTabId = computed(() => store.activeTabId);
 const draggingTabId = ref<string | null>(null);
+const tabContextMenu = ref<{ x: number; y: number; tabId: string } | null>(null);
 const tabsListRef = ref<HTMLDivElement | null>(null);
 let detachTabsWheelScroll: (() => void) | null = null;
 // 这里只保留最小视觉留白；真正的修复点在共享滚动器的整像素吸附。
 const tabScrollEdgePadding = 4;
+
+const tabContextMenuOptions = computed<DropdownOption[]>(() => tabContextMenu.value
+  ? [
+      { label: '关闭当前标签页', key: 'close-current' },
+      { type: 'divider', key: 'divider-1' },
+      { label: '清空所有标签页', key: 'close-all' },
+    ]
+  : []);
 
 function bindTabsWheelScroll() {
   detachTabsWheelScroll?.();
@@ -106,6 +117,42 @@ function handleTabAuxClick(event: MouseEvent, tabId: string) {
   store.closeWorkspaceTab(tabId);
 }
 
+function openTabContextMenu(event: MouseEvent, tabId: string) {
+  tabContextMenu.value = {
+    x: event.clientX,
+    y: event.clientY,
+    tabId,
+  };
+}
+
+function closeTabContextMenu() {
+  tabContextMenu.value = null;
+}
+
+function handleTabContextMenuShow(value: boolean) {
+  if (!value) {
+    closeTabContextMenu();
+  }
+}
+
+function handleTabContextMenuSelect(key: string | number) {
+  if (!tabContextMenu.value) {
+    return;
+  }
+
+  const { tabId } = tabContextMenu.value;
+  closeTabContextMenu();
+
+  if (key === 'close-current') {
+    store.closeWorkspaceTab(tabId);
+    return;
+  }
+
+  if (key === 'close-all') {
+    store.closeAllWorkspaceTabs();
+  }
+}
+
 
 function handleTabDragStart(event: DragEvent, tabId: string) {
   draggingTabId.value = tabId;
@@ -144,6 +191,12 @@ watch(() => [tabs.value.length, activeTabId.value], async () => {
   scrollActiveTabIntoView();
   finalizeActiveTabVisibility();
 }, { immediate: true });
+
+watch(tabs, (nextTabs) => {
+  if (tabContextMenu.value && !nextTabs.some((tab) => tab.id === tabContextMenu.value?.tabId)) {
+    closeTabContextMenu();
+  }
+});
 </script>
 
 <template>
@@ -158,6 +211,7 @@ watch(() => [tabs.value.length, activeTabId.value], async () => {
         :class="{ 'workspace-tab-chip-active': activeTabId === tab.id, 'workspace-tab-chip-dragging': draggingTabId === tab.id }"
         draggable="true"
         @click="store.activateWorkspaceTab(tab.id)"
+        @contextmenu.prevent.stop="openTabContextMenu($event, tab.id)"
         @auxclick="handleTabAuxClick($event, tab.id)"
         @mouseup="handleTabAuxClick($event, tab.id)"
         @dragstart="handleTabDragStart($event, tab.id)"
@@ -180,6 +234,14 @@ watch(() => [tabs.value.length, activeTabId.value], async () => {
         <NIcon size="14"><IconSettings /></NIcon>
       </NButton>
     </div>
+    <ContextDropdown
+      :show="!!tabContextMenu"
+      :x="tabContextMenu?.x ?? 0"
+      :y="tabContextMenu?.y ?? 0"
+      :options="tabContextMenuOptions"
+      @update:show="handleTabContextMenuShow"
+      @select="handleTabContextMenuSelect"
+    />
   </div>
 </template>
 

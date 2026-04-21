@@ -1130,7 +1130,8 @@ async function submitCreateIndex() {
     focusSection('indexes', createIndexName.value.trim());
   }
   catch (error) {
-    createIndexError.value = error instanceof Error ? error.message : '索引创建失败';
+    createIndexError.value = null;
+    store.showNotice('warning', error instanceof Error ? error.message : '索引创建失败');
   }
   finally {
     createIndexLoading.value = false;

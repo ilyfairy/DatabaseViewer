@@ -71,6 +71,10 @@ type PendingDesignCloseState = {
   tabId: string
 }
 
+type PendingWorkspaceTabCloseState = {
+  remainingTabIds: string[]
+}
+
 type RefreshBootstrapOptions = {
   rehydrateConnectionIds?: Iterable<string>
 }
@@ -328,6 +332,7 @@ export const useExplorerStore = defineStore('explorer', () => {
   const catalogObjectState = ref<Record<string, { loading: boolean; error: string | null; value: CatalogObjectDetail | null }>>({});
   const pendingSqlClose = ref<PendingSqlCloseState | null>(null);
   const pendingDesignClose = ref<PendingDesignCloseState | null>(null);
+  const pendingWorkspaceTabClose = ref<PendingWorkspaceTabCloseState | null>(null);
   const pendingDisconnect = ref<{ connectionId: string; remainingDirtyTabIds: string[] } | null>(null);
   const pendingRoutineExec = ref<{
     tabId: string | null;
@@ -1134,6 +1139,7 @@ export const useExplorerStore = defineStore('explorer', () => {
   function getConnectionForTable(tableKey: string) {
     return connections.value.find((connection) => connection.databases.some((database) => [...database.tables, ...database.views].some((table) => table.key === tableKey)));
   }
+
   function isConnectionReadOnly(connectionId: string) {
     const connection = connections.value.find((entry) => entry.id === connectionId);
     return connection?.provider === 'sqlite' && connection.sqlite.openMode === 'readonly';
@@ -2013,6 +2019,67 @@ export const useExplorerStore = defineStore('explorer', () => {
     performCloseWorkspaceTab(tabId);
   }
 
+  function closeAllWorkspaceTabs() {
+    const tabIds = workspaceTabs.value.map((tab) => tab.id);
+    if (tabIds.length === 0) {
+      return;
+    }
+
+    pendingWorkspaceTabClose.value = { remainingTabIds: [...tabIds] };
+    promptNextWorkspaceTabClose();
+  }
+
+  function promptNextWorkspaceTabClose() {
+    if (!pendingWorkspaceTabClose.value) {
+      return;
+    }
+
+    const remainingTabIds = [...pendingWorkspaceTabClose.value.remainingTabIds];
+    while (remainingTabIds.length > 0) {
+      const nextTabId = remainingTabIds[0];
+      const tab = workspaceTabs.value.find((entry) => entry.id === nextTabId);
+      if (!tab) {
+        remainingTabIds.shift();
+        continue;
+      }
+
+       if (tab.type === 'sql' && isSqlTabDirty(nextTabId)) {
+        pendingWorkspaceTabClose.value = { remainingTabIds };
+        pendingSqlClose.value = { tabId: nextTabId };
+        return;
+      }
+
+      if (isCreateDesignTabDirty(nextTabId)) {
+        pendingWorkspaceTabClose.value = { remainingTabIds };
+        pendingDesignClose.value = { tabId: nextTabId };
+        return;
+      }
+
+      remainingTabIds.shift();
+      performCloseWorkspaceTab(nextTabId);
+      continue;
+
+    }
+
+    pendingWorkspaceTabClose.value = null;
+  }
+
+  function advanceWorkspaceTabClose(resolvedTabId: string) {
+    if (!pendingWorkspaceTabClose.value) {
+      return;
+    }
+
+    pendingWorkspaceTabClose.value = {
+      remainingTabIds: pendingWorkspaceTabClose.value.remainingTabIds.filter((tabId) => tabId !== resolvedTabId),
+    };
+
+    promptNextWorkspaceTabClose();
+  }
+
+  function cancelWorkspaceTabClose() {
+    pendingWorkspaceTabClose.value = null;
+  }
+
   function moveWorkspaceTab(tabId: string, targetTabId: string) {
     if (tabId === targetTabId) {
       return;
@@ -2453,6 +2520,7 @@ export const useExplorerStore = defineStore('explorer', () => {
 
     pendingSqlClose.value = null;
     performCloseWorkspaceTab(tabId);
+    advanceWorkspaceTabClose(tabId);
     advanceDisconnectFlow(tabId);
   }
 
@@ -2464,11 +2532,13 @@ export const useExplorerStore = defineStore('explorer', () => {
     const tabId = pendingSqlClose.value.tabId;
     pendingSqlClose.value = null;
     performCloseWorkspaceTab(tabId);
+    advanceWorkspaceTabClose(tabId);
     advanceDisconnectFlow(tabId);
   }
 
   function cancelPendingSqlClose() {
     pendingSqlClose.value = null;
+    cancelWorkspaceTabClose();
     cancelDisconnectFlow();
   }
 
@@ -2480,11 +2550,13 @@ export const useExplorerStore = defineStore('explorer', () => {
     const tabId = pendingDesignClose.value.tabId;
     pendingDesignClose.value = null;
     performCloseWorkspaceTab(tabId);
+    advanceWorkspaceTabClose(tabId);
     advanceDisconnectFlow(tabId);
   }
 
   function cancelPendingDesignClose() {
     pendingDesignClose.value = null;
+    cancelWorkspaceTabClose();
     cancelDisconnectFlow();
   }
 
@@ -3229,6 +3301,7 @@ export const useExplorerStore = defineStore('explorer', () => {
     requestSqlEditorFocus,
     consumeSqlEditorFocus,
     closeWorkspaceTab,
+    closeAllWorkspaceTabs,
     moveWorkspaceTab,
     openTable,
     openTableDesign,
